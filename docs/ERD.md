@@ -103,11 +103,13 @@ README 규칙 초안의 5개 상태(예정/완료/휴강/결석/보강) 중 **�
 
 - `makeup_for`가 있는 회차 → 화면에 "보강" 배지 표시
 - `makeup_for`는 **유일(Unique)** → 휴강·결석 1회에 보강은 1회만 연결 (UC-09 수용 기준)
+- 보강 회차는 완료되면 `completed`로 세므로 **보강을 따로 더하지 않습니다** (중복 차감 방지)
+- **차감한 결석(`absence_deducted = true`)에는 보강을 연결할 수 없습니다.** 이미 1회 소진된 수업에 보강까지 차감되는 것을 막기 위해서입니다. (#2에서 최종 확정)
 
 ### 2-2. 잔여 회차는 저장하지 않고 계산
 
 ```text
-차감 회차 = completed 수 + (absent 이면서 absence_deducted = true) 수
+차감 회차 = completed 수 (보강 회차 포함) + (absent 이면서 absence_deducted = true) 수
 잔여 회차 = Enrollment.total_count − 차감 회차
 ```
 
@@ -152,7 +154,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
-| `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 `absent`여야 함 | 앱 검증 (모델 `clean`) |
+| `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함 | 앱 검증 (모델 `clean`) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
 | `LessonRecord.session` | 회차당 일지 1개 | DB `OneToOneField` |
 | 시간 겹침 | 같은 강사의 회차가 겹치면 **경고만** (저장 허용) | 앱 검증 (UC-04) |
@@ -188,4 +190,5 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - [x] 미성년자 수강생은 보호자 연락처 필수 (2-7, 2026-11-18)
 - [x] 레슨비·결제 정보는 MVP에서 다루지 않음 (기획서 MVP 제외 범위)
 - [ ] 결석 차감 기본값 (`absence_deducted` 기본값) → #2에서 결정
+- [ ] 차감한 결석에 보강 불가 규칙 최종 확정 → #2
 - [ ] 완료 처리 되돌리기 허용 여부 → #2에서 결정
