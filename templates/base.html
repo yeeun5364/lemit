@@ -1,0 +1,45 @@
+{% load static %}<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}LEMIT{% endblock %} · LEMIT</title>
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  {% if user.is_authenticated %}
+  <header class="topbar">
+    <a class="brand" href="{% url 'home' %}">LEMIT</a>
+    <div class="account">
+      <span class="account-name">{{ user.name }}</span>
+      <form method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="link-button">로그아웃</button>
+      </form>
+    </div>
+  </header>
+  {% endif %}
+
+  <main class="page">
+    {% if messages %}
+    <ul class="alerts" role="status">
+      {% for message in messages %}
+      <li class="alert alert-{{ message.tags }}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  {% if user.is_authenticated %}
+  {# 하단 탭: 화면이 생길 때 항목을 추가한다 (일정 UC-05, 수강생 UC-02, 메시지 UC-17) #}
+  <nav class="tabbar" aria-label="주 메뉴">
+    {% block tabs %}
+    <a href="{% url 'home' %}" class="tab{% if request.resolver_match.url_name == 'home' %} is-active{% endif %}">홈</a>
+    {% endblock %}
+  </nav>
+  {% endif %}
+</body>
+</html>

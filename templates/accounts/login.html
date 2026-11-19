@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}로그인{% endblock %}
+{% block body_class %}auth{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h1 class="logo">LEMIT</h1>
+  <p class="tagline">수업의 모든 흐름을 하나로</p>
+
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+    {{ form.as_div }}
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="button-primary">로그인</button>
+  </form>
+
+  <p class="auth-links"><a href="{% url 'signup' %}">회원가입</a></p>
+</section>
+{% endblock %}

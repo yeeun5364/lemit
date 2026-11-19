@@ -1,11 +1,16 @@
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class UserManager(BaseUserManager):
     """username 대신 email을 로그인 ID로 쓰는 매니저."""
 
     use_in_migrations = True
+
+    def get_by_natural_key(self, email):
+        """로그인 시 이메일 대소문자를 구분하지 않는다 (Teacher@x.com == teacher@x.com)."""
+        return self.get(email__iexact=email)
 
     def _create_user(self, email, password, **extra_fields):
         if not email:
@@ -48,6 +53,14 @@ class User(AbstractUser):
     class Meta:
         verbose_name = "강사"
         verbose_name_plural = "강사"
+        constraints = [
+            # 대소문자만 다른 같은 이메일로 두 번 가입하지 못하게 DB에서도 막는다 (로그인이 대소문자 무시이므로 필수)
+            models.UniqueConstraint(
+                Lower("email"),
+                name="accounts_user_email_ci_unique",
+                violation_error_message="이미 가입된 이메일입니다.",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} <{self.email}>"

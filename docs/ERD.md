@@ -206,6 +206,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 | 대상 | 규칙 | 구현 위치 |
 |---|---|---|
+| `User.email` | 대소문자를 무시하고 유일 (로그인도 대소문자 무시) | DB `UniqueConstraint(Lower(email))` + 회원가입 폼 검증 (UC-01, 2026-11-19) |
 | `Student` | `is_minor`이면 `guardian_phone` 필수 | DB `CheckConstraint` + 폼 검증 |
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
