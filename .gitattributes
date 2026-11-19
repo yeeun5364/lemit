@@ -1,0 +1,4 @@
+# 모델 검증(ml.verify)이 데이터 해시를 비교하므로 줄바꿈을 OS와 관계없이 LF로 고정
+ml/data/*.csv text eol=lf
+# 모델 파일은 바이너리 (줄바꿈 변환 금지)
+*.joblib binary

@@ -1,6 +1,6 @@
 # LEMIT 데이터 모델 (ERD)
 
-> **상태: 확정 (2026-11-18, 2026-11-19 장소 메모·#2 규칙 반영)** · 관련 이슈: #1 · 변경 시 이 문서를 먼저 고치고 devlog에 기록
+> **상태: 확정 (2026-11-18, 2026-11-19 장소 메모·#2 규칙·메시지함(2-10) 반영)** · 관련 이슈: #1 · 변경 시 이 문서를 먼저 고치고 devlog에 기록
 > 기준 문서: [USE_CASES.md](USE_CASES.md), [README 회차 규칙](../README.md#회차-상태와-차감-규칙), [PROJECT_PLAN.md §8](PROJECT_PLAN.md)
 
 ## 1. 전체 구조
@@ -14,6 +14,9 @@ erDiagram
     Enrollment ||--o{ LessonSession : "포함"
     LessonSession |o--o| LessonSession : "보강 대상"
     LessonSession ||--o| LessonRecord : "수업일지"
+    User ||--o{ Conversation : "메시지함"
+    Student ||--o{ Conversation : "대화 상대"
+    Conversation ||--|{ Message : "포함"
 
     User {
         bigint id PK
@@ -77,6 +80,26 @@ erDiagram
         datetime created_at
         datetime updated_at
     }
+    Conversation {
+        bigint id PK
+        bigint teacher_id FK
+        bigint student_id FK
+        varchar subject "제목, 최대 100자"
+        datetime last_message_at "목록 정렬용"
+        datetime created_at
+    }
+    Message {
+        bigint id PK
+        bigint conversation_id FK
+        varchar sender "student / teacher"
+        text body "최대 1000자"
+        datetime sent_at
+        datetime read_at "null이면 안 읽음"
+        varchar predicted_label "AI 분류, 선택"
+        float confidence "0~1, 선택"
+        varchar model_version "선택"
+        datetime classified_at "선택"
+    }
 ```
 
 | 모델 | 뜻 | 단계 | 유스케이스 |
@@ -87,6 +110,8 @@ erDiagram
 | `LessonSession` | 수업 1회 (회차) | MVP | UC-04~06, UC-08~11 |
 | `LessonRecord` | 회차별 수업일지 | 확장 | UC-14 |
 | `Label` | 레슨권 색 구분 라벨 (수업 형태·사람) | MVP 후속 | UC-16 |
+| `Conversation` | 강사와 수강생 한 명의 대화 스레드 | MVP | UC-17 |
+| `Message` | 메시지 1건 + 수강생 메시지의 AI 분류 결과 | MVP | UC-17 |
 
 > 장소는 별도 모델 없이 회차의 메모 필드 `LessonSession.place`로 받습니다 (2-8). `Location` 모델은 프로젝트 기간 이후 지도 연동(UC-13) 때 추가합니다.
 
@@ -131,7 +156,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 ### 2-5. 데이터 소유(권한)
 
-- `Student`, `Label`에만 `teacher_id`를 둡니다.
+- `Student`, `Label`, `Conversation`에만 `teacher_id`를 둡니다. `Conversation`은 메시지함 목록을 강사 기준으로 바로 조회하기 위해 둡니다 (`student.teacher`와 같아야 함, 2-10).
 - `Enrollment`, `LessonSession`, `LessonRecord`는 `student.teacher`를 따라가서 소유자를 확인합니다. (같은 정보를 여러 곳에 두지 않음)
 - 소유권은 **서버에서 강제**합니다. 화면에서 선택지를 숨기는 것만으로는 조작된 요청을 막을 수 없기 때문입니다.
   1. **조회·수정·삭제:** 모든 뷰는 로그인한 강사의 데이터로 좁힌 쿼리셋에서 객체를 찾습니다. 다른 강사의 객체 번호로 접근하면 404.
@@ -167,6 +192,16 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - 레슨권당 라벨은 **하나**(`ForeignKey`, 선택)입니다. 여러 개를 허용하면 달력 점·색 막대를 어떤 색으로 그릴지 정할 수 없기 때문입니다.
 - `color`는 `red / orange / yellow / green / teal / blue / purple / brown` 중 하나(`TextChoices`)로 저장하고, 실제 색값은 CSS 변수로 둡니다. 다크 모드나 색 조정 때 데이터를 고칠 필요가 없습니다.
 
+### 2-10. 메시지는 대화 스레드로 묶고, AI 분류 결과는 메시지에 저장 (2026-11-19)
+
+- 강사와 수강생이 메일처럼 주고받는 구조입니다. **대화(`Conversation`) 하나 = 강사 1 × 수강생 1 × 제목 1**이고, 메시지(`Message`)가 시간순으로 쌓입니다.
+- `sender`로 보낸 사람(`student`/`teacher`)을 구분합니다. 수강생 계정이 없는 MVP에서는 강사가 시연용으로 수강생 메시지를 대신 등록합니다(UC-17 A안). 나중에 수강생 링크나 계정이 생겨도 구조는 그대로입니다.
+- **AI 분류는 수강생 메시지에만** 저장합니다(`predicted_label`, `confidence`, `model_version`, `classified_at`). 강사 메시지와 분류 실패 메시지는 비워둡니다. 모델이 없어도 메시지는 저장되어야 하기 때문입니다.
+- `predicted_label`은 `CANCELLATION / MAKEUP / RESCHEDULE / GENERAL` 중 하나(`TextChoices`)입니다. 값은 `ml/labels.py`와 같아야 합니다.
+- `model_version`을 같이 저장해, 모델을 바꾼 뒤에도 어떤 모델이 낸 결과인지 추적합니다.
+- 예측은 참고용이라 회차(`LessonSession`)와 자동으로 연결하거나 상태를 바꾸지 않습니다. 메시지를 특정 회차와 연결하는 필드는 필요가 확인되면 추가합니다.
+- 모델 설계·데이터·한계는 [ML.md](ML.md)에 있습니다.
+
 ## 3. 제약 조건
 
 | 대상 | 규칙 | 구현 위치 |
@@ -188,6 +223,9 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `Label` | 같은 강사 안에서 `name` 유일, `color`는 8색 중 하나 | DB `UniqueConstraint(teacher, name)` + `choices` |
 | `Label` 조회·수정·삭제 | 로그인한 강사의 라벨만. 다른 강사 라벨은 404 | 뷰 쿼리셋 (UC-16) |
 | `Enrollment.label` | 같은 강사의 라벨만 연결 | 폼 선택지 제한 + 모델 `clean()` 재검증 + 격리 테스트 (2-5, UC-16) |
+| `Conversation` | `student.teacher == teacher`. 다른 강사의 대화는 404 | 폼 선택지 제한 + 모델 `clean()` + 뷰 쿼리셋 + 격리 테스트 (UC-17) |
+| `Message.body` | 공백만 있는 메시지 불가 | 폼 검증 (UC-17) |
+| `Message` AI 분류 | `sender = teacher`이면 분류 필드는 비움. 분류 결과로 일정·상태를 바꾸지 않음 | 앱 (UC-17) |
 | 시간 겹침 | 같은 강사의 회차가 겹치면 **경고만** (저장 허용) | 앱 검증 (UC-04) |
 
 **삭제 정책 (기록 보존)**
@@ -199,10 +237,14 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
 | LessonSession → LessonRecord | `CASCADE` | 회차와 일지는 운명을 같이함 |
 | LessonSession → makeup_for | `SET_NULL` | 원래 회차가 없어져도 보강 기록은 유지 |
+| Student → Conversation | `PROTECT` | 수강생은 보관(`is_active=false`)만 하므로 대화 기록 유지 |
+| Conversation → Message | `CASCADE` | 대화와 메시지는 운명을 같이함 |
 
 **인덱스**
 - `LessonSession(enrollment_id, start_at)`: 레슨권별 회차 이력
 - `LessonSession(start_at)`: 주간 일정 조회 (UC-05)
+- `Conversation(teacher_id, last_message_at)`: 메시지함 목록 (UC-17)
+- `Message(conversation_id, sent_at)`: 대화 상세
 
 ## 4. 단계별 구현 범위
 
@@ -210,7 +252,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 | 단계 | 유스케이스 | 만들 것 |
 |---|---|---|
-| **MVP 핵심** (먼저) | UC-01~07 | `User`, `Student`, `Enrollment`, `LessonSession`(상태는 `scheduled`/`completed`만 사용해도 동작) |
+| **MVP 핵심** (먼저) | UC-01~07, UC-17 | `User`, `Student`, `Enrollment`, `LessonSession`(상태는 `scheduled`/`completed`만 사용해도 동작), `Conversation`·`Message`(과제 조건인 ML 추론 기능) |
 | MVP 후속 (핵심 완료 후) | UC-08·09, UC-15, UC-16 | `LessonSession`의 `cancelled`·`makeup_for` 사용(휴강·보강), 비밀번호 찾기(모델 변경 없음), `Label` 화면 |
 | 확장 | UC-10, UC-14 | `absent` + `absence_deducted`, `LessonRecord` |
 | 이후 | 일정 변경 이력 `SessionChangeLog`(UC-11), 반복 규칙 `RecurrenceRule`(UC-12), 그룹 수업 `Class`, 장소 `Location` + 지도 연동(UC-13, 프로젝트 이후) |
@@ -228,4 +270,5 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - [x] 라벨: 레슨권당 하나, 8색 중 선택, 상태는 색 대신 모양으로 표시 (2-9, 2026-11-19)
 - [x] 장소: 회차별 자유 메모(`place`), 지도 연동은 프로젝트 이후 (2-8, 2026-11-19)
 - [x] 차감한 결석에는 보강 불가 (중복 차감 방지, #2, 2026-11-19)
+- [x] 메시지함: 대화 스레드 + 메시지, AI 분류는 수강생 메시지에만 저장, 일정 자동 변경 없음 (2-10, UC-17, 2026-11-19)
 - [x] 보강 없는 휴강 회차: "보강 필요" 배지로 표시, 별도 상태·필드 없이 `makeup` 역참조 유무로 판단 (#2, 2026-11-19)
