@@ -86,7 +86,7 @@ erDiagram
 | `Enrollment` | 레슨권 (예: 피아노 8회) | MVP | UC-03, UC-07 |
 | `LessonSession` | 수업 1회 (회차) | MVP | UC-04~06, UC-08~11 |
 | `LessonRecord` | 회차별 수업일지 | 확장 | UC-14 |
-| `Label` | 레슨권 색 구분 라벨 (수업 형태·사람) | MVP (P2) | UC-16 |
+| `Label` | 레슨권 색 구분 라벨 (수업 형태·사람) | MVP 후속 | UC-16 |
 
 > 장소는 별도 모델 없이 회차의 메모 필드 `LessonSession.place`로 받습니다 (2-8). `Location` 모델은 프로젝트 기간 이후 지도 연동(UC-13) 때 추가합니다.
 
@@ -131,9 +131,14 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 ### 2-5. 데이터 소유(권한)
 
-- `Student`, `Label`에만 `teacher_id`를 둡니다. 레슨권에 라벨을 붙일 때 **같은 강사의 라벨인지** 폼에서 확인합니다.
+- `Student`, `Label`에만 `teacher_id`를 둡니다.
 - `Enrollment`, `LessonSession`, `LessonRecord`는 `student.teacher`를 따라가서 소유자를 확인합니다. (같은 정보를 여러 곳에 두지 않음)
-- 모든 화면의 조회는 **로그인한 강사 기준으로 필터링**합니다. 이걸 빠뜨리면 다른 강사의 데이터가 보이므로 테스트로 확인합니다.
+- 소유권은 **서버에서 강제**합니다. 화면에서 선택지를 숨기는 것만으로는 조작된 요청을 막을 수 없기 때문입니다.
+  1. **조회·수정·삭제:** 모든 뷰는 로그인한 강사의 데이터로 좁힌 쿼리셋에서 객체를 찾습니다. 다른 강사의 객체 번호로 접근하면 404.
+  2. **연결(외래키 선택):** 폼의 선택지 쿼리셋을 로그인한 강사 것으로 제한합니다. 조작된 POST로 다른 강사의 `label_id`·`enrollment_id`를 보내면 폼 오류.
+  3. **저장 직전:** 모델 `clean()`에서 소유자가 같은지 다시 확인합니다 (예: `Enrollment.label.teacher == Enrollment.student.teacher`).
+  4. **테스트:** 강사 A·B 두 계정으로 서로의 데이터를 조회·수정·삭제·연결할 수 없는지 앱마다 격리 테스트를 둡니다.
+- 구현 방식은 [SCREENS.md §7](SCREENS.md)에 정리했습니다.
 
 ### 2-6. 시간은 `datetime` + Asia/Seoul
 
@@ -180,7 +185,8 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | 잔여 초과 일정 | 저장 후 `예정` 회차 수(새 회차 포함) > 잔여 회차이면 경고만 (저장 허용) | 앱 검증 (UC-04, UC-12) |
 | `Student` 보관 | `is_active=false`로 바꿀 때 남은 `scheduled` 회차를 확인 후 삭제. 다른 상태 회차는 보존 | 앱 (UC-02) |
 | `Label` | 같은 강사 안에서 `name` 유일, `color`는 8색 중 하나 | DB `UniqueConstraint(teacher, name)` + `choices` |
-| `Enrollment.label` | 같은 강사의 라벨만 연결 | 폼 검증 (UC-16) |
+| `Label` 조회·수정·삭제 | 로그인한 강사의 라벨만. 다른 강사 라벨은 404 | 뷰 쿼리셋 (UC-16) |
+| `Enrollment.label` | 같은 강사의 라벨만 연결 | 폼 선택지 제한 + 모델 `clean()` 재검증 + 격리 테스트 (2-5, UC-16) |
 | 시간 겹침 | 같은 강사의 회차가 겹치면 **경고만** (저장 허용) | 앱 검증 (UC-04) |
 
 **삭제 정책 (기록 보존)**
@@ -199,14 +205,16 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 ## 4. 단계별 구현 범위
 
-| 단계 | 만들 것 |
-|---|---|
-| **MVP (P1)** | `User`, `Student`, `Enrollment`, `LessonSession`(상태는 `scheduled`/`completed`만 사용해도 동작) |
-| P2 | `LessonSession`의 `cancelled`, `makeup_for` 사용 (휴강·보강), `Label` (UC-16) |
-| P3 | `absent` + `absence_deducted`, `LessonRecord` |
+구현 순서는 발표(11/24) 시연에 필요한 것부터입니다. 세부 우선순위는 GitHub 라벨을 따릅니다.
+
+| 단계 | 유스케이스 | 만들 것 |
+|---|---|---|
+| **MVP 핵심** (먼저) | UC-01~07 | `User`, `Student`, `Enrollment`, `LessonSession`(상태는 `scheduled`/`completed`만 사용해도 동작) |
+| MVP 후속 (핵심 완료 후) | UC-08·09, UC-15, UC-16 | `LessonSession`의 `cancelled`·`makeup_for` 사용(휴강·보강), 비밀번호 찾기(모델 변경 없음), `Label` 화면 |
+| 확장 | UC-10, UC-14 | `absent` + `absence_deducted`, `LessonRecord` |
 | 이후 | 일정 변경 이력 `SessionChangeLog`(UC-11), 반복 규칙 `RecurrenceRule`(UC-12), 그룹 수업 `Class`, 장소 `Location` + 지도 연동(UC-13, 프로젝트 이후) |
 
-필드는 MVP 때 미리 만들어 두고(`place`, `makeup_for` 등은 비워둘 수 있게), 화면 기능만 단계적으로 붙입니다. 마이그레이션 횟수를 줄이기 위해서입니다.
+필드는 MVP 핵심 때 미리 만들어 두고(`place`, `makeup_for`, `label` 등은 비워둘 수 있게, `Label` 모델 포함), 화면 기능만 단계적으로 붙입니다. 마이그레이션 횟수를 줄이기 위해서입니다. 라벨이 없으면 회차는 회색으로 보일 뿐 핵심 흐름은 그대로 동작합니다.
 
 ## 5. 결정 기록
 
