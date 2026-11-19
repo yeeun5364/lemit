@@ -48,7 +48,7 @@
 | 이후 | 장소 지도 연동 | ⬜ | 프로젝트 기간 이후. 그전엔 회차별 장소 메모(UC-04) |
 | 확장 | 수업일지·진도 기록 | ⬜ | |
 | 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
-| 인프라 | Docker 실행 환경 | ⬜ | |
+| 인프라 | Docker 실행 환경 | 🟡 | web(gunicorn)+db 컨테이너, 이미지 안 모델 검증·추론, 헬스체크·스모크 테스트. PC에서 운영·개발 구성 모두 확인, PR 검토 중 (#5) |
 | 인프라 | GitHub Actions (테스트) | 🟡 | 린트·PostgreSQL 18 테스트 워크플로 작성 (#6). 이미지 검증은 #5 이후 |
 | 인프라 | AWS Lightsail 배포 | ⬜ | |
 
@@ -99,21 +99,21 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 
 ## 실행 방법
 
-> 현재는 **PostgreSQL만 Docker로 실행**하고 Django는 PC의 가상환경에서 실행합니다. Django 컨테이너(`web`)는 #5에서 추가합니다.
+> 실행 방법은 두 가지입니다. **A. Docker만으로 실행**(web + db 컨테이너, #5)과 **B. PC 가상환경에서 Django 실행 + Docker PostgreSQL**(개발·테스트용).
 
 ### 필요한 환경
 
 | 구분 | 버전 | 비고 |
 |---|---|---|
-| Python | **3.14** | **현재 PC 설치 필수** (Django를 PC 가상환경에서 실행). #5부터는 Docker 이미지 `python:3.14-slim`으로도 실행 |
+| Python | **3.14** | Docker 이미지 `python:3.14-slim`. PC 가상환경(B 방법)으로 실행·테스트할 때만 PC에 설치 필요 |
 | Django | **5.2 LTS** (5.2.19 고정) | 보안 지원 2028년 4월까지. Python 3.14는 5.2.8부터 지원 |
 | PostgreSQL | **18** | Docker 이미지 `postgres:18` (2026-11 기준 최신 18.7) |
 | DB 드라이버 | psycopg 3 (`psycopg[binary]` 3.3.9) | |
 | Docker | Engine 29 이상, Compose v2 이상 | 개발 PC 확인 버전: Docker 29.9.1, Compose v5.6.0 |
 | Git | 2.x | |
 
-- **현재 구성:** Django는 **PC의 Python 3.14 가상환경**에서, PostgreSQL만 **Docker**에서 실행합니다. 그래서 지금은 **Python 3.14와 Docker가 모두 필요**하고, PostgreSQL은 PC에 설치하지 않습니다.
-- #5에서 Django 컨테이너(`web`)를 추가하면 Docker만으로도 실행할 수 있게 됩니다.
+- **A. Docker만으로 실행:** Docker만 있으면 됩니다. PostgreSQL과 Python을 PC에 설치하지 않습니다.
+- **B. PC 가상환경 + Docker PostgreSQL:** 테스트(`manage.py test`)·코드 검사·모델 재학습은 이 방법으로 합니다. Python 3.14와 Docker가 필요합니다.
 - PC에 Python 3.15가 기본으로 잡혀 있으면 `py -3.14 -m venv .venv`처럼 버전을 지정해 가상환경을 만듭니다.
 - 패키지 버전은 `requirements.txt`에 고정되어 있습니다.
 
@@ -139,17 +139,37 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 
 | Django를 어디서 실행하나 | 호스트 | 예 |
 |---|---|---|
-| PC 가상환경 (현재) | `127.0.0.1` | `postgres://lemit:비밀번호@127.0.0.1:5432/lemit` |
-| Docker `web` 컨테이너 (#5부터) | `db` (Compose 서비스 이름) | `postgres://lemit:비밀번호@db:5432/lemit` |
+| PC 가상환경 (B 방법) | `127.0.0.1` | `postgres://lemit:비밀번호@127.0.0.1:5432/lemit` |
+| Docker `web` 컨테이너 (A 방법) | `db` (Compose 서비스 이름) | `compose.yaml`이 `POSTGRES_*` 값으로 자동으로 만듦. `.env`에 따로 쓰지 않음 |
 
-- 컨테이너 안에서 `127.0.0.1`은 자기 자신이라 PostgreSQL에 닿지 않습니다. #5에서 `web` 컨테이너에는 `db` 호스트 값을 따로 넣습니다.
-- 개발용 `compose.yaml`은 DB 포트를 PC 안(`127.0.0.1:5432`)에만 엽니다. **운영 서버에서는 DB 포트를 외부에 열지 않습니다** (#5, #7).
+- 컨테이너 안에서 `127.0.0.1`은 자기 자신이라 PostgreSQL에 닿지 않습니다. 그래서 `compose.yaml`이 `web`의 `DATABASE_URL`을 `db` 호스트로 덮어씁니다. `POSTGRES_PASSWORD`는 URL에 그대로 들어가므로 영문·숫자·`-`·`_`만 씁니다(`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+- DB 포트는 개발용 `compose.override.yaml`에서만 PC 안(`127.0.0.1:5432`)에 엽니다. **운영 구성(`compose.yaml`만 사용)은 DB 포트를 열지 않습니다** (#5, #7).
 - 개발 환경에서는 메일을 실제로 보내지 않고 터미널에 출력합니다. `EMAIL_*` 값이 없어도 됩니다.
 - 메일 계정을 바꿀 때는 `.env`의 `EMAIL_*` 값만 바꾸고 재시작하면 됩니다. 코드는 수정하지 않습니다.
 
 `.env` 파일과 비밀번호·키 값은 **절대 커밋하지 않습니다.** (`.gitignore`에 포함)
 
-### 실행 (현재: 로컬 Django + Docker PostgreSQL)
+### A. Docker만으로 실행 (#5)
+
+```bash
+# .env 준비 (위 "환경변수 설정")
+docker compose up -d --wait              # web·db를 빌드·실행하고 healthy가 될 때까지 대기 (개발: compose.override.yaml 자동 적용)
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py createsuperuser
+docker compose exec web python scripts/smoke_test.py   # healthz·모델 상태·check·migrate --check·ml.verify·추론 1건
+```
+
+| 파일 | 용도 |
+|---|---|
+| `compose.yaml` | 공통·운영 기준. web(gunicorn) + db(PostgreSQL 18, 볼륨 `pgdata`). DB 포트 비공개, web은 서버 안 `127.0.0.1:8000`에만 공개, 헬스체크·재시작 정책·로그 크기 제한 |
+| `compose.override.yaml` | 개발 PC 전용(자동 적용). DB 포트 `127.0.0.1:5432` 공개, 코드 마운트, `runserver`, `DEBUG=True` |
+| `Dockerfile` | `python:3.14-slim`, 의존성 레이어 분리, `collectstatic`, root가 아닌 사용자, 학습된 모델 파일(`ml/artifacts/`) 포함 |
+
+- **운영 서버:** override 없이 `docker compose -f compose.yaml up -d --wait`. `IMAGE_TAG`(커밋 SHA)로 이미지를 구분하고 이전 태그로 롤백합니다 (#7).
+- web 포트를 바꾸려면 `.env`에 `WEB_PORT=8001`, gunicorn worker 수는 `GUNICORN_WORKERS`로 조정합니다.
+- 컨테이너를 교체·재시작해도 데이터는 볼륨 `pgdata`에 남습니다. `docker compose down -v`는 **데이터를 지우므로** 쓰지 않습니다.
+
+### B. PC 가상환경에서 실행 (개발·테스트)
 
 ```bash
 # 1) 가상환경 만들기 (Python 3.14)
@@ -167,7 +187,7 @@ pip install -r requirements.txt
 # 4) 환경변수: .env.example을 .env로 복사(위 "환경변수 설정" 표)한 뒤
 #    DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DATABASE_URL의 비밀번호를 채움
 
-# 5) PostgreSQL 18 실행 (healthy가 될 때까지 대기)
+# 5) PostgreSQL 18만 실행 (healthy가 될 때까지 대기)
 docker compose up -d --wait db
 
 # 6) DB 테이블 생성, 관리자 계정 생성, 서버 실행
@@ -203,7 +223,7 @@ python -m ml.train --version v3         # 모델 다시 학습 (데이터를 바
 | 린트 (ruff) | `ruff check`, `ruff format --check` |
 | 테스트 (PostgreSQL 18) | PostgreSQL 18 서비스 컨테이너를 띄우고 `manage.py check`, 마이그레이션 누락 확인(`makemigrations --check`), ML 모델 검증(`python -m ml.verify`), `manage.py test` (추론·모델 파일 손상 테스트 포함) |
 
-- Docker 이미지 빌드·스모크 테스트는 Dockerfile이 생기는 #5 이후 추가합니다.
+| Docker 이미지 (빌드·스모크) | `compose.yaml`로 이미지를 빌드하고 `up -d --wait`(db·web healthy 대기) → 마이그레이션 → `scripts/smoke_test.py` (#5) |
 
 ## 시연 자료
 
@@ -244,7 +264,10 @@ lemit/
 ├── requirements-dev.txt   # 개발 도구 (ruff)
 ├── pyproject.toml         # ruff 설정
 ├── .github/workflows/     # CI (GitHub Actions)
-├── compose.yaml           # 개발용 PostgreSQL 18 (web은 #5에서 추가)
+├── Dockerfile             # web 이미지 (gunicorn, 모델 파일 포함)
+├── compose.yaml           # web + db 컨테이너 (공통·운영 기준)
+├── compose.override.yaml  # 개발 PC 전용 설정 (자동 적용)
+├── scripts/               # 컨테이너 헬스체크·스모크 테스트
 ├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
 ├── config/                # Django 프로젝트 설정 (settings, urls)
 ├── accounts/              # 강사 계정: 이메일 로그인 커스텀 User

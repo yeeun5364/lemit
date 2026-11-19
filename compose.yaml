@@ -1,14 +1,19 @@
-# 개발용 PostgreSQL. 웹(Django) 컨테이너는 #5에서 추가한다.
-# DB 포트는 개발 PC 안(127.0.0.1)에만 연다. 운영 구성에서는 ports를 두지 않는다 (#5, #7).
+# LEMIT 컨테이너 구성 (#5): web(Django + gunicorn) + db(PostgreSQL 18).
+#
+# - 이 파일은 공통·운영 기준이다. DB 포트를 열지 않고, web도 서버 안(127.0.0.1)에서만 연다.
+#   인터넷 공개는 TLS 리버스 프록시를 둔 뒤에 한다 (#7, OPERATIONS §2).
+# - 개발 PC에서는 compose.override.yaml이 자동으로 함께 읽혀 DB 포트 공개·코드 마운트·runserver로 바뀐다.
+# - 운영 서버에서는 override 없이 실행한다:  docker compose -f compose.yaml up -d --wait
+# - .env의 POSTGRES_PASSWORD는 URL에 그대로 들어가므로 영문·숫자·-_ 만 쓴다 (secrets.token_urlsafe 권장).
+name: lemit
+
 services:
   db:
     image: postgres:18
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "127.0.0.1:5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB를 .env에 설정하세요}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER를 .env에 설정하세요}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD를 .env에 설정하세요}
     volumes:
       - pgdata:/var/lib/postgresql
     healthcheck:
@@ -16,6 +21,36 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    build: .
+    # 배포 시 IMAGE_TAG에 커밋 SHA를 넣어 이미지를 구분하고, 롤백은 이전 태그로 다시 실행한다 (#7)
+    image: lemit-web:${IMAGE_TAG:-local}
+    env_file: .env
+    environment:
+      # 컨테이너 안에서 127.0.0.1은 자기 자신이므로 DB 호스트는 서비스 이름 db (PR #29 리뷰).
+      # .env의 DATABASE_URL(PC 실행용 127.0.0.1)을 여기서 덮어쓴다.
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "scripts/healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+    logging: *logging
 
 volumes:
   pgdata:
