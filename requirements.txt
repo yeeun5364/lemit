@@ -1,6 +1,9 @@
 Django==5.2.19  # 5.2 LTS, >=5.2.12 필요
 psycopg[binary]==3.3.9
 django-environ==0.14.0
+# 운영 실행 (#5): 앱 서버, 정적 파일 제공 (nginx 없이)
+gunicorn==27.0.1
+whitenoise==6.12.0
 # 메모 분류 모델 (ml/). 모델 파일은 학습 때 버전에서만 불러오므로 버전을 바꾸면 다시 학습한다 (python -m ml.train)
 scikit-learn==1.9.1
 joblib==1.6.0

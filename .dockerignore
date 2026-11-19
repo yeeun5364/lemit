@@ -1,0 +1,25 @@
+# 이미지에 넣지 않는 것. ml/(모델 파일·검증용 데이터)은 반드시 포함한다 (#5, ml.verify가 데이터 해시를 확인)
+.git
+.github
+.gitignore
+.gitattributes
+.dockerignore
+.venv
+.env
+.env.*
+!.env.example
+.claude
+.vscode
+.idea
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+staticfiles
+media
+*.sqlite3
+docs
+devlog
+CLAUDE.md
+compose*.yaml
+Dockerfile
