@@ -1,0 +1,21 @@
+# TLS를 끝내는 리버스 프록시 (#7, OPERATIONS §2). compose의 proxy 프로필로만 실행한다.
+#
+# SITE_ADDRESS (.env)
+#   - 도메인이 있으면 도메인 (예: lemit.example.com): Let's Encrypt 인증서를 자동 발급·갱신하고 HTTP는 HTTPS로 넘긴다
+#   - 도메인이 없으면 :80 : 서버 IP로 HTTP 시연 (실제 개인정보를 받지 않는 시연에 한정, OPERATIONS §10)
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# 내부 web(gunicorn)으로 전달. Caddy가 X-Forwarded-Proto를 붙이므로 Django는 DJANGO_BEHIND_PROXY=True로 믿는다
+	reverse_proxy web:8000
+
+	header {
+		# 서버 종류·버전을 숨김
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

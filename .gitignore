@@ -19,3 +19,6 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 배포 상태 기록 (서버에만 존재, #7)
+deploy/state/

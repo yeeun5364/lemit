@@ -2,3 +2,6 @@
 ml/data/*.csv text eol=lf
 # 모델 파일은 바이너리 (줄바꿈 변환 금지)
 *.joblib binary
+# 셸 스크립트·Caddyfile은 Linux 서버에서 실행되므로 항상 LF (#7)
+*.sh text eol=lf
+deploy/Caddyfile text eol=lf

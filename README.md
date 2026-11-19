@@ -50,7 +50,7 @@
 | 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
 | 인프라 | Docker 실행 환경 | 🟡 | web(gunicorn)+db 컨테이너, 이미지 안 모델 검증·추론, 헬스체크·스모크 테스트. PC에서 운영·개발 구성 모두 확인, PR 검토 중 (#5) |
 | 인프라 | GitHub Actions (테스트) | 🟡 | 린트·PostgreSQL 18 테스트 워크플로 작성 (#6). 이미지 검증은 #5 이후 |
-| 인프라 | AWS Lightsail 배포 | ⬜ | |
+| 인프라 | AWS Lightsail 배포 | 🟡 | 배포 준비 완료: Caddy TLS 프록시, 운영 보안 설정, 배포·자동 롤백 스크립트, 절차서([docs/DEPLOY.md](docs/DEPLOY.md)). PC 연습 배포·롤백 검증. **실제 서버 배포는 아직** (#7) |
 
 ## 회차 상태와 차감 규칙
 
@@ -274,7 +274,8 @@ lemit/
 ├── Dockerfile             # web 이미지 (gunicorn, 모델 파일 포함)
 ├── compose.yaml           # web + db 컨테이너 (공통·운영 기준)
 ├── compose.dev.yaml       # 개발 PC 전용 설정 (-f로 직접 지정할 때만)
-├── scripts/               # 컨테이너 헬스체크·스모크 테스트
+├── scripts/               # 헬스체크·스모크 테스트, 배포(deploy.sh)·롤백(rollback.sh)
+├── deploy/                # Caddyfile (TLS 리버스 프록시). deploy/state/는 서버 배포 기록(커밋 안 함)
 ├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
 ├── config/                # Django 프로젝트 설정 (settings, urls)
 ├── accounts/              # 강사 계정: 이메일 로그인 커스텀 User
@@ -285,6 +286,7 @@ lemit/
 │   ├── USE_CASES.md       # 기능별 유스케이스 (GitHub 이슈와 1:1 연결)
 │   ├── ERD.md             # 데이터 모델·ERD
 │   ├── SCREENS.md         # 화면 목록·흐름·와이어프레임
+│   ├── DEPLOY.md          # 배포 절차서 (Lightsail, 롤백, 장애 대응)
 │   └── ML.md              # 메시지 분류 모델 설계·학습 결과·한계
 └── devlog/                # 날짜별 진행 기록 (발표 자료 작성용)
     ├── README.md          # 작성 규칙

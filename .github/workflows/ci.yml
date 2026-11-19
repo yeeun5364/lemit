@@ -80,15 +80,22 @@ jobs:
       - name: CI용 .env 만들기 (실제 비밀값 아님, CI 안에서만 사용)
         run: |
           cat > .env <<'EOF'
-          DJANGO_SECRET_KEY=ci-only-not-a-real-secret
+          DJANGO_SECRET_KEY=ci-only-not-a-real-secret-0123456789abcdefghijklmnopqrstuvwxyz
           DJANGO_DEBUG=False
-          DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+          DJANGO_ALLOWED_HOSTS=203.0.113.10,localhost,127.0.0.1
           DJANGO_CSRF_TRUSTED_ORIGINS=
           POSTGRES_DB=lemit
           POSTGRES_USER=lemit
           POSTGRES_PASSWORD=lemit-ci
           DATABASE_URL=postgres://lemit:lemit-ci@127.0.0.1:5432/lemit
+          SITE_ADDRESS=:80
+          DJANGO_BEHIND_PROXY=True
+          DJANGO_SECURE_HTTPS=False
+          PROXY_HTTP_PORT=8080
+          PROXY_HTTPS_PORT=8443
           EOF
+      - name: 배포 사전 점검 시나리오 (잘못된 운영 .env 조합 차단)
+        run: bash scripts/test_preflight.sh
       - name: 이미지 빌드
         run: docker compose -f compose.yaml build web
       - name: 컨테이너 기동 (db·web이 healthy가 될 때까지 대기)
@@ -97,9 +104,29 @@ jobs:
         run: docker compose -f compose.yaml exec -T web python manage.py migrate --noinput
       - name: 스모크 테스트 (healthz·모델 상태·check·migrate --check·ml.verify·추론 1건)
         run: docker compose -f compose.yaml exec -T web python scripts/smoke_test.py
+      - name: 배포 스크립트 성공 시나리오 (프록시 포함, check --deploy·스모크·공개 경로 확인 후에만 OK)
+        run: |
+          DEPLOY_SKIP_GIT=1 bash scripts/deploy.sh
+          test "$(cat deploy/state/current_tag)" = "$(git rev-parse --short=12 HEAD)"
+          tail -1 deploy/state/history.log | grep -q $'	OK$'
+      - name: 공개 경로 실패 시나리오 (OK로 기록하지 않고 current_tag 유지)
+        run: |
+          git -c user.name=ci -c user.email=ci@example.invalid commit -q --allow-empty -m "ci scenario"
+          BEFORE="$(cat deploy/state/current_tag)"
+          if PUBLIC_CHECK_HTTP_PORT=9 PUBLIC_CHECK_RETRIES=2 PUBLIC_CHECK_DELAY=1 DEPLOY_SKIP_GIT=1 bash scripts/deploy.sh; then
+            echo "공개 경로가 실패했는데 배포가 성공으로 끝났습니다"; exit 1
+          fi
+          test "$(cat deploy/state/current_tag)" = "$BEFORE"
+          tail -1 deploy/state/history.log | grep -q FAILED_PUBLIC_CHECK
+      - name: 프록시 중단 시나리오 (공개 경로 확인이 실패해야 함)
+        run: |
+          docker compose --profile proxy stop proxy
+          if PUBLIC_CHECK_RETRIES=2 PUBLIC_CHECK_DELAY=1 bash scripts/check_public.sh; then exit 1; fi
+          docker compose --profile proxy start proxy
+          PUBLIC_CHECK_RETRIES=6 PUBLIC_CHECK_DELAY=2 bash scripts/check_public.sh
       - name: 실패 시 컨테이너 로그
         if: failure()
-        run: docker compose -f compose.yaml logs --no-color --tail 200
-      - name: 정리
+        run: docker compose --profile proxy logs --no-color --tail 200
+      - name: 정리 (CI 임시 환경이라 볼륨까지 삭제. 운영에서는 down -v 금지)
         if: always()
-        run: docker compose -f compose.yaml down -v
+        run: docker compose --profile proxy down -v
