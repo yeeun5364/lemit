@@ -69,6 +69,11 @@ def read_csv(path: Path) -> list[tuple[str, str]]:
     return rows
 
 
+def data_sha256(path: Path) -> str:
+    """데이터 파일 해시. Windows에서 줄바꿈이 CRLF로 바뀌어도 같은 값이 나오게 LF로 맞춘 뒤 계산한다."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def dedupe(rows):
     seen, out, dups = set(), [], []
     for text, label in rows:
@@ -267,8 +272,8 @@ def main(argv=None) -> int:
         "sha256": artifact.sha256_of(model_path),
         "labels": [str(c) for c in pipeline.classes_],
         "data": {
-            "sha256": hashlib.sha256(DATA_PATH.read_bytes()).hexdigest(),
-            "unseen_sha256": hashlib.sha256(UNSEEN_PATH.read_bytes()).hexdigest(),
+            "sha256": data_sha256(DATA_PATH),
+            "unseen_sha256": data_sha256(UNSEEN_PATH),
             "n_total": len(rows),
             "n_duplicates_removed": len(dups),
             "n_train": len(x_train),

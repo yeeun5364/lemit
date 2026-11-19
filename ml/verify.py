@@ -9,11 +9,10 @@
 4. 성능 기준: 기록된 GATE를 넘는지
 """
 
-import hashlib
 import sys
 
 from ml import artifact
-from ml.train import DATA_PATH, UNSEEN_PATH, evaluate, read_csv
+from ml.train import DATA_PATH, UNSEEN_PATH, data_sha256, evaluate, read_csv
 
 TOLERANCE = 1e-4
 
@@ -30,9 +29,9 @@ def main(model_path=None) -> int:
     print(f"모델 {model.version} (scikit-learn {meta['sklearn_version']}, 학습 {meta['created_at']})")
 
     errors = []
-    if hashlib.sha256(DATA_PATH.read_bytes()).hexdigest() != meta["data"]["sha256"]:
+    if data_sha256(DATA_PATH) != meta["data"]["sha256"]:
         errors.append("ml/data/memos.csv가 학습 때와 다릅니다. python -m ml.train으로 다시 학습하세요")
-    if hashlib.sha256(UNSEEN_PATH.read_bytes()).hexdigest() != meta["data"]["unseen_sha256"]:
+    if data_sha256(UNSEEN_PATH) != meta["data"]["unseen_sha256"]:
         errors.append("ml/data/unseen.csv가 학습 때와 다릅니다. python -m ml.train으로 다시 학습하세요")
 
     val = meta["val_samples"]
