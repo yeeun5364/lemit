@@ -5,8 +5,9 @@
 1. 데이터 확인: 분류 이름, 빈 문장, 중복, 확인용 문장(unseen)과 겹치는지, 클래스별 개수
 2. 학습·검증 분리 (층화 80:20, 고정 시드)
 3. 학습용 데이터 안에서만 5겹 교차검증으로 후보 비교 (TF-IDF는 Pipeline 안에서 접힘마다 새로 학습)
-4. 검증 데이터와 확인용 문장으로 평가 (정확도, 정밀도, 재현율, F1, 혼동행렬, 오분류 사례)
-5. 성능 기준(GATE)을 넘을 때만 모델·메타데이터·보고서 저장
+4. 검증 데이터로 평가하고 성능 기준(GATE, 검증 macro F1)을 넘을 때만 저장 (정확도, 정밀도, 재현율, F1, 혼동행렬, 오분류)
+5. 확인용 문장(unseen)은 같은 지표로 계산해 기록만 한다. 저장 기준과 모델 선택에는 쓰지 않는다.
+   반복 재학습 때 확인용 점수를 보고 모델을 고르면 확인용 세트가 사실상 검증 세트가 되기 때문이다 (PR #34 리뷰).
 
 저장되는 모델은 "학습용 80%"로만 학습한 것이다. 그래야 기록된 검증 점수가 저장된 모델의 점수와 정확히 같고,
 CI에서 같은 점수가 나오는지 다시 확인할 수 있다.
@@ -40,8 +41,8 @@ UNSEEN_PATH = ML_DIR / "data" / "unseen.csv"
 RANDOM_STATE = 42
 VAL_SIZE = 0.2
 
-# 성능 기준: 학습 전에 정함. 둘 다 넘어야 저장한다.
-GATE = {"val_macro_f1": 0.80, "unseen_macro_f1": 0.70}
+# 성능 기준: 학습 전에 정함. 검증 데이터 점수만 쓴다 (확인용 세트는 참고값, 위 5번).
+GATE = {"val_macro_f1": 0.80}
 
 PARAM_GRID = [
     {  # 글자 단위 n-gram: 한국어는 조사·어미가 붙어 단어가 잘게 바뀌므로 형태소 분석기 없이도 강함
@@ -161,10 +162,13 @@ def write_report(meta: dict, path: Path) -> None:
         "",
         "## 성능 기준",
         "",
-        f"- 검증 macro F1 ≥ {GATE['val_macro_f1']}, 확인용 macro F1 ≥ {GATE['unseen_macro_f1']}",
+        f"- 저장 기준: 검증 macro F1 ≥ {meta['gate']['val_macro_f1']} (확인용 점수는 기준에 쓰지 않는 참고값)",
         f"- 결과: **{'통과' if meta['gate']['passed'] else '미달'}**",
     ]
-    for key, title in (("val", "검증 데이터"), ("unseen", "확인용 문장 (학습에 쓰지 않은 새 문장)")):
+    for key, title in (
+        ("val", "검증 데이터"),
+        ("unseen", "확인용 문장 (참고값: 학습·모델 선택·저장 기준에 쓰지 않음)"),
+    ):
         m = meta["metrics"][key]
         lines += [
             "",
@@ -253,7 +257,7 @@ def main(argv=None) -> int:
     for name, m in (("검증  ", val_m), ("확인용", unseen_m)):
         print(f"{name} 정확도 {m['accuracy']}  macro F1 {m['macro_f1']}  오분류 {len(m['misclassified'])}건")
 
-    passed = val_m["macro_f1"] >= GATE["val_macro_f1"] and unseen_m["macro_f1"] >= GATE["unseen_macro_f1"]
+    passed = val_m["macro_f1"] >= GATE["val_macro_f1"]
     if not passed:
         print(f"성능 기준 미달 {GATE}. 모델을 저장하지 않습니다.")
         return 1

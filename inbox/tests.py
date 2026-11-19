@@ -8,6 +8,7 @@ from django.conf import settings
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
+from sklearn.metrics import f1_score
 
 from inbox import classifier
 from ml import artifact, verify
@@ -53,11 +54,17 @@ class ClassifyTests(SimpleTestCase):
         self.assertTrue(0 < p.confidence <= 1)
         self.assertEqual(p.model_version, classifier.get_model().version)
 
-    def test_unseen_sentences_meet_gate(self):
-        """학습에 쓰지 않은 문장으로 실제 추론. 문장별 정답이 아니라 전체 정확도로 본다 (오분류는 REPORT.md에 기록)."""
+    def test_unseen_sentences_through_service(self):
+        """확인용 문장을 서비스 경로(classify)로 실제 추론해, 학습 때 기록한 macro F1과 같은 값이 나오는지 본다.
+
+        같은 지표(macro F1)끼리 비교한다 (PR #34 리뷰). 확인용 점수는 저장 기준이 아닌 참고값이라
+        임계값과 비교하지 않고, 서비스 경로가 학습 때와 같은 예측을 내는지(재현)만 확인한다.
+        """
         rows = read_csv(UNSEEN_PATH)
-        correct = sum(classifier.classify(t).label == y for t, y in rows)
-        self.assertGreaterEqual(correct / len(rows), classifier.get_model().meta["gate"]["unseen_macro_f1"])
+        y_true = [y for _, y in rows]
+        y_pred = [classifier.classify(t).label for t, _ in rows]
+        recorded = classifier.get_model().meta["metrics"]["unseen"]["macro_f1"]
+        self.assertAlmostEqual(f1_score(y_true, y_pred, average="macro", labels=list(LABELS)), recorded, places=4)
 
     def test_empty_message_is_rejected(self):
         for text in ("", "   ", "\n\t", None):
@@ -72,6 +79,19 @@ class ClassifyTests(SimpleTestCase):
         with mock.patch.object(artifact, "load", wraps=artifact.load) as load:
             classifier.classify("오늘 수업 정말 잘했어요")
             classifier.classify("내일 수업 취소해 주세요")
+        self.assertEqual(load.call_count, 1)
+
+    def test_successful_load_is_cached_until_restart(self):
+        """캐시 정책 (PR #34 리뷰): 같은 경로의 파일을 바꿔도 실행 중인 프로세스는 이전 모델을 쓴다.
+
+        모델 교체는 새 이미지 배포(프로세스 재시작)로 한다. 재시작은 clear_cache()로 흉내 낸다.
+        """
+        first = classifier.get_model()
+        with mock.patch.object(artifact, "load", side_effect=AssertionError("다시 불러오면 안 됨")):
+            self.assertIs(classifier.get_model(), first)
+        classifier.clear_cache()
+        with mock.patch.object(artifact, "load", wraps=artifact.load) as load:
+            classifier.get_model()
         self.assertEqual(load.call_count, 1)
 
     def test_prediction_error_is_wrapped(self):
