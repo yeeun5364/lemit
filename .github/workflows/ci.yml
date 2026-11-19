@@ -66,5 +66,7 @@ jobs:
         run: python manage.py check
       - name: 마이그레이션 누락 확인
         run: python manage.py makemigrations --check --dry-run
+      - name: ML 모델 검증 (파일·버전·데이터 일치, 점수 재현, 성능 기준)
+        run: python -m ml.verify
       - name: 테스트
         run: python manage.py test --noinput -v 2
