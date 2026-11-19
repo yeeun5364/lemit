@@ -54,5 +54,27 @@ services:
     restart: unless-stopped
     logging: *logging
 
+  # TLS 리버스 프록시 (#7). 운영 서버에서만:  docker compose --profile proxy up -d --wait
+  # 인터넷에 여는 포트는 이 서비스의 80/443뿐이다. web(8000)·db(5432)는 외부에 열지 않는다.
+  proxy:
+    image: caddy:2.10-alpine
+    profiles: ["proxy"]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "${PROXY_HTTP_PORT:-80}:80"
+      - "${PROXY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data  # 발급받은 인증서 (지우면 재발급 제한에 걸릴 수 있음)
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *logging
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

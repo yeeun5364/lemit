@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# 운영 서버 배포 (#7). 서버의 저장소 폴더에서 실행한다:  scripts/deploy.sh [git-ref]   (기본: origin/main)
+#
+# 순서 (OPERATIONS §5): 코드 받기 → 이미지 빌드(태그 = 커밋 SHA) → 마이그레이션 → web 교체 → 헬스체크 대기
+#                       → 스모크 테스트(모델 상태·ml.verify·추론 1건 포함) → 성공 기록
+# 스모크 테스트가 실패하면 직전에 성공한 이미지 태그로 web을 되돌린다 (앱 + 모델이 함께 돌아감).
+#
+# 주의
+# - DB 스키마는 되돌리지 않는다. 이미지 롤백과 DB 롤백은 다르다. 파괴적 마이그레이션은 별도 계획 후 배포한다.
+# - docker compose down -v 는 DB 볼륨을 지우므로 절대 쓰지 않는다.
+# - compose.dev.yaml을 지정하지 않는다 (docker compose = compose.yaml만).
+# - 연습용: DEPLOY_SKIP_GIT=1 이면 git을 건드리지 않고 현재 HEAD로 배포한다.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+STATE_DIR="deploy/state"
+mkdir -p "$STATE_DIR"
+HISTORY="$STATE_DIR/history.log"
+CURRENT="$STATE_DIR/current_tag"
+REF="${1:-origin/main}"
+COMPOSE=(docker compose --profile "${COMPOSE_PROFILE:-proxy}")
+
+log() { printf '[deploy %s] %s\n' "$(date '+%F %T')" "$*"; }
+record() { printf '%s\t%s\t%s\n' "$(date '+%F %T %Z')" "$1" "$2" >> "$HISTORY"; }
+
+# 0) 사전 점검
+[ -f .env ] || { log ".env가 없습니다. docs/DEPLOY.md의 '.env 만들기'를 먼저 하세요."; exit 1; }
+if grep -Eq '^DJANGO_DEBUG=(True|true|1)' .env; then
+    log "운영 .env에 DJANGO_DEBUG=True가 있습니다. False로 바꾼 뒤 배포하세요."; exit 1
+fi
+if grep -Eq '^(DJANGO_SECRET_KEY|POSTGRES_PASSWORD)=change-me' .env; then
+    log ".env에 예시 값(change-me)이 남아 있습니다. 새 비밀값으로 바꾸세요."; exit 1
+fi
+
+# 1) 코드 받기
+if [ "${DEPLOY_SKIP_GIT:-0}" != "1" ]; then
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        log "서버 작업 폴더에 커밋되지 않은 변경이 있습니다. 확인 후 다시 실행하세요."; git status --short; exit 1
+    fi
+    git fetch --prune origin
+    git checkout --detach "$REF"
+fi
+NEW_TAG="$(git rev-parse --short=12 HEAD)"
+PREV_TAG="$(cat "$CURRENT" 2>/dev/null || true)"
+log "배포 대상 $NEW_TAG (직전 성공 ${PREV_TAG:-없음})"
+
+# 2) 이미지 빌드 (태그 = 커밋 SHA)
+IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" build web
+
+# 3) DB 기동 + 마이그레이션 (새 이미지로 1회 실행)
+"${COMPOSE[@]}" up -d --wait db
+IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" run --rm --no-deps web python manage.py migrate --noinput
+
+# 4) web 교체 + 헬스체크(healthy) 대기, 프록시 기동
+rollback() {
+    if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$NEW_TAG" ]; then
+        log "실패 → 직전 이미지 $PREV_TAG 로 되돌립니다"
+        IMAGE_TAG="$PREV_TAG" "${COMPOSE[@]}" up -d --wait --no-build web \
+            && IMAGE_TAG="$PREV_TAG" "${COMPOSE[@]}" exec -T web python scripts/smoke_test.py \
+            && { record "$NEW_TAG" "FAILED_ROLLED_BACK_TO_$PREV_TAG"; log "롤백 완료 ($PREV_TAG)"; return; }
+        record "$NEW_TAG" "FAILED_ROLLBACK_FAILED"; log "롤백도 실패했습니다. docs/DEPLOY.md '장애 대응'을 따르세요."
+    else
+        record "$NEW_TAG" "FAILED_NO_PREVIOUS"; log "되돌릴 직전 이미지가 없습니다 (첫 배포). 로그를 확인하세요."
+    fi
+}
+
+if ! IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d --wait; then
+    log "컨테이너가 healthy가 되지 않았습니다."
+    "${COMPOSE[@]}" logs --no-color --tail 100 web || true
+    rollback; exit 1
+fi
+
+# 5) 스모크 테스트 (healthz·모델 상태 ok·check·migrate --check·ml.verify·추론 1건)
+if ! IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" exec -T web python scripts/smoke_test.py; then
+    log "스모크 테스트 실패"
+    rollback; exit 1
+fi
+
+# 6) 성공 기록
+echo "$NEW_TAG" > "$CURRENT"
+record "$NEW_TAG" "OK"
+log "배포 완료: $NEW_TAG. 브라우저로 로그인 → 수강생 메시지 등록 → 분류 배지까지 확인하세요 (docs/DEPLOY.md)."

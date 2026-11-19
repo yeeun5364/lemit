@@ -14,6 +14,9 @@ env = environ.Env(
     DJANGO_DEBUG=(bool, False),
     DJANGO_ALLOWED_HOSTS=(list, []),
     DJANGO_CSRF_TRUSTED_ORIGINS=(list, []),
+    DJANGO_BEHIND_PROXY=(bool, False),
+    DJANGO_SECURE_HTTPS=(bool, False),
+    DJANGO_HSTS_SECONDS=(int, 0),
 )
 # 로컬 개발용 .env 파일이 있으면 읽는다. 배포 환경에서는 실제 환경변수가 우선한다.
 environ.Env.read_env(BASE_DIR / ".env")
@@ -117,6 +120,33 @@ LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# 운영 보안 (#7, OPERATIONS §3). 개발 기본값은 모두 꺼져 있고 운영 서버의 .env에서 켠다.
+
+# 항상 켜 두는 기본 보안 헤더·쿠키
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+SESSION_COOKIE_HTTPONLY = True
+
+# TLS를 끝내는 리버스 프록시(Caddy, compose의 proxy 프로필) 뒤에서만 켠다.
+# 켜면 프록시가 보낸 X-Forwarded-Proto를 믿고 https 요청으로 판단한다. 프록시 없이 켜면 위조할 수 있으므로 켜지 않는다.
+if env("DJANGO_BEHIND_PROXY"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = False
+
+# 도메인 + HTTPS로 서비스할 때 켠다 (IP 주소로 HTTP 시연할 때는 끈다, OPERATIONS §10 HTTPS 예외 범위)
+if env("DJANGO_SECURE_HTTPS"):
+    SECURE_SSL_REDIRECT = True
+    # 컨테이너 내부 헬스체크는 http://127.0.0.1로 부르므로 https 리다이렉트에서 제외한다 (PR #39 리뷰)
+    SECURE_REDIRECT_EXEMPT = [r"^healthz/$"]
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # HSTS는 되돌리기 어려우므로 기본 0. 도메인·인증서가 안정된 뒤 짧은 값부터 올린다
+    SECURE_HSTS_SECONDS = env("DJANGO_HSTS_SECONDS")
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
 
 
 # 수강생 메시지 분류 모델 (ml/). 학습은 개발 PC에서 하고, 검증된 모델 파일을 저장소·이미지에 포함한다.
