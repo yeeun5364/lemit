@@ -40,7 +40,7 @@
 | 확장 | 반복 일정 | ⬜ | |
 | 이후 | 장소 지도 연동 | ⬜ | 프로젝트 기간 이후. 그전엔 회차별 장소 메모(UC-04) |
 | 확장 | 수업일지·진도 기록 | ⬜ | |
-| 인프라 | Django + PostgreSQL 연결 | ⬜ | |
+| 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
 | 인프라 | Docker 실행 환경 | ⬜ | |
 | 인프라 | GitHub Actions (테스트) | ⬜ | |
 | 인프라 | AWS Lightsail 배포 | ⬜ | |
@@ -92,7 +92,7 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 
 ## 실행 방법
 
-> ⚠️ **아직 Django 프로젝트가 생성되지 않았습니다.** 아래는 구성 예정인 형태이며, 실제 구성 후 명령어를 확정합니다.
+> 현재는 **PostgreSQL만 Docker로 실행**하고 Django는 PC의 가상환경에서 실행합니다. Django 컨테이너(`web`)는 #5에서 추가합니다.
 
 ### 필요한 환경
 
@@ -128,22 +128,38 @@ cp .env.example .env
 
 `.env` 파일과 비밀번호·키 값은 **절대 커밋하지 않습니다.** (`.gitignore`에 포함)
 
-### 실행
+### 실행 (현재: 로컬 Django + Docker PostgreSQL)
 
 ```bash
-docker compose up --build
-# 최초 실행 시
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py createsuperuser
+# 1) 가상환경과 패키지 (Python 3.14)
+py -3.14 -m venv .venv                  # macOS/Linux: python3.14 -m venv .venv
+.venv/Scripts/activate                  # macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2) 환경변수: .env.example을 복사해 DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DATABASE_URL 비밀번호를 채움
+cp .env.example .env
+
+# 3) PostgreSQL 18 실행 (healthy가 될 때까지 대기)
+docker compose up -d --wait db
+
+# 4) DB 테이블 생성, 관리자 계정 생성, 서버 실행
+python manage.py migrate
+python manage.py createsuperuser        # 이메일·이름·비밀번호 입력
+python manage.py runserver
 ```
 
-접속: http://localhost:8000
+접속: http://localhost:8000/admin/ (화면은 UC-01부터 추가)
+
+- `DATABASE_URL`의 호스트는 `localhost` 대신 **`127.0.0.1`**을 씁니다. Windows에서 `localhost`가 IPv6(`::1`)로 먼저 연결을 시도해 DB 연결이 멈추는 문제가 있었습니다.
+- `.env` 값에는 `$` 문자를 쓰지 않습니다. Docker Compose가 변수로 해석합니다.
 
 ### 테스트
 
 ```bash
-docker compose exec web python manage.py test
+python manage.py test
 ```
+
+테스트는 PostgreSQL에 임시 DB(`test_lemit`)를 만들어 실행하고 끝나면 지웁니다.
 
 ## 시연 자료
 
@@ -178,6 +194,12 @@ docker compose exec web python manage.py test
 lemit/
 ├── README.md              # 프로젝트 소개 (이 문서)
 ├── CLAUDE.md              # Claude Code 작업 지침 (devlog 자동 기록 규칙)
+├── manage.py
+├── requirements.txt       # 패키지 버전 고정
+├── compose.yaml           # 개발용 PostgreSQL 18 (web은 #5에서 추가)
+├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
+├── config/                # Django 프로젝트 설정 (settings, urls)
+├── accounts/              # 강사 계정: 이메일 로그인 커스텀 User
 ├── docs/
 │   ├── PROJECT_PLAN.md    # 프로젝트 기획 기준 문서 (원문)
 │   ├── USE_CASES.md       # 기능별 유스케이스 (GitHub 이슈와 1:1 연결)
