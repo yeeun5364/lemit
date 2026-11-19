@@ -1,0 +1,129 @@
+/* LEMIT 공통 스타일 (SCREENS §5 디자인 가이드). 색·간격·글자 크기는 변수로만 관리한다. */
+:root {
+  --bg: #ffffff;
+  --bg-grouped: #f2f2f7;
+  --text: #1c1c1e;
+  --text-muted: #6e6e73;
+  --separator: #d1d1d6;
+  --accent: #e5484d;
+  --accent-text: #ffffff;
+  --success-bg: #e8f5e9;
+  --warning-bg: #fff4d6;
+  --error-bg: #fde8e8;
+  --error-text: #b42318;
+  --radius: 12px;
+  --space: 16px;
+  --font-title: 28px;
+  --font-body: 17px;
+  --font-sub: 15px;
+  --touch: 44px;
+  --font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --bg-grouped: #1c1c1e;
+    --text: #f2f2f7;
+    --text-muted: #a1a1a6;
+    --separator: #38383a;
+    --success-bg: #12301a;
+    --warning-bg: #3a2e05;
+    --error-bg: #3b1212;
+    --error-text: #ff8a80;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--font-body);
+  line-height: 1.5;
+}
+
+a { color: var(--accent); text-decoration: none; }
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space);
+  padding-bottom: calc(var(--touch) + var(--space) * 2);
+}
+
+.page-title { font-size: var(--font-title); font-weight: 700; margin: 8px 0; }
+.muted { color: var(--text-muted); font-size: var(--font-sub); }
+
+/* 상단 바 */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 var(--space);
+  min-height: var(--touch);
+  border-bottom: 1px solid var(--separator);
+}
+.brand { font-weight: 700; color: var(--text); }
+.account { display: flex; align-items: center; gap: 12px; font-size: var(--font-sub); }
+.account-name { color: var(--text-muted); }
+.account form { margin: 0; }
+.link-button {
+  background: none; border: 0; padding: 0; min-height: var(--touch);
+  color: var(--accent); font: inherit; cursor: pointer;
+}
+
+/* 하단 탭 (PC에서도 같은 위치) */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  display: flex; justify-content: center; gap: 8px;
+  background: var(--bg);
+  border-top: 1px solid var(--separator);
+}
+.tab {
+  flex: 0 1 160px; min-height: var(--touch);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted); font-size: var(--font-sub);
+}
+.tab.is-active { color: var(--accent); font-weight: 600; }
+
+/* 알림 메시지 */
+.alerts { list-style: none; margin: 0 0 var(--space); padding: 0; }
+.alert { padding: 12px var(--space); border-radius: var(--radius); margin-bottom: 8px; font-size: var(--font-sub); }
+.alert-success, .alert-info { background: var(--success-bg); }
+.alert-warning { background: var(--warning-bg); }
+.alert-error { background: var(--error-bg); color: var(--error-text); }
+
+/* 폼 */
+.form > div { margin-bottom: var(--space); }
+.form label { display: block; font-size: var(--font-sub); color: var(--text-muted); margin-bottom: 4px; }
+.form input[type="email"],
+.form input[type="text"],
+.form input[type="password"] {
+  width: 100%; min-height: var(--touch); padding: 8px 12px;
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--separator); border-radius: var(--radius);
+}
+.form input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+.form .helptext { display: block; color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+.form .helptext ul { margin: 4px 0 0; padding-left: 18px; }
+.errorlist { list-style: none; margin: 4px 0; padding: 0; color: var(--error-text); font-size: var(--font-sub); }
+.errorlist.nonfield { background: var(--error-bg); padding: 12px var(--space); border-radius: var(--radius); }
+
+.button-primary {
+  width: 100%; min-height: var(--touch);
+  background: var(--accent); color: var(--accent-text);
+  border: 0; border-radius: var(--radius);
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+
+/* 로그인·회원가입 */
+.auth .page { padding-top: 48px; }
+.auth-card { max-width: 360px; margin: 0 auto; }
+.logo { text-align: center; font-size: 34px; font-weight: 800; letter-spacing: 0.04em; margin: 0; }
+.tagline { text-align: center; color: var(--text-muted); margin: 4px 0 32px; }
+.auth-links { text-align: center; font-size: var(--font-sub); color: var(--text-muted); margin-top: 24px; }

@@ -33,7 +33,7 @@
 
 | 구분 | 항목 | 상태 | 비고 |
 |---|---|---|---|
-| MVP 핵심 | 강사 회원가입·로그인 | ⬜ | UC-01 |
+| MVP 핵심 | 강사 회원가입·로그인 | 🟡 | UC-01. 회원가입·로그인·로그아웃, 기본 로그인 필수, 강사별 데이터 접근 도우미 구현·테스트 통과, PR 검토 중 (#8) |
 | MVP 핵심 | 수강생 등록·조회 | ⬜ | UC-02 |
 | MVP 핵심 | 레슨 일정 등록·조회 (월간·주간) | ⬜ | UC-03~05 |
 | MVP 핵심 | 수업 완료 처리 | ⬜ | UC-06 |
@@ -173,7 +173,7 @@ python manage.py createsuperuser        # 이메일·이름·비밀번호 입력
 python manage.py runserver
 ```
 
-접속: http://localhost:8000/admin/ (화면은 UC-01부터 추가)
+접속: http://localhost:8000/ → 로그인 화면. 회원가입: http://localhost:8000/accounts/signup/ · 관리자: http://localhost:8000/admin/
 
 - `DATABASE_URL`의 호스트는 `localhost` 대신 **`127.0.0.1`**을 씁니다. Windows에서 `localhost`가 IPv6(`::1`)로 먼저 연결을 시도해 DB 연결이 멈추는 문제가 있었습니다.
 - `.env` 값에는 `$` 문자를 쓰지 않습니다. Docker Compose가 변수로 해석합니다.

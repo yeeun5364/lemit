@@ -189,6 +189,8 @@ flowchart LR
 ```
 
 - S02는 이메일·이름·비밀번호·비밀번호 확인 4칸. 이미 가입된 이메일이면 입력란 아래 오류 표시.
+- "비밀번호 찾기" 링크는 UC-15를 구현할 때 추가합니다. UC-01에서는 "회원가입" 링크만 둡니다.
+- 이메일은 대소문자를 구분하지 않습니다. 로그인 실패 메시지는 "이메일 또는 비밀번호가 올바르지 않습니다." 하나로, 가입 여부를 드러내지 않습니다.
 
 ### S05 홈: 월간 일정 (기본)
 
@@ -411,6 +413,7 @@ flowchart LR
 - S11 URL은 수강생 아래(`/students/<id>/enrollments/new/`)지만 뷰는 `lessons` 앱에 둡니다.
 - **로그인:** `LoginRequiredMiddleware`로 기본 로그인 필수, 공개 화면(S01~S03)만 `@login_not_required` (§1 접근 정책).
 - **데이터 소유권:** 로그인만으로는 부족하므로, 모든 조회·수정·삭제·POST 동작은 **로그인한 강사의 데이터로 좁힌 쿼리셋**에서 객체를 찾습니다 (ERD 2-5).
+  - 공통 도우미는 `accounts/permissions.py`에 있습니다 (UC-01에서 추가): 뷰용 `TeacherScopedQuerysetMixin`(쿼리셋 제한, 다른 강사 객체는 404), `get_owned_or_404()`, 폼용 `TeacherScopedFormMixin`(선택지 제한). 모델마다 강사까지 가는 경로(`teacher_lookup`, 예: `student__teacher`)만 지정합니다.
   - 상세·수정·삭제: `get_object_or_404(Label, pk=pk, teacher=request.user)`처럼 강사 조건을 함께 걸어, 다른 강사의 객체 번호를 넣으면 **404**가 나오게 합니다 (존재 여부도 드러내지 않음).
   - 폼의 선택 칸(레슨권의 라벨, 회차의 레슨권 등)은 선택지 쿼리셋을 로그인한 강사 것으로 제한합니다. 조작된 POST로 다른 강사의 ID를 보내면 **폼 오류**가 됩니다.
   - 저장 직전 모델의 `clean()`에서 한 번 더 확인합니다 (예: `enrollment.label.teacher == enrollment.student.teacher`).
