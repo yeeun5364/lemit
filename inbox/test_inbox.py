@@ -4,12 +4,15 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
+from django.db.models.query import QuerySet
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from inbox import classifier, services
 from inbox.forms import StudentMessageForm
@@ -154,6 +157,44 @@ class ValidationTests(InboxTestBase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             Message.objects.create(conversation=conv, sender="teacher", body="x", predicted_label="MAKEUP")
 
+    def test_db_rejects_partially_classified_teacher_message(self):
+        """강사 메시지는 분류 필드 4개가 모두 비어야 한다. 모델 버전·분류 시각만 채워도 거부 (PR #38 리뷰)."""
+        conv = Conversation.objects.create(teacher=self.teacher, student=self.student, subject="x")
+        for extra in ({"model_version": "v2"}, {"classified_at": timezone.now()}, {"confidence": 0.9}):
+            with self.subTest(extra=list(extra)), self.assertRaises(IntegrityError), transaction.atomic():
+                Message.objects.create(conversation=conv, sender="teacher", body="x", **extra)
+        Message.objects.create(conversation=conv, sender="teacher", body="분류 없는 답장")  # 정상
+
+    def test_db_rejects_duplicate_conversation(self):
+        """강사 × 수강생 × 제목 = 대화 하나를 DB가 보장한다 (PR #38 리뷰)."""
+        Conversation.objects.create(teacher=self.teacher, student=self.student, subject="같은 제목")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Conversation.objects.create(teacher=self.teacher, student=self.student, subject="같은 제목")
+
+    def test_concurrent_create_reuses_existing_conversation(self):
+        """다른 요청이 같은 대화를 먼저 만든 경쟁 상황: 중복을 만들지 않고 기존 대화에 이어 붙인다.
+
+        첫 조회 직전에 '다른 요청'이 대화를 만들고, 이 요청의 첫 조회는 아직 못 본 것처럼(DoesNotExist) 재현한다.
+        그러면 생성이 UniqueConstraint로 실패하고 get_or_create가 기존 대화를 다시 찾아야 한다.
+        """
+        real_get = QuerySet.get
+        state = {"raced": False}
+
+        def racing_get(qs, *args, **kwargs):
+            if qs.model is Conversation and not state["raced"]:
+                state["raced"] = True
+                Conversation.objects.create(teacher=self.teacher, student=self.student, subject="경쟁")
+                raise Conversation.DoesNotExist
+            return real_get(qs, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "get", autospec=True, side_effect=racing_get):
+            msg = services.add_student_message(
+                teacher=self.teacher, student=self.student, subject="경쟁", body="보강 일정 잡아주세요"
+            )
+        self.assertTrue(state["raced"])
+        self.assertEqual(Conversation.objects.filter(subject="경쟁").count(), 1)
+        self.assertEqual(msg.conversation, Conversation.objects.get(subject="경쟁"))
+
 
 class ModelUnavailableTests(InboxTestBase):
     """필수 ②: 모델을 쓸 수 없어도 메시지는 저장되고 '분류 불가'로 표시, 메시지함은 정상."""
@@ -284,3 +325,9 @@ class LoginAndCsrfTests(TestCase):
         res = client.post(reverse("inbox:new"), {**data, "csrfmiddlewaretoken": token.group(1)})
         self.assertEqual(res.status_code, 302)
         self.assertEqual(Message.objects.count(), 1)
+        # 답장도 대화 화면 답장 폼의 토큰으로 보내면 실제로 저장된다 (PR #38 리뷰 후속)
+        detail = client.get(reverse("inbox:detail", args=[self.conv.pk])).content.decode()
+        token = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', detail).group(1)
+        res = client.post(reverse("inbox:reply", args=[self.conv.pk]), {"body": "답장", "csrfmiddlewaretoken": token})
+        self.assertRedirects(res, reverse("inbox:detail", args=[self.conv.pk]))
+        self.assertTrue(self.conv.messages.filter(sender=Message.Sender.TEACHER, body="답장").exists())

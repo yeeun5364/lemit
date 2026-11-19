@@ -31,6 +31,11 @@ class Conversation(models.Model):
         verbose_name_plural = "대화"
         ordering = ["-last_message_at", "-id"]
         indexes = [models.Index(fields=["teacher", "-last_message_at"], name="conv_teacher_last")]
+        constraints = [
+            # 강사 × 수강생 × 제목 = 대화 하나 (ERD 2-10). 동시 요청이 와도 DB가 중복을 막고,
+            # get_or_create는 IntegrityError가 나면 이미 만들어진 대화를 다시 찾아 쓴다 (PR #38 리뷰).
+            models.UniqueConstraint(fields=["teacher", "student", "subject"], name="conversation_unique_subject"),
+        ]
 
     def __str__(self):
         return f"{self.student} · {self.subject}"
@@ -69,9 +74,10 @@ class Message(models.Model):
         ordering = ["sent_at", "id"]
         indexes = [models.Index(fields=["conversation", "sent_at"], name="msg_conv_sent")]
         constraints = [
-            # 강사가 보낸 메시지에는 AI 분류를 저장하지 않는다 (ERD 2-10)
+            # 강사가 보낸 메시지에는 AI 분류 필드 4개를 모두 비운다 (ERD 2-10, PR #38 리뷰)
             models.CheckConstraint(
-                condition=Q(sender="student") | Q(predicted_label="", confidence__isnull=True),
+                condition=Q(sender="student")
+                | Q(predicted_label="", confidence__isnull=True, model_version="", classified_at__isnull=True),
                 name="message_teacher_not_classified",
             ),
             models.CheckConstraint(
