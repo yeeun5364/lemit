@@ -1,0 +1,6 @@
+{# AI 분류 배지. label/confidence를 받는다. 비어 있으면 '분류 불가'. 예측은 참고용이다. #}
+{% if label %}
+<span class="ai-badge ai-{{ label|lower }}">{{ display }}{% if confidence is not None %} · {% widthratio confidence 1 100 %}%{% endif %}{% if confidence is not None and confidence < 0.5 %} · 확신 낮음{% endif %}</span>
+{% else %}
+<span class="ai-badge ai-none">분류 불가</span>
+{% endif %}

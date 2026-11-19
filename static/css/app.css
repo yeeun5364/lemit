@@ -164,3 +164,38 @@ a { color: var(--accent); text-decoration: none; }
 .button-secondary, .button-danger { width: 100%; min-height: var(--touch); border: 0; border-radius: var(--radius); background: var(--bg-grouped); font: inherit; cursor: pointer; }
 .button-secondary { color: var(--text); }
 .button-danger { color: var(--accent); }
+
+/* 하단 탭 숫자 */
+.tab-count { display: inline-block; min-width: 18px; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 12px; line-height: 18px; text-align: center; }
+
+/* 메시지함 (UC-17) */
+.small { font-size: 13px; }
+.notice { background: var(--bg-grouped); border-radius: var(--radius); padding: 12px var(--space); font-size: var(--font-sub); color: var(--text-muted); }
+.seg-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0; }
+.seg { flex: 0 0 auto; min-height: 36px; display: inline-flex; align-items: center; padding: 0 12px; border-radius: 999px; background: var(--bg-grouped); color: var(--text); font-size: var(--font-sub); }
+.seg.is-active { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.conv-row { align-items: flex-start; }
+.conv-main { display: flex; flex-direction: column; min-width: 0; }
+.conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-unread .conv-title { font-weight: 700; }
+.conv-preview { color: var(--text-muted); font-size: var(--font-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: 0 0 auto; }
+.dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+.conv-heading { font-size: 22px; }
+
+/* AI 분류 배지: 라벨 8색과 겹치지 않는 중립 톤 + 글자로 구분 (SCREENS S13) */
+.ai-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; background: var(--bg-grouped); color: var(--text); border: 1px solid var(--separator); white-space: nowrap; }
+.ai-cancellation { border-style: dashed; }
+.ai-makeup { border-color: var(--text); }
+.ai-reschedule { border-style: dotted; border-width: 2px; }
+.ai-none { color: var(--text-muted); font-weight: 400; }
+
+/* 대화 */
+.thread { list-style: none; margin: var(--space) 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.bubble { max-width: 85%; padding: 10px 12px; border-radius: 14px; }
+.from-student { align-self: flex-start; background: var(--bg-grouped); }
+.from-teacher { align-self: flex-end; border: 1px solid var(--separator); }
+.bubble-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.bubble-ai { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reply-form textarea { min-height: 64px; }
+.shortcuts { font-size: var(--font-sub); margin-top: var(--space); }
