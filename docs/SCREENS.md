@@ -58,6 +58,7 @@
 | 회차 삭제 (`예정`만) | `POST /sessions/<id>/delete/` | UC-04 |
 | 레슨권 종료 | `POST /enrollments/<id>/end/` | UC-03 |
 | 수강생 보관 | `POST /students/<id>/archive/` | UC-02 |
+| 수강생 보관 해제 | `POST /students/<id>/restore/` | UC-02 (잘못 보관한 경우 되돌리기, 2026-11-19 추가) |
 | 로그아웃 | `POST /accounts/logout/` | UC-01 |
 | 답장 보내기 | `POST /inbox/<id>/reply/` | UC-17 |
 | (후속) 휴강 / 보강 등록 | `POST /sessions/<id>/cancel/`, `/sessions/<id>/makeup/new/` | UC-08, UC-09 |

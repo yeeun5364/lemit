@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ student.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a class="back" href="{% url 'students:list' %}">&lt; 수강생</a>
+  <a class="head-action" href="{% url 'students:edit' student.pk %}">수정</a>
+</div>
+
+<h1 class="page-title">
+  {{ student.name }}
+  {% if student.is_minor %}<span class="badge">미성년자</span>{% endif %}
+  {% if not student.is_active %}<span class="badge badge-muted">보관</span>{% endif %}
+</h1>
+
+<dl class="info">
+  {% if student.phone %}<dt>연락처</dt><dd>{{ student.phone }}</dd>{% endif %}
+  {% if student.is_minor %}
+  <dt>보호자</dt><dd>{% if student.guardian_name %}{{ student.guardian_name }} · {% endif %}{{ student.guardian_phone }}</dd>
+  {% endif %}
+  {% if student.memo %}<dt>메모</dt><dd class="pre">{{ student.memo }}</dd>{% endif %}
+</dl>
+
+<section class="group">
+  <h2 class="group-title">레슨권</h2>
+  {# 레슨권 카드·잔여 회차(UC-03·UC-07), 회차 이력(UC-04)은 다음 작업에서 추가 #}
+  <p class="empty">레슨권 없음</p>
+</section>
+
+<section class="group">
+  {% if student.is_active %}
+  <form method="post" action="{% url 'students:archive' student.pk %}"
+        onsubmit="return confirm('{{ student.name|escapejs }} 수강생을 보관할까요? 목록에서 기본으로 숨겨집니다.');">
+    {% csrf_token %}
+    <button type="submit" class="button-danger">수강 종료(보관)</button>
+  </form>
+  {% else %}
+  <form method="post" action="{% url 'students:restore' student.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="button-secondary">보관 해제</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

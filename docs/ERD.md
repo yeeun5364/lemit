@@ -208,6 +208,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 |---|---|---|
 | `User.email` | 대소문자를 무시하고 유일 (로그인도 대소문자 무시) | DB `UniqueConstraint(Lower(email))` + 회원가입 폼 검증 (UC-01, 2026-11-19) |
 | `Student` | `is_minor`이면 `guardian_phone` 필수 | DB `CheckConstraint` + 폼 검증 |
+| `Student.phone`, `guardian_phone` | 숫자 9~15자리. 숫자·공백·`-`·`()`만, `+`는 맨 앞(국제번호 허용). 성인이면 보호자 정보는 저장하지 않음 | 모델 검증 `validate_phone` + 폼 (UC-02, PR #37 리뷰, 2026-11-19) |
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
@@ -232,6 +233,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 | 관계 | `on_delete` | 이유 |
 |---|---|---|
+| User → Student | `PROTECT` | 강사 계정을 지워도 수강생·수업 기록이 함께 지워지지 않게 (UC-02) |
 | Student → Enrollment | `PROTECT` | 수강생은 삭제 대신 `is_active=false`로 보관 |
 | Label → Enrollment | `SET_NULL` | 라벨을 지우면 레슨권은 "라벨 없음"(회색), 기록은 유지 |
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
@@ -243,6 +245,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 **인덱스**
 - `LessonSession(enrollment_id, start_at)`: 레슨권별 회차 이력
 - `LessonSession(start_at)`: 주간 일정 조회 (UC-05)
+- `Student(teacher_id, is_active, name)`: 수강생 목록·검색 (UC-02)
 - `Conversation(teacher_id, last_message_at)`: 메시지함 목록 (UC-17)
 - `Message(conversation_id, sent_at)`: 대화 상세
 

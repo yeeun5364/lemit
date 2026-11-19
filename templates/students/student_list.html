@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}수강생{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">수강생</h1>
+  <a class="head-action" href="{% url 'students:create' %}">+ 추가</a>
+</div>
+
+<form method="get" class="filter-bar" role="search">
+  <input type="search" name="q" value="{{ q }}" placeholder="이름 검색" aria-label="이름 검색" maxlength="50">
+  <label class="check"><input type="checkbox" name="archived" value="1" {% if include_archived %}checked{% endif %} onchange="this.form.submit()"> 보관 포함</label>
+  <button type="submit" class="button-small">검색</button>
+</form>
+
+{% if students %}
+<ul class="list">
+  {% for student in students %}
+  <li>
+    <a class="list-row" href="{% url 'students:detail' student.pk %}">
+      <span class="row-main">
+        {{ student.name }}
+        {% if student.is_minor %}<span class="badge">미성년자</span>{% endif %}
+        {% if not student.is_active %}<span class="badge badge-muted">보관</span>{% endif %}
+      </span>
+      {# 레슨권·잔여 회차(UC-07)는 UC-03에서 추가 #}
+      <span class="row-sub">레슨권 없음</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% elif q %}
+<p class="empty">"{{ q }}"(으)로 찾은 수강생이 없습니다.</p>
+{% else %}
+<p class="empty">아직 등록한 수강생이 없습니다. <a href="{% url 'students:create' %}">수강생 추가</a></p>
+{% endif %}
+{% endblock %}
