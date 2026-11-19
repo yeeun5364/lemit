@@ -2,8 +2,10 @@
 #
 # - 이 파일은 공통·운영 기준이다. DB 포트를 열지 않고, web도 서버 안(127.0.0.1)에서만 연다.
 #   인터넷 공개는 TLS 리버스 프록시를 둔 뒤에 한다 (#7, OPERATIONS §2).
-# - 개발 PC에서는 compose.override.yaml이 자동으로 함께 읽혀 DB 포트 공개·코드 마운트·runserver로 바뀐다.
-# - 운영 서버에서는 override 없이 실행한다:  docker compose -f compose.yaml up -d --wait
+# - 이 파일만으로 실행하면 운영 구성이다:  docker compose up -d --wait  (= docker compose -f compose.yaml up -d --wait)
+# - 개발 PC에서는 개발 설정을 직접 덧붙인다:  docker compose -f compose.yaml -f compose.dev.yaml up -d --wait
+#   (DB 포트 공개·코드 마운트·runserver. 자동으로 읽히는 compose.override.yaml은 쓰지 않는다, PR #39 리뷰)
+# - 운영에서 docker compose down -v 는 DB 볼륨을 지우므로 쓰지 않는다 (CI의 down -v는 임시 환경 정리용).
 # - .env의 POSTGRES_PASSWORD는 URL에 그대로 들어가므로 영문·숫자·-_ 만 쓴다 (secrets.token_urlsafe 권장).
 name: lemit
 

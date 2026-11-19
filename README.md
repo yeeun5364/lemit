@@ -143,7 +143,7 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 | Docker `web` 컨테이너 (A 방법) | `db` (Compose 서비스 이름) | `compose.yaml`이 `POSTGRES_*` 값으로 자동으로 만듦. `.env`에 따로 쓰지 않음 |
 
 - 컨테이너 안에서 `127.0.0.1`은 자기 자신이라 PostgreSQL에 닿지 않습니다. 그래서 `compose.yaml`이 `web`의 `DATABASE_URL`을 `db` 호스트로 덮어씁니다. `POSTGRES_PASSWORD`는 URL에 그대로 들어가므로 영문·숫자·`-`·`_`만 씁니다(`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
-- DB 포트는 개발용 `compose.override.yaml`에서만 PC 안(`127.0.0.1:5432`)에 엽니다. **운영 구성(`compose.yaml`만 사용)은 DB 포트를 열지 않습니다** (#5, #7).
+- DB 포트는 개발용 `compose.dev.yaml`을 덧붙였을 때만 PC 안(`127.0.0.1:5432`)에 엽니다. **운영 구성(`compose.yaml`만 사용)은 DB 포트를 열지 않습니다** (#5, #7).
 - 개발 환경에서는 메일을 실제로 보내지 않고 터미널에 출력합니다. `EMAIL_*` 값이 없어도 됩니다.
 - 메일 계정을 바꿀 때는 `.env`의 `EMAIL_*` 값만 바꾸고 재시작하면 됩니다. 코드는 수정하지 않습니다.
 
@@ -153,21 +153,28 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 
 ```bash
 # .env 준비 (위 "환경변수 설정")
-docker compose up -d --wait              # web·db를 빌드·실행하고 healthy가 될 때까지 대기 (개발: compose.override.yaml 자동 적용)
+
+# 개발 PC: 개발 설정(compose.dev.yaml)을 직접 덧붙임 → runserver, 코드 마운트, DB 포트 127.0.0.1:5432
+docker compose -f compose.yaml -f compose.dev.yaml up -d --wait
+docker compose -f compose.yaml -f compose.dev.yaml exec web python manage.py migrate
+docker compose -f compose.yaml -f compose.dev.yaml exec web python manage.py createsuperuser
+docker compose -f compose.yaml -f compose.dev.yaml exec web python scripts/smoke_test.py
+
+# 운영 서버: compose.yaml만 (개발 파일을 지정하지 않음) → gunicorn, DB 포트 비공개
+docker compose up -d --wait
 docker compose exec web python manage.py migrate
-docker compose exec web python manage.py createsuperuser
 docker compose exec web python scripts/smoke_test.py   # healthz·모델 상태·check·migrate --check·ml.verify·추론 1건
 ```
 
 | 파일 | 용도 |
 |---|---|
 | `compose.yaml` | 공통·운영 기준. web(gunicorn) + db(PostgreSQL 18, 볼륨 `pgdata`). DB 포트 비공개, web은 서버 안 `127.0.0.1:8000`에만 공개, 헬스체크·재시작 정책·로그 크기 제한 |
-| `compose.override.yaml` | 개발 PC 전용(자동 적용). DB 포트 `127.0.0.1:5432` 공개, 코드 마운트, `runserver`, `DEBUG=True` |
+| `compose.dev.yaml` | 개발 PC 전용. **자동으로 읽히지 않으며** `-f compose.yaml -f compose.dev.yaml`로 지정할 때만 적용. DB 포트 `127.0.0.1:5432` 공개, 코드 마운트, `runserver`, `DEBUG=True` |
 | `Dockerfile` | `python:3.14-slim`, 의존성 레이어 분리, `collectstatic`, root가 아닌 사용자, 학습된 모델 파일(`ml/artifacts/`) 포함 |
 
-- **운영 서버:** override 없이 `docker compose -f compose.yaml up -d --wait`. `IMAGE_TAG`(커밋 SHA)로 이미지를 구분하고 이전 태그로 롤백합니다 (#7).
+- **운영 서버:** `docker compose up -d --wait`(= `compose.yaml`만). 개발 파일은 자동으로 섞이지 않습니다(PR #39 리뷰). `IMAGE_TAG`(커밋 SHA)로 이미지를 구분하고 이전 태그로 롤백합니다 (#7).
 - web 포트를 바꾸려면 `.env`에 `WEB_PORT=8001`, gunicorn worker 수는 `GUNICORN_WORKERS`로 조정합니다.
-- 컨테이너를 교체·재시작해도 데이터는 볼륨 `pgdata`에 남습니다. `docker compose down -v`는 **데이터를 지우므로** 쓰지 않습니다.
+- 컨테이너를 교체·재시작해도 데이터는 볼륨 `pgdata`에 남습니다. `docker compose down -v`는 **DB 데이터를 지우므로** 운영에서 쓰지 않습니다. CI의 `down -v`는 임시 환경 정리용입니다.
 
 ### B. PC 가상환경에서 실행 (개발·테스트)
 
@@ -188,7 +195,7 @@ pip install -r requirements.txt
 #    DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DATABASE_URL의 비밀번호를 채움
 
 # 5) PostgreSQL 18만 실행 (healthy가 될 때까지 대기)
-docker compose up -d --wait db
+docker compose -f compose.yaml -f compose.dev.yaml up -d --wait db   # DB 포트를 PC에 열려면 개발 파일이 필요
 
 # 6) DB 테이블 생성, 관리자 계정 생성, 서버 실행
 python manage.py migrate
@@ -266,7 +273,7 @@ lemit/
 ├── .github/workflows/     # CI (GitHub Actions)
 ├── Dockerfile             # web 이미지 (gunicorn, 모델 파일 포함)
 ├── compose.yaml           # web + db 컨테이너 (공통·운영 기준)
-├── compose.override.yaml  # 개발 PC 전용 설정 (자동 적용)
+├── compose.dev.yaml       # 개발 PC 전용 설정 (-f로 직접 지정할 때만)
 ├── scripts/               # 컨테이너 헬스체크·스모크 테스트
 ├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
 ├── config/                # Django 프로젝트 설정 (settings, urls)

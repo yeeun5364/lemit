@@ -48,7 +48,7 @@
 
 ## 4. Docker 및 데이터 영속성
 
-- 기존 #5 기준: `web`과 `db`, `pgdata` named volume, non-root 앱 컨테이너, WhiteNoise, 개발용 override 분리.
+- 기존 #5 기준: `web`과 `db`, `pgdata` named volume, non-root 앱 컨테이너, WhiteNoise, 개발용 설정 분리(`compose.dev.yaml`, 자동 적용되지 않는 이름. PR #39 리뷰).
 - 앱 컨테이너 교체·재시작으로 데이터가 유실되지 않아야 한다. DB 데이터는 컨테이너 writable layer에 저장하지 않는다.
 - `/healthz/`는 기본 앱 상태와 DB 연결 여부를 확인한다. 공개 엔드포인트에 내부 오류 상세·계정정보를 출력하지 않는다. 잦은 헬스체크가 DB에 불필요한 부하를 만들지 않도록 한다.
 - 재시작 정책, 데이터 볼륨, Docker 로그 크기 제한, 디스크 부족 대응, CPU/메모리 사용량 확인 방법을 배포 이슈에 반영한다.

@@ -1,4 +1,4 @@
-# LEMIT web 이미지 (#5). 운영은 gunicorn, 개발은 compose.override.yaml에서 runserver로 바꿔 실행한다.
+# LEMIT web 이미지 (#5). 운영은 gunicorn, 개발은 compose.dev.yaml을 덧붙여 runserver로 바꿔 실행한다.
 # 학습된 ML 모델(ml/artifacts/)을 이미지에 함께 넣어, 앱 커밋과 모델 버전이 한 묶음으로 배포·롤백되게 한다 (OPERATIONS §5).
 FROM python:3.14-slim
 

@@ -1,4 +1,6 @@
-# 개발 PC 전용 설정. `docker compose up`을 하면 compose.yaml과 자동으로 합쳐진다. 운영 서버에서는 쓰지 않는다.
+# 개발 PC 전용 설정. 자동으로 읽히지 않는 이름이라 개발할 때만 직접 지정한다 (PR #39 리뷰: 운영에서 실수로 적용 방지).
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d --wait
+# 운영 서버에서는 절대 지정하지 않는다 (DEBUG=True, runserver, 소스 마운트, DB 포트 공개).
 services:
   db:
     # PC의 Python 가상환경에서 Django를 실행할 때 접속할 수 있도록 PC 안(127.0.0.1)에만 연다
