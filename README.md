@@ -98,31 +98,45 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 
 | 구분 | 버전 | 비고 |
 |---|---|---|
-| Python | **3.14** | Docker 이미지 `python:3.14-slim` |
-| Django | **5.2 LTS** (`>=5.2.12,<6.0`) | 보안 지원 2028년 4월까지. Python 3.14는 5.2.8부터 지원 |
+| Python | **3.14** | **현재 PC 설치 필수** (Django를 PC 가상환경에서 실행). #5부터는 Docker 이미지 `python:3.14-slim`으로도 실행 |
+| Django | **5.2 LTS** (5.2.19 고정) | 보안 지원 2028년 4월까지. Python 3.14는 5.2.8부터 지원 |
 | PostgreSQL | **18** | Docker 이미지 `postgres:18` (2026-11 기준 최신 18.7) |
-| DB 드라이버 | psycopg 3 (`psycopg[binary]`) | |
+| DB 드라이버 | psycopg 3 (`psycopg[binary]` 3.3.9) | |
 | Docker | Engine 29 이상, Compose v2 이상 | 개발 PC 확인 버전: Docker 29.9.1, Compose v5.6.0 |
 | Git | 2.x | |
 
-- 앱과 DB는 Docker로 실행하므로 **PC에 PostgreSQL을 따로 설치할 필요가 없습니다.**
-- Docker 없이 로컬에서 실행하려면 Python 3.14를 설치해야 합니다. PC에 Python 3.15가 기본으로 잡혀 있으면 `py -3.14 -m venv .venv`처럼 버전을 지정해 가상환경을 만듭니다.
-- 정확한 패키지 버전은 프로젝트 생성 후 `requirements.txt`에 고정합니다.
+- **현재 구성:** Django는 **PC의 Python 3.14 가상환경**에서, PostgreSQL만 **Docker**에서 실행합니다. 그래서 지금은 **Python 3.14와 Docker가 모두 필요**하고, PostgreSQL은 PC에 설치하지 않습니다.
+- #5에서 Django 컨테이너(`web`)를 추가하면 Docker만으로도 실행할 수 있게 됩니다.
+- PC에 Python 3.15가 기본으로 잡혀 있으면 `py -3.14 -m venv .venv`처럼 버전을 지정해 가상환경을 만듭니다.
+- 패키지 버전은 `requirements.txt`에 고정되어 있습니다.
 
 ### 환경변수 설정
 
-```bash
-cp .env.example .env
-```
+`.env.example`을 `.env`로 복사한 뒤 값을 채웁니다.
+
+| 셸 | 명령 |
+|---|---|
+| macOS/Linux, Git Bash | `cp .env.example .env` |
+| Windows PowerShell | `Copy-Item .env.example .env` |
+| Windows CMD | `copy .env.example .env` |
 
 | 변수 | 설명 |
 |---|---|
 | `DJANGO_SECRET_KEY` | Django 시크릿 키 |
 | `DJANGO_DEBUG` | 개발 시 `True`, 배포 시 `False` |
-| `DATABASE_URL` | PostgreSQL 접속 정보 |
+| `DATABASE_URL` | PostgreSQL 접속 정보. **실행 위치에 따라 호스트가 다름** (아래 표) |
 | `EMAIL_HOST_USER` | 비밀번호 재설정 메일을 보낼 Gmail 주소 (배포 시) |
 | `EMAIL_HOST_PASSWORD` | 위 Gmail 계정의 **앱 비밀번호** (실제 Gmail 비밀번호 아님) |
 
+**`DATABASE_URL`의 호스트**
+
+| Django를 어디서 실행하나 | 호스트 | 예 |
+|---|---|---|
+| PC 가상환경 (현재) | `127.0.0.1` | `postgres://lemit:비밀번호@127.0.0.1:5432/lemit` |
+| Docker `web` 컨테이너 (#5부터) | `db` (Compose 서비스 이름) | `postgres://lemit:비밀번호@db:5432/lemit` |
+
+- 컨테이너 안에서 `127.0.0.1`은 자기 자신이라 PostgreSQL에 닿지 않습니다. #5에서 `web` 컨테이너에는 `db` 호스트 값을 따로 넣습니다.
+- 개발용 `compose.yaml`은 DB 포트를 PC 안(`127.0.0.1:5432`)에만 엽니다. **운영 서버에서는 DB 포트를 외부에 열지 않습니다** (#5, #7).
 - 개발 환경에서는 메일을 실제로 보내지 않고 터미널에 출력합니다. `EMAIL_*` 값이 없어도 됩니다.
 - 메일 계정을 바꿀 때는 `.env`의 `EMAIL_*` 값만 바꾸고 재시작하면 됩니다. 코드는 수정하지 않습니다.
 
@@ -131,18 +145,25 @@ cp .env.example .env
 ### 실행 (현재: 로컬 Django + Docker PostgreSQL)
 
 ```bash
-# 1) 가상환경과 패키지 (Python 3.14)
+# 1) 가상환경 만들기 (Python 3.14)
 py -3.14 -m venv .venv                  # macOS/Linux: python3.14 -m venv .venv
-.venv/Scripts/activate                  # macOS/Linux: source .venv/bin/activate
+
+# 2) 가상환경 켜기: 셸마다 명령이 다름
+.\.venv\Scripts\Activate.ps1           # Windows PowerShell
+.venv\Scripts\activate.bat             # Windows CMD
+source .venv/Scripts/activate           # Windows Git Bash
+source .venv/bin/activate               # macOS/Linux
+
+# 3) 패키지 설치
 pip install -r requirements.txt
 
-# 2) 환경변수: .env.example을 복사해 DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DATABASE_URL 비밀번호를 채움
-cp .env.example .env
+# 4) 환경변수: .env.example을 .env로 복사(위 "환경변수 설정" 표)한 뒤
+#    DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DATABASE_URL의 비밀번호를 채움
 
-# 3) PostgreSQL 18 실행 (healthy가 될 때까지 대기)
+# 5) PostgreSQL 18 실행 (healthy가 될 때까지 대기)
 docker compose up -d --wait db
 
-# 4) DB 테이블 생성, 관리자 계정 생성, 서버 실행
+# 6) DB 테이블 생성, 관리자 계정 생성, 서버 실행
 python manage.py migrate
 python manage.py createsuperuser        # 이메일·이름·비밀번호 입력
 python manage.py runserver
