@@ -71,6 +71,12 @@ services:
     depends_on:
       web:
         condition: service_healthy
+    # Caddy 프로세스가 설정을 불러와 동작 중인지 (관리 API, 컨테이너 안에서만). 공개 경로 확인은 scripts/check_public.sh
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     logging: *logging
 

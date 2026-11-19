@@ -1,6 +1,6 @@
 # LEMIT 배포 절차서 (AWS Lightsail)
 
-> **상태 (2026-11-19):** 절차와 스크립트는 **PC에서 연습 배포로 검증**했습니다. 검증한 항목은 첫 배포, 두 번째 배포, 수동 롤백, 모델 손상 시 자동 롤백, Caddy 프록시를 거친 웹 동선입니다. **실제 Lightsail 서버 배포는 아직 하지 않았습니다** (#7).
+> **상태 (2026-11-19):** 절차와 스크립트는 **PC에서 연습 배포로 검증**했습니다. 검증한 항목은 첫 배포, 두 번째 배포, 수동 롤백, 모델 손상 시 자동 롤백, Caddy 프록시를 거친 웹 동선, 공개 경로 확인 실패 시 미확정, 운영 `.env` 사전 점검(14개 시나리오)입니다. 프록시 시나리오와 사전 점검 시나리오는 CI에서도 매번 돌립니다. **실제 Lightsail 서버 배포는 아직 하지 않았습니다** (#7).
 > 기준 문서: [OPERATIONS.md](OPERATIONS.md) (운영 원칙), [ML.md](ML.md) §6 (모델 배포·롤백)
 
 ## 0. 구성 한눈에 보기
@@ -77,13 +77,34 @@ scripts/deploy.sh <커밋SHA>   # 특정 커밋
 
 스크립트가 하는 일은 다음과 같습니다. 순서는 OPERATIONS §5를 따릅니다.
 
-1. **사전 점검:** `.env`가 있는지, `DJANGO_DEBUG=True`나 예시 값(`change-me`)이 남아 있지 않은지 확인합니다. 하나라도 걸리면 중단합니다.
+1. **운영 `.env` 사전 점검** (`scripts/preflight.sh`, PR #40 리뷰). 값끼리 맞지 않으면 중단합니다.
+   - 공통: `DJANGO_DEBUG=False`, 예시 값(`change-me`) 없음, 비밀키 50자 이상, DB 비밀번호는 영문·숫자·`-_`만
+   - 도메인 모드(`SITE_ADDRESS`가 도메인): `DJANGO_BEHIND_PROXY=True`, `DJANGO_SECURE_HTTPS=True`, `DJANGO_ALLOWED_HOSTS` **첫 값 = 도메인**, `DJANGO_CSRF_TRUSTED_ORIGINS`에 `https://도메인`
+   - IP 모드(`SITE_ADDRESS=:80`): `DJANGO_SECURE_HTTPS=False`(HTTPS가 없어서 켜면 리다이렉트가 반복됨), `DJANGO_ALLOWED_HOSTS` 첫 값은 서버 IP(`localhost` 아님)
 2. **코드 받기:** `git fetch`와 `checkout`을 합니다. 서버 작업 폴더에 수정한 내용이 있으면 중단합니다.
 3. **이미지 빌드:** 태그는 커밋 SHA 12자리입니다.
-4. **DB 기동과 마이그레이션:** 새 이미지로 한 번 실행합니다.
-5. **교체:** web과 proxy를 교체하고, healthy가 될 때까지 기다립니다.
-6. **스모크 테스트:** `/healthz/` 정상, **모델 상태 `ok`**, `check`, `migrate --check`, **`ml.verify`**, **추론 1건**을 확인합니다.
-7. **결과 처리:** 성공하면 `deploy/state/current_tag`와 `history.log`에 기록합니다. 실패하면 **직전 성공 이미지로 자동 롤백**한 뒤 롤백 결과도 스모크 테스트로 확인합니다.
+4. **`manage.py check --deploy`:** 운영 `.env`로 새 이미지에서 실행합니다. **모드별로 의도적으로 받아들이는 경고만 허용**하고, 그 밖의 경고나 오류가 나오면 중단합니다.
+   - IP 모드: `W004`(HSTS), `W008`(SSL 리다이렉트), `W012`(세션 쿠키 secure), `W016`(CSRF 쿠키 secure). HTTP 시연이므로 HTTPS 관련 경고는 피할 수 없습니다.
+   - 도메인 모드: `W004`(HSTS)만. 인증서가 안정된 뒤 `DJANGO_HSTS_SECONDS`로 켭니다.
+5. **DB 기동과 마이그레이션:** 새 이미지로 한 번 실행합니다.
+6. **교체:** web과 proxy를 교체하고, healthy가 될 때까지 기다립니다. proxy는 Caddy 관리 API로 동작 여부를 확인합니다.
+7. **스모크 테스트:** `/healthz/` 정상, **모델 상태 `ok`**, `check`, `migrate --check`, **`ml.verify`**, **추론 1건**을 확인합니다.
+8. **프록시를 거친 공개 경로 확인** (`scripts/check_public.sh`, PR #40 리뷰). 응답의 `status`와 `message_classifier.status`가 모두 `ok`여야 합니다.
+   - IP 모드: Caddy(80)를 거쳐 `/healthz/`를 호출합니다.
+   - 도메인 모드: `curl --resolve`로 `https://도메인/healthz/`를 호출해 **인증서까지 검증**합니다.
+   - 인증서를 처음 발급받는 시간을 고려해 기본 10초 × 12회 재시도합니다.
+9. **결과 처리:** 1~8을 모두 통과해야 `deploy/state/current_tag`를 바꾸고 `history.log`에 `OK`를 남깁니다.
+
+**실패했을 때 처리와 복구 범위**
+
+| 실패 지점 | 기록 | 처리 |
+|---|---|---|
+| 사전 점검, `check --deploy` | 사전 점검은 화면에만, `check --deploy`는 `FAILED_CHECK_DEPLOY` | 아무것도 바꾸지 않고 중단. `.env`를 고친 뒤 다시 실행 |
+| web이 healthy가 안 됨, 스모크 실패 | `FAILED_ROLLED_BACK_TO_<직전 태그>` | **직전 성공 이미지로 web 자동 롤백**(앱+모델). 롤백 후에도 스모크로 확인 |
+| 공개 경로 확인만 실패 | `FAILED_PUBLIC_CHECK` | web은 스모크를 통과했으므로 되돌리지 않음. **`current_tag`는 바꾸지 않음.** 프록시 로그·DNS·인증서·방화벽을 고친 뒤 다시 실행 |
+
+- 이 스크립트는 **DB 스키마와 프록시 설정 자체는 되돌리지 않습니다.**
+- 외부 인터넷에서 보이는 DNS와 방화벽은 서버 안에서 확인할 수 없으므로, 배포 후 PC 브라우저로 직접 확인합니다(§4).
 
 **첫 배포 후 한 번만** 관리자 계정을 만듭니다.
 ```bash
@@ -159,3 +180,7 @@ PC 연습 조건은 다음과 같습니다.
 | 두 번째 배포 `16a15ac2c77e` | 통과, 기록 `OK` |
 | 수동 롤백 → `dc4d008fd9d0` | 실행 이미지가 이전 태그로 바뀜, 스모크 통과, 기록 `MANUAL_ROLLBACK_OK` |
 | 모델이 손상된 배포 `11b1e4feef2f` | 스모크가 모델 상태·`ml.verify`·추론 3항목을 실패로 잡음 → **직전 이미지로 자동 롤백**, 롤백 후 스모크 통과, 기록 `FAILED_ROLLED_BACK_TO_dc4d008fd9d0`, 종료 코드 1 |
+| (PR #40 리뷰 반영 후) 정상 배포 `e4da19a00158` | 사전 점검 통과(IP 모드) → `check --deploy` 통과(허용 경고 W004·W008·W012·W016) → 스모크 → **Caddy를 거친 공개 경로 통과** → `OK`. proxy도 healthy |
+| 공개 경로 확인 실패 `703819beaaa0` | 확인 포트를 일부러 틀리게 지정 → 2회 실패 → 종료 코드 1, 기록 `FAILED_PUBLIC_CHECK`, **`current_tag`는 `e4da19a00158` 그대로** |
+| 프록시 중단 | `check_public.sh`가 실패. 프록시를 다시 켜면 통과 |
+| 운영 `.env` 사전 점검 | `scripts/test_preflight.sh` 14개 시나리오(정상 2, 오류 12) 모두 기대대로 판정 |
