@@ -12,6 +12,17 @@ COMPOSE=(docker compose --profile "${COMPOSE_PROFILE:-proxy}")
 STATE_DIR="deploy/state"
 mkdir -p "$STATE_DIR"
 
+# 동시 배포 방지 (#42): 수동 배포·GitHub Actions 배포·롤백이 겹치지 않게 서버에서 잠금을 건다
+take_lock() {
+    if command -v flock > /dev/null 2>&1; then
+        exec 9> "$STATE_DIR/deploy.lock"
+        flock -n 9 || { echo "[lock] 다른 배포·롤백이 진행 중입니다. 끝난 뒤 다시 실행하세요."; exit 75; }
+    else
+        echo "[lock] flock이 없어 동시 실행 방지를 건너뜁니다 (Linux 서버에는 기본 설치됨)"
+    fi
+}
+take_lock
+
 docker image inspect "lemit-web:$TAG" > /dev/null 2>&1 || { echo "이미지 lemit-web:$TAG 가 이 서버에 없습니다."; exit 1; }
 
 echo "[rollback] web을 lemit-web:$TAG 로 되돌립니다"

@@ -30,6 +30,13 @@ jobs:
         run: ruff check --output-format=github .
       - name: ruff format --check
         run: ruff format --check .
+      - name: 워크플로 검사 (actionlint)
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+      - name: 배포 스크립트 테스트 (방화벽 계산·ci_deploy 입력 검증·배포 잠금, #42)
+        run: |
+          python -m unittest discover -s scripts -p "test_*.py"
+          bash scripts/test_ci_deploy.sh
+          bash scripts/test_deploy_lock.sh
 
   test:
     name: 테스트 (PostgreSQL 18)
