@@ -1,17 +1,15 @@
 # LEMIT 데이터 모델 (ERD)
 
-> **상태: 확정 (2026-11-18)** · 관련 이슈: #1 · 변경 시 이 문서를 먼저 고치고 devlog에 기록
-> 기준 문서: [USE_CASES.md](USE_CASES.md), [README 회차 규칙](../README.md#회차-상태와-차감-규칙-초안), [PROJECT_PLAN.md §8](PROJECT_PLAN.md)
+> **상태: 확정 (2026-11-18, 2026-11-19 장소 메모·#2 규칙 반영)** · 관련 이슈: #1 · 변경 시 이 문서를 먼저 고치고 devlog에 기록
+> 기준 문서: [USE_CASES.md](USE_CASES.md), [README 회차 규칙](../README.md#회차-상태와-차감-규칙), [PROJECT_PLAN.md §8](PROJECT_PLAN.md)
 
 ## 1. 전체 구조
 
 ```mermaid
 erDiagram
     User ||--o{ Student : "등록"
-    User ||--o{ Location : "등록"
     Student ||--o{ Enrollment : "보유"
     Enrollment ||--o{ LessonSession : "포함"
-    Location |o--o{ LessonSession : "진행 장소"
     LessonSession |o--o| LessonSession : "보강 대상"
     LessonSession ||--o| LessonRecord : "수업일지"
 
@@ -49,7 +47,7 @@ erDiagram
     LessonSession {
         bigint id PK
         bigint enrollment_id FK
-        bigint location_id FK "선택"
+        varchar place "장소 메모, 선택"
         datetime start_at
         datetime end_at
         varchar status "scheduled / completed / cancelled / absent"
@@ -59,14 +57,6 @@ erDiagram
         datetime completed_at
         datetime created_at
         datetime updated_at
-    }
-    Location {
-        bigint id PK
-        bigint teacher_id FK
-        varchar name "예: A 레슨실"
-        varchar organization "기관명 선택"
-        varchar address "선택"
-        datetime created_at
     }
     LessonRecord {
         bigint id PK
@@ -85,14 +75,15 @@ erDiagram
 | `Student` | 수강생 | MVP | UC-02 |
 | `Enrollment` | 레슨권 (예: 피아노 8회) | MVP | UC-03, UC-07 |
 | `LessonSession` | 수업 1회 (회차) | MVP | UC-04~06, UC-08~11 |
-| `Location` | 레슨실·기관 | 확장 (MVP에선 비워둬도 됨) | UC-13 |
 | `LessonRecord` | 회차별 수업일지 | 확장 | UC-14 |
+
+> 장소는 별도 모델 없이 회차의 메모 필드 `LessonSession.place`로 받습니다 (2-8). `Location` 모델은 프로젝트 기간 이후 지도 연동(UC-13) 때 추가합니다.
 
 ## 2. 핵심 설계 결정
 
 ### 2-1. 회차 상태는 4개, "보강"은 상태가 아니라 연결로 표현
 
-README 규칙 초안의 5개 상태(예정/완료/휴강/결석/보강) 중 **보강은 별도 상태로 두지 않습니다.** 보강 회차도 예정 → 완료로 똑같이 진행되기 때문입니다. 대신 `makeup_for`로 원래 회차를 가리키면 보강 회차입니다.
+초기 규칙 초안에는 5개 상태(예정/완료/휴강/결석/보강)가 있었지만 **보강은 별도 상태로 두지 않습니다.** 보강 회차도 예정 → 완료로 똑같이 진행되기 때문입니다. 대신 `makeup_for`로 원래 회차를 가리키면 보강 회차입니다.
 
 | `status` 값 | 화면 표시 | 차감 |
 |---|---|---|
@@ -129,7 +120,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 ### 2-5. 데이터 소유(권한)
 
-- `Student`, `Location`에만 `teacher_id`를 둡니다.
+- `Student`에만 `teacher_id`를 둡니다.
 - `Enrollment`, `LessonSession`, `LessonRecord`는 `student.teacher`를 따라가서 소유자를 확인합니다. (같은 정보를 여러 곳에 두지 않음)
 - 모든 화면의 조회는 **로그인한 강사 기준으로 필터링**합니다. 이걸 빠뜨리면 다른 강사의 데이터가 보이므로 테스트로 확인합니다.
 
@@ -146,6 +137,13 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - 학생 본인 연락처(`phone`)는 항상 선택입니다. 어린 학생은 휴대폰이 없을 수 있기 때문입니다.
 - 보호자를 별도 모델로 두지 않습니다. 학부모용 화면(장기 확장)을 만들 때 `Guardian` 모델로 분리를 검토합니다.
 
+### 2-8. 장소는 회차마다 적는 메모로 받음 (2026-11-19)
+
+- `LessonSession.place`(최대 100자, 선택)에 "A 레슨실", "○○초 음악실"처럼 자유롭게 적습니다.
+- 장소를 미리 등록하는 `Location` 모델과 장소 관리 화면은 만들지 않습니다. 개인 강사에게는 장소를 따로 등록하는 것보다 바로 적는 편이 빠르기 때문입니다.
+- **프로젝트 기간 이후 지도 연동**(주소 검색·지도 표시)을 할 때 `Location` 모델을 추가하고, 그동안 쌓인 `place` 메모를 등록 장소로 옮길 수 있게 확장합니다 (UC-13).
+- 메모 단계에서는 장소를 표시만 하고, 장소별 필터·통계는 지도 연동 때 제공합니다.
+
 ## 3. 제약 조건
 
 | 대상 | 규칙 | 구현 위치 |
@@ -157,6 +155,12 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함 | 앱 검증 (모델 `clean`) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
 | `LessonRecord.session` | 회차당 일지 1개 | DB `OneToOneField` |
+| `LessonSession` 완료 취소 | `completed` → `scheduled`만 가능, `completed_at`을 비움. **수업일지(`LessonRecord`)가 있으면 불가** | 앱 검증 (UC-06) |
+| `LessonSession` 결석 처리 | 차감 여부(`absence_deducted`)를 반드시 선택. 폼에 기본값 없음 | 폼 검증 (UC-10) |
+| `Enrollment.status` | 잔여 0이어도 자동으로 `ended`가 되지 않음. 종료는 강사가 직접 | 앱 (UC-03, UC-07) |
+| `LessonSession` 완료 처리 | 시작 전 회차도 완료 가능하되 확인을 받음 | 화면 (UC-06) |
+| 잔여 초과 일정 | 저장 후 `예정` 회차 수(새 회차 포함) > 잔여 회차이면 경고만 (저장 허용) | 앱 검증 (UC-04, UC-12) |
+| `Student` 보관 | `is_active=false`로 바꿀 때 남은 `scheduled` 회차를 확인 후 삭제. 다른 상태 회차는 보존 | 앱 (UC-02) |
 | 시간 겹침 | 같은 강사의 회차가 겹치면 **경고만** (저장 허용) | 앱 검증 (UC-04) |
 
 **삭제 정책 (기록 보존)**
@@ -165,7 +169,6 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 |---|---|---|
 | Student → Enrollment | `PROTECT` | 수강생은 삭제 대신 `is_active=false`로 보관 |
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
-| Location → LessonSession | `SET_NULL` | 장소를 지워도 회차는 남김 |
 | LessonSession → LessonRecord | `CASCADE` | 회차와 일지는 운명을 같이함 |
 | LessonSession → makeup_for | `SET_NULL` | 원래 회차가 없어져도 보강 기록은 유지 |
 
@@ -179,16 +182,19 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 |---|---|
 | **MVP (P1)** | `User`, `Student`, `Enrollment`, `LessonSession`(상태는 `scheduled`/`completed`만 사용해도 동작) |
 | P2 | `LessonSession`의 `cancelled`, `makeup_for` 사용 (휴강·보강) |
-| P3 | `absent` + `absence_deducted`, `Location`, `LessonRecord` |
-| 이후 | 일정 변경 이력 `SessionChangeLog`(UC-11), 반복 규칙 `RecurrenceRule`(UC-12), 그룹 수업 `Class` |
+| P3 | `absent` + `absence_deducted`, `LessonRecord` |
+| 이후 | 일정 변경 이력 `SessionChangeLog`(UC-11), 반복 규칙 `RecurrenceRule`(UC-12), 그룹 수업 `Class`, 장소 `Location` + 지도 연동(UC-13, 프로젝트 이후) |
 
-필드는 MVP 때 미리 만들어 두고(`location`, `makeup_for` 등은 비워둘 수 있게), 화면 기능만 단계적으로 붙입니다. 마이그레이션 횟수를 줄이기 위해서입니다.
+필드는 MVP 때 미리 만들어 두고(`place`, `makeup_for` 등은 비워둘 수 있게), 화면 기능만 단계적으로 붙입니다. 마이그레이션 횟수를 줄이기 위해서입니다.
 
 ## 5. 결정 기록
 
 - [x] 설계 결정 2-1~2-6 확정 (2026-11-18)
 - [x] 미성년자 수강생은 보호자 연락처 필수 (2-7, 2026-11-18)
 - [x] 레슨비·결제 정보는 MVP에서 다루지 않음 (기획서 MVP 제외 범위)
-- [ ] 결석 차감 기본값 (`absence_deducted` 기본값) → #2에서 결정
-- [ ] 차감한 결석에 보강 불가 규칙 최종 확정 → #2
-- [ ] 완료 처리 되돌리기 허용 여부 → #2에서 결정
+- [x] 결석 차감 기본값: 기본값 없이 결석 처리 때 강사가 매번 선택 (#2, 2026-11-19)
+- [x] 완료 처리 되돌리기: 허용. 단 수업일지가 있는 회차는 불가 (#2, 2026-11-19)
+- [x] 레슨권 소진: 자동 종료하지 않고 '소진' 표시만. 종료는 강사가 직접, 진행 중 레슨권 여러 개 허용 (#2, 2026-11-19)
+- [x] 장소: 회차별 자유 메모(`place`), 지도 연동은 프로젝트 이후 (2-8, 2026-11-19)
+- [x] 차감한 결석에는 보강 불가 (중복 차감 방지, #2, 2026-11-19)
+- [x] 보강 없는 휴강 회차: "보강 필요" 배지로 표시, 별도 상태·필드 없이 `makeup` 역참조 유무로 판단 (#2, 2026-11-19)
