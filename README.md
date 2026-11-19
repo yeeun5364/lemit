@@ -21,8 +21,9 @@
 |---|---|
 | 대상 사용자 | 개인 레슨을 운영하는 프리랜서 강사 |
 | 핵심 문제 | 유동적인 일정·휴강·보강과 수업 회차 관리 |
-| 발표용 MVP | 수강생 등록 → 일정 등록·조회 → 완료 처리 → 진행·잔여 회차 확인 (발표: 2026-11-24) |
-| 기술 스택 (설계안) | Python 3.14 · Django 5.2 LTS · PostgreSQL 18 · Docker · GitHub Actions · AWS Lightsail |
+| 발표용 MVP | 수강생 등록 → 일정 등록·조회 → 수강생 메시지 AI 분류 확인 → 완료 처리 → 진행·잔여 회차 확인 (발표: 2026-11-24) |
+| AI 기능 | 직접 학습시킨 모델(TF-IDF + Logistic Regression)이 수강생 메시지를 휴강 요청·보강 요청·일정 변경·일반 메시지로 분류. 예측은 참고용이며 일정을 자동으로 바꾸지 않음 ([docs/ML.md](docs/ML.md)) |
+| 기술 스택 (설계안) | Python 3.14 · Django 5.2 LTS · PostgreSQL 18 · scikit-learn · Docker · GitHub Actions · AWS Lightsail |
 | 상세 | [기획 문서](docs/PROJECT_PLAN.md) — 기능 우선순위 §5, MVP 범위 §6, 기술 선택 이유 §7, 데이터 모델 §8, 로드맵 §9 |
 
 ## 구현 현황
@@ -38,6 +39,8 @@
 | MVP 핵심 | 레슨 일정 등록·조회 (월간·주간) | ⬜ | UC-03~05 |
 | MVP 핵심 | 수업 완료 처리 | ⬜ | UC-06 |
 | MVP 핵심 | 진행·잔여 회차 확인 | ⬜ | UC-07 |
+| MVP 핵심 | 수강생 메시지 AI 분류 (메시지함) | ⬜ | UC-17. 화면 미착수. 메시지함 설계는 SCREENS S13~S15 |
+| ML | 메시지 분류 모델 학습·검증, 추론 서비스, `/healthz/` | 🟡 | v2 모델 검증 macro F1 0.936. 로컬·GitHub CI에서 테스트 24개·`ml.verify` 통과, PR #34 검토 중 (#32) |
 | MVP 후속 | 비밀번호 찾기·변경 | ⬜ | 메일 재설정 링크 (UC-15) |
 | MVP 후속 | 라벨(색)로 수업 형태·사람 구분 | ⬜ | 라벨 없으면 회색, 상태는 모양으로 표시 (UC-16) |
 | MVP 후속 | 휴강·보강 처리 | ⬜ | 발표 시연 2차 목표 (UC-08·09) |
@@ -186,6 +189,9 @@ python manage.py test                   # 테스트 (PostgreSQL에 임시 DB tes
 pip install -r requirements-dev.txt     # 개발 도구(ruff) 설치
 ruff check .                            # 린트
 ruff format .                           # 포맷 자동 정리 (CI는 --check로 검사만)
+
+python -m ml.verify                     # 저장된 메시지 분류 모델 검증 (파일·버전·데이터 일치, 점수 재현, 성능 기준)
+python -m ml.train --version v3         # 모델 다시 학습 (데이터를 바꿨을 때만. 절차는 docs/ML.md §7)
 ```
 
 ### CI (GitHub Actions)
@@ -195,7 +201,7 @@ ruff format .                           # 포맷 자동 정리 (CI는 --check로
 | 작업 | 내용 |
 |---|---|
 | 린트 (ruff) | `ruff check`, `ruff format --check` |
-| 테스트 (PostgreSQL 18) | PostgreSQL 18 서비스 컨테이너를 띄우고 `manage.py check`, 마이그레이션 누락 확인(`makemigrations --check`), `manage.py test` |
+| 테스트 (PostgreSQL 18) | PostgreSQL 18 서비스 컨테이너를 띄우고 `manage.py check`, 마이그레이션 누락 확인(`makemigrations --check`), ML 모델 검증(`python -m ml.verify`), `manage.py test` (추론·모델 파일 손상 테스트 포함) |
 
 - Docker 이미지 빌드·스모크 테스트는 Dockerfile이 생기는 #5 이후 추가합니다.
 
@@ -213,8 +219,9 @@ ruff format .                           # 포맷 자동 정리 (CI는 --check로
 2. 수강생 등록 (예: 피아노 레슨, 레슨권 8회)
 3. 주간 레슨 일정 등록
 4. 일정 목록·캘린더 조회
-5. 수업 완료 처리 → 진행 1회 / 잔여 7회 확인
-6. (2차 목표) 휴강 처리 → 보강 일정 등록 → 잔여 회차 유지 확인
+5. 수강생 메시지 추가 → 메시지함에서 AI 분류 배지(예: 보강 요청) 확인 → 분류 탭으로 걸러 보기
+6. 수업 완료 처리 → 진행 1회 / 잔여 7회 확인
+7. (2차 목표) 휴강 처리 → 보강 일정 등록 → 잔여 회차 유지 확인
 
 ### 화면 스크린샷
 
@@ -241,11 +248,14 @@ lemit/
 ├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
 ├── config/                # Django 프로젝트 설정 (settings, urls)
 ├── accounts/              # 강사 계정: 이메일 로그인 커스텀 User
+├── inbox/                 # 메시지함 + 메시지 분류 추론 서비스 (classifier.py)
+├── ml/                    # 메시지 분류 모델: 데이터(data/), 학습(train.py), 검증(verify.py), 모델 파일(artifacts/)
 ├── docs/
 │   ├── PROJECT_PLAN.md    # 프로젝트 기획 기준 문서 (원문)
 │   ├── USE_CASES.md       # 기능별 유스케이스 (GitHub 이슈와 1:1 연결)
 │   ├── ERD.md             # 데이터 모델·ERD
-│   └── SCREENS.md         # 화면 목록·흐름·와이어프레임
+│   ├── SCREENS.md         # 화면 목록·흐름·와이어프레임
+│   └── ML.md              # 메시지 분류 모델 설계·학습 결과·한계
 └── devlog/                # 날짜별 진행 기록 (발표 자료 작성용)
     ├── README.md          # 작성 규칙
     ├── _TEMPLATE.md       # 기록 템플릿

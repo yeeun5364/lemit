@@ -1,6 +1,6 @@
 # 수강생 메시지 AI 분류 (ML 설계)
 
-> **상태 (2026-11-19):** 모델 학습·평가·저장, Django 추론 서비스, `/healthz/`, CI 검증 단계는 **구현했고 PC에서 테스트를 통과했습니다 (PR 검토 중).** 메시지함 화면(UC-17)은 **설계만** 있고, Docker 이미지와 Lightsail 배포 검증은 **미착수**입니다.
+> **상태 (2026-11-19):** 모델 학습·평가·저장, Django 추론 서비스, `/healthz/`, CI 검증 단계는 **구현했고 PC와 GitHub CI에서 테스트를 통과했습니다 (PR #34 검토 중, main 미병합).** 메시지함 화면(UC-17)은 **설계만** 있고, Docker 이미지와 Lightsail 배포 검증은 **미착수**입니다.
 > 관련 이슈: #32(모델·추론 서비스), #33(UC-17 메시지함), #5·#7(이미지·배포) · 학습 결과 원본: [ml/artifacts/REPORT.md](../ml/artifacts/REPORT.md) (학습 스크립트가 자동 생성)
 
 ## 1. 무엇을 하는가
@@ -141,7 +141,7 @@
 |---|---|---|
 | 추론 단위 테스트 | ✅ 통과 | `inbox/tests.py`: 분류 결과, 확인용 문장 전체 정확도, 빈 입력, 긴 입력, 한 번만 로드, 예측 중 예외 |
 | 파일 누락·손상 | ✅ 통과 | 모델·메타 파일 없음, 해시 불일치, 깨진 pickle, scikit-learn 버전 불일치, 분류 목록 불일치, 파일을 고친 뒤 자동 복구 |
-| 모델·코드 호환성 | ✅ 통과 (PC) | `python -m ml.verify`: 불러오기 검사, 데이터 해시 일치(줄바꿈 무관), 기록된 점수 재현, 성능 기준. CI 테스트 작업에 단계로 추가함 |
+| 모델·코드 호환성 | ✅ 통과 (Windows PC, GitHub CI Linux) | `python -m ml.verify`: 불러오기 검사, 데이터 해시 일치(줄바꿈 무관), 기록된 점수 재현, 성능 기준. CI 테스트 작업에 단계로 추가함. CI(Ubuntu, Python 3.14)에서도 기록과 같은 점수 재현 (PR #34, run 44460140840) |
 | `/healthz/` | ✅ 통과 | 정상이면 200, 모델이 없으면 200 + unavailable, DB 오류면 503, POST는 405 |
 | Docker 이미지 안에서 추론 | ⬜ #5 | Dockerfile에서 `ml/artifacts/`를 이미지에 복사하고, 이미지 안에서 `python -m ml.verify` 실행 |
 | 배포 후 스모크 테스트 | ⬜ #7 | `/healthz/`에서 `status=ok`, `message_classifier.status=ok` 확인 |
