@@ -1,0 +1,566 @@
+{
+  "model_version": "v1",
+  "created_at": "2026-11-19T04:20:14Z",
+  "python_version": "3.14.10",
+  "sklearn_version": "1.9.1",
+  "numpy_version": "2.5.5",
+  "joblib_version": "1.6.0",
+  "sha256": "98fd6e868644191493a064d3e21b01ebd19a45ee2979251893cecaa634e52f7d",
+  "labels": [
+    "CANCELLATION",
+    "GENERAL",
+    "MAKEUP",
+    "RESCHEDULE"
+  ],
+  "data": {
+    "sha256": "d9b99d104ee49beeeaff06fb2b584d100da437f9918fabfd68c220ec3cc2b53a",
+    "unseen_sha256": "222d4ab91ca23e1764fe789576fc7c934c8539aea6555f8596a6d950ae788116",
+    "n_total": 296,
+    "n_duplicates_removed": 0,
+    "n_train": 236,
+    "n_val": 60,
+    "n_unseen": 48,
+    "distribution": {
+      "CANCELLATION": 80,
+      "MAKEUP": 74,
+      "RESCHEDULE": 69,
+      "GENERAL": 73
+    }
+  },
+  "best_params": {
+    "C": 10.0,
+    "analyzer": "char_wb",
+    "ngram_range": [
+      1,
+      3
+    ]
+  },
+  "candidates": [
+    {
+      "params": {
+        "C": 10.0,
+        "analyzer": "char_wb",
+        "ngram_range": [
+          1,
+          3
+        ]
+      },
+      "mean": 0.9491,
+      "std": 0.0215
+    },
+    {
+      "params": {
+        "C": 1.0,
+        "analyzer": "char_wb",
+        "ngram_range": [
+          1,
+          3
+        ]
+      },
+      "mean": 0.9324,
+      "std": 0.0248
+    },
+    {
+      "params": {
+        "C": 10.0,
+        "analyzer": "char_wb",
+        "ngram_range": [
+          2,
+          4
+        ]
+      },
+      "mean": 0.919,
+      "std": 0.0199
+    },
+    {
+      "params": {
+        "C": 1.0,
+        "analyzer": "char_wb",
+        "ngram_range": [
+          2,
+          4
+        ]
+      },
+      "mean": 0.9106,
+      "std": 0.0155
+    },
+    {
+      "params": {
+        "C": 10.0,
+        "analyzer": "word",
+        "ngram_range": [
+          1,
+          1
+        ]
+      },
+      "mean": 0.8409,
+      "std": 0.0412
+    },
+    {
+      "params": {
+        "C": 10.0,
+        "analyzer": "word",
+        "ngram_range": [
+          1,
+          2
+        ]
+      },
+      "mean": 0.8406,
+      "std": 0.0462
+    },
+    {
+      "params": {
+        "C": 1.0,
+        "analyzer": "word",
+        "ngram_range": [
+          1,
+          2
+        ]
+      },
+      "mean": 0.8361,
+      "std": 0.0587
+    },
+    {
+      "params": {
+        "C": 1.0,
+        "analyzer": "word",
+        "ngram_range": [
+          1,
+          1
+        ]
+      },
+      "mean": 0.8197,
+      "std": 0.0539
+    }
+  ],
+  "gate": {
+    "val_macro_f1": 0.8,
+    "unseen_macro_f1": 0.7,
+    "passed": true
+  },
+  "metrics": {
+    "cv_macro_f1": 0.9491,
+    "val": {
+      "n": 60,
+      "accuracy": 0.95,
+      "macro_precision": 0.9508,
+      "macro_recall": 0.95,
+      "macro_f1": 0.9493,
+      "per_class": {
+        "CANCELLATION": {
+          "precision": 0.9412,
+          "recall": 1.0,
+          "f1-score": 0.9697,
+          "support": 16.0
+        },
+        "MAKEUP": {
+          "precision": 0.9286,
+          "recall": 0.8667,
+          "f1-score": 0.8966,
+          "support": 15.0
+        },
+        "RESCHEDULE": {
+          "precision": 0.9333,
+          "recall": 1.0,
+          "f1-score": 0.9655,
+          "support": 14.0
+        },
+        "GENERAL": {
+          "precision": 1.0,
+          "recall": 0.9333,
+          "f1-score": 0.9655,
+          "support": 15.0
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "CANCELLATION",
+          "MAKEUP",
+          "RESCHEDULE",
+          "GENERAL"
+        ],
+        "matrix": [
+          [
+            16,
+            0,
+            0,
+            0
+          ],
+          [
+            1,
+            13,
+            1,
+            0
+          ],
+          [
+            0,
+            0,
+            14,
+            0
+          ],
+          [
+            0,
+            1,
+            0,
+            14
+          ]
+        ]
+      },
+      "misclassified": [
+        {
+          "text": "레슨 끝나고 상담 잠깐 가능할까요",
+          "true": "GENERAL",
+          "pred": "MAKEUP",
+          "confidence": 0.348
+        },
+        {
+          "text": "보강은 1시간 반으로 길게 해도 될까요",
+          "true": "MAKEUP",
+          "pred": "RESCHEDULE",
+          "confidence": 0.459
+        },
+        {
+          "text": "비 때문에 취소된 야외 수업은 다음 주에 보강합니다",
+          "true": "MAKEUP",
+          "pred": "CANCELLATION",
+          "confidence": 0.506
+        }
+      ]
+    },
+    "unseen": {
+      "n": 48,
+      "accuracy": 0.9167,
+      "macro_precision": 0.9188,
+      "macro_recall": 0.9167,
+      "macro_f1": 0.9156,
+      "per_class": {
+        "CANCELLATION": {
+          "precision": 0.9091,
+          "recall": 0.8333,
+          "f1-score": 0.8696,
+          "support": 12.0
+        },
+        "MAKEUP": {
+          "precision": 0.8571,
+          "recall": 1.0,
+          "f1-score": 0.9231,
+          "support": 12.0
+        },
+        "RESCHEDULE": {
+          "precision": 0.9091,
+          "recall": 0.8333,
+          "f1-score": 0.8696,
+          "support": 12.0
+        },
+        "GENERAL": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "f1-score": 1.0,
+          "support": 12.0
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "CANCELLATION",
+          "MAKEUP",
+          "RESCHEDULE",
+          "GENERAL"
+        ],
+        "matrix": [
+          [
+            10,
+            1,
+            1,
+            0
+          ],
+          [
+            0,
+            12,
+            0,
+            0
+          ],
+          [
+            1,
+            1,
+            10,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            12
+          ]
+        ]
+      },
+      "misclassified": [
+        {
+          "text": "조카 돌잔치라 토요일엔 수업 어려워요",
+          "true": "CANCELLATION",
+          "pred": "RESCHEDULE",
+          "confidence": 0.309
+        },
+        {
+          "text": "한 주 휴강 부탁드려요",
+          "true": "CANCELLATION",
+          "pred": "MAKEUP",
+          "confidence": 0.575
+        },
+        {
+          "text": "내일은 2시 대신 4시에 만나요",
+          "true": "RESCHEDULE",
+          "pred": "MAKEUP",
+          "confidence": 0.375
+        },
+        {
+          "text": "다음 수업은 줌으로 할게요",
+          "true": "RESCHEDULE",
+          "pred": "CANCELLATION",
+          "confidence": 0.488
+        }
+      ]
+    }
+  },
+  "val_samples": [
+    [
+      "코로나 확진이라 일주일 수업 쉬겠습니다",
+      "CANCELLATION"
+    ],
+    [
+      "오늘 저녁 레슨은 못 하겠어요",
+      "CANCELLATION"
+    ],
+    [
+      "화요일 수업 수요일로 이동",
+      "RESCHEDULE"
+    ],
+    [
+      "이번 수업만 하루 앞당겨서 할 수 있을까요",
+      "RESCHEDULE"
+    ],
+    [
+      "화요일과 목요일 수업 순서를 바꾸고 싶어요",
+      "RESCHEDULE"
+    ],
+    [
+      "아이가 많이 피곤해해서 오늘은 수업 안 할게요",
+      "CANCELLATION"
+    ],
+    [
+      "영어 회화 표현 10개 익혔어요",
+      "GENERAL"
+    ],
+    [
+      "아이가 열이 나서 오늘 레슨은 못 할 것 같습니다",
+      "CANCELLATION"
+    ],
+    [
+      "지난주 수업 대신 이번 주에 한 번 더 할게요",
+      "MAKEUP"
+    ],
+    [
+      "오늘 수업 취소 가능할까요",
+      "CANCELLATION"
+    ],
+    [
+      "선생님 목감기로 이번 수업은 휴강하겠습니다",
+      "CANCELLATION"
+    ],
+    [
+      "수업 시간 변경 예정",
+      "RESCHEDULE"
+    ],
+    [
+      "보강 수업 추가 요청",
+      "MAKEUP"
+    ],
+    [
+      "숙제는 스케일 연습입니다",
+      "GENERAL"
+    ],
+    [
+      "악보 복사본 드렸어요",
+      "GENERAL"
+    ],
+    [
+      "이번 주 수업 시간 조정 가능할까요",
+      "RESCHEDULE"
+    ],
+    [
+      "오늘 수업 진행 못 합니다 양해 부탁드려요",
+      "CANCELLATION"
+    ],
+    [
+      "레슨 일정을 다음 주로 미뤄주세요",
+      "RESCHEDULE"
+    ],
+    [
+      "오늘 수업 빼주세요",
+      "CANCELLATION"
+    ],
+    [
+      "이번 레슨 불참하겠습니다",
+      "CANCELLATION"
+    ],
+    [
+      "현재 3회차 진행했고 잘 따라오고 있어요",
+      "GENERAL"
+    ],
+    [
+      "차가 고장 나서 오늘은 못 갈 것 같아요",
+      "CANCELLATION"
+    ],
+    [
+      "명절 연휴라 그 주 수업은 없는 걸로 해주세요",
+      "CANCELLATION"
+    ],
+    [
+      "오늘 못 온 학생 보강 잡아야 함",
+      "MAKEUP"
+    ],
+    [
+      "빠진 수업 메꾸려고 하는데 금요일 저녁 괜찮으세요",
+      "MAKEUP"
+    ],
+    [
+      "발목을 삐어서 이번 주 댄스 수업은 못 해요",
+      "CANCELLATION"
+    ],
+    [
+      "내일 레슨 진행이 어려울 것 같아 취소 요청드립니다",
+      "CANCELLATION"
+    ],
+    [
+      "작품 사진 보내드렸어요",
+      "GENERAL"
+    ],
+    [
+      "보강 수업 일정 확인 부탁드립니다",
+      "MAKEUP"
+    ],
+    [
+      "보강은 다음 주 화요일 4시에 하면 될까요",
+      "MAKEUP"
+    ],
+    [
+      "내일 수업 취소해 주세요",
+      "CANCELLATION"
+    ],
+    [
+      "수업 자료 이메일로 보내드렸습니다",
+      "GENERAL"
+    ],
+    [
+      "지난주 결석한 수업 보충하고 싶어요",
+      "MAKEUP"
+    ],
+    [
+      "오늘 수업 내용 정리해서 보내드릴게요",
+      "GENERAL"
+    ],
+    [
+      "휴강분은 이번 달 안에 보강하겠습니다",
+      "MAKEUP"
+    ],
+    [
+      "레슨 끝나고 상담 잠깐 가능할까요",
+      "GENERAL"
+    ],
+    [
+      "오늘 휴강하고 대신 목요일에 보충 수업 할게요",
+      "MAKEUP"
+    ],
+    [
+      "리듬이 조금 불안정해서 메트로놈 연습이 필요해요",
+      "GENERAL"
+    ],
+    [
+      "준비물 연필과 지우개",
+      "GENERAL"
+    ],
+    [
+      "아이가 처음보다 자신감이 생겼어요",
+      "GENERAL"
+    ],
+    [
+      "빠진 두 회차 보강해서 이번 달 진도 맞출게요",
+      "MAKEUP"
+    ],
+    [
+      "레슨 시간 바꿔도 괜찮을까요",
+      "RESCHEDULE"
+    ],
+    [
+      "연습을 매일 30분씩 하면 좋겠어요",
+      "GENERAL"
+    ],
+    [
+      "오늘 수업 장소를 B 연습실로 바꿀게요",
+      "RESCHEDULE"
+    ],
+    [
+      "이사 때문에 이번 주는 레슨 쉬어요",
+      "CANCELLATION"
+    ],
+    [
+      "수련회 가서 다음 주 화요일은 수업 못 해요",
+      "CANCELLATION"
+    ],
+    [
+      "보강은 1시간 반으로 길게 해도 될까요",
+      "MAKEUP"
+    ],
+    [
+      "목요일 레슨을 금요일로 옮길 수 있을까요",
+      "RESCHEDULE"
+    ],
+    [
+      "레슨비 영수증 받을 수 있을까요",
+      "GENERAL"
+    ],
+    [
+      "다음 주 화요일 수업 시간을 바꾸고 싶어요",
+      "RESCHEDULE"
+    ],
+    [
+      "휴강한 수업은 토요일에 보강할게요",
+      "MAKEUP"
+    ],
+    [
+      "지난번 빠진 수업 보강 언제 할까요",
+      "MAKEUP"
+    ],
+    [
+      "수업 시간 바꿀 수 있는지 문의드려요",
+      "RESCHEDULE"
+    ],
+    [
+      "아이가 수업 후에 많이 뿌듯해했어요",
+      "GENERAL"
+    ],
+    [
+      "비 때문에 취소된 야외 수업은 다음 주에 보강합니다",
+      "MAKEUP"
+    ],
+    [
+      "일정이 바뀌어서 수업 시간을 옮겨야 해요",
+      "RESCHEDULE"
+    ],
+    [
+      "내일 수업을 모레로 미룰 수 있을까요",
+      "RESCHEDULE"
+    ],
+    [
+      "목요일 레슨 대신 수요일로 바꿔도 되나요",
+      "RESCHEDULE"
+    ],
+    [
+      "휴강했던 날 보강 언제 하는 게 좋을까요",
+      "MAKEUP"
+    ],
+    [
+      "오늘 수업 정말 잘했어요",
+      "GENERAL"
+    ]
+  ]
+}
