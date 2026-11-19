@@ -1,0 +1,21 @@
+# 비밀값
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Django
+staticfiles/
+media/
+db.sqlite3
+
+# 도구
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

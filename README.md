@@ -42,7 +42,7 @@
 | 확장 | 반복 일정 | ⬜ | |
 | 이후 | 장소 지도 연동 | ⬜ | 프로젝트 기간 이후. 그전엔 회차별 장소 메모(UC-04) |
 | 확장 | 수업일지·진도 기록 | ⬜ | |
-| 인프라 | Django + PostgreSQL 연결 | ⬜ | |
+| 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
 | 인프라 | Docker 실행 환경 | ⬜ | |
 | 인프라 | GitHub Actions (테스트) | ⬜ | |
 | 인프라 | AWS Lightsail 배포 | ⬜ | |
@@ -94,58 +94,95 @@ LEMIT이 일반 캘린더와 다른 핵심은 **각 수업 회차가 상태를 �
 
 ## 실행 방법
 
-> ⚠️ **아직 Django 프로젝트가 생성되지 않았습니다.** 아래는 구성 예정인 형태이며, 실제 구성 후 명령어를 확정합니다.
+> 현재는 **PostgreSQL만 Docker로 실행**하고 Django는 PC의 가상환경에서 실행합니다. Django 컨테이너(`web`)는 #5에서 추가합니다.
 
 ### 필요한 환경
 
 | 구분 | 버전 | 비고 |
 |---|---|---|
-| Python | **3.14** | Docker 이미지 `python:3.14-slim` |
-| Django | **5.2 LTS** (`>=5.2.12,<6.0`) | 보안 지원 2028년 4월까지. Python 3.14는 5.2.8부터 지원 |
+| Python | **3.14** | **현재 PC 설치 필수** (Django를 PC 가상환경에서 실행). #5부터는 Docker 이미지 `python:3.14-slim`으로도 실행 |
+| Django | **5.2 LTS** (5.2.19 고정) | 보안 지원 2028년 4월까지. Python 3.14는 5.2.8부터 지원 |
 | PostgreSQL | **18** | Docker 이미지 `postgres:18` (2026-11 기준 최신 18.7) |
-| DB 드라이버 | psycopg 3 (`psycopg[binary]`) | |
+| DB 드라이버 | psycopg 3 (`psycopg[binary]` 3.3.9) | |
 | Docker | Engine 29 이상, Compose v2 이상 | 개발 PC 확인 버전: Docker 29.9.1, Compose v5.6.0 |
 | Git | 2.x | |
 
-- 앱과 DB는 Docker로 실행하므로 **PC에 PostgreSQL을 따로 설치할 필요가 없습니다.**
-- Docker 없이 로컬에서 실행하려면 Python 3.14를 설치해야 합니다. PC에 Python 3.15가 기본으로 잡혀 있으면 `py -3.14 -m venv .venv`처럼 버전을 지정해 가상환경을 만듭니다.
-- 정확한 패키지 버전은 프로젝트 생성 후 `requirements.txt`에 고정합니다.
+- **현재 구성:** Django는 **PC의 Python 3.14 가상환경**에서, PostgreSQL만 **Docker**에서 실행합니다. 그래서 지금은 **Python 3.14와 Docker가 모두 필요**하고, PostgreSQL은 PC에 설치하지 않습니다.
+- #5에서 Django 컨테이너(`web`)를 추가하면 Docker만으로도 실행할 수 있게 됩니다.
+- PC에 Python 3.15가 기본으로 잡혀 있으면 `py -3.14 -m venv .venv`처럼 버전을 지정해 가상환경을 만듭니다.
+- 패키지 버전은 `requirements.txt`에 고정되어 있습니다.
 
 ### 환경변수 설정
 
-```bash
-cp .env.example .env
-```
+`.env.example`을 `.env`로 복사한 뒤 값을 채웁니다.
+
+| 셸 | 명령 |
+|---|---|
+| macOS/Linux, Git Bash | `cp .env.example .env` |
+| Windows PowerShell | `Copy-Item .env.example .env` |
+| Windows CMD | `copy .env.example .env` |
 
 | 변수 | 설명 |
 |---|---|
 | `DJANGO_SECRET_KEY` | Django 시크릿 키 |
 | `DJANGO_DEBUG` | 개발 시 `True`, 배포 시 `False` |
-| `DATABASE_URL` | PostgreSQL 접속 정보 |
+| `DATABASE_URL` | PostgreSQL 접속 정보. **실행 위치에 따라 호스트가 다름** (아래 표) |
 | `EMAIL_HOST_USER` | 비밀번호 재설정 메일을 보낼 Gmail 주소 (배포 시) |
 | `EMAIL_HOST_PASSWORD` | 위 Gmail 계정의 **앱 비밀번호** (실제 Gmail 비밀번호 아님) |
 
+**`DATABASE_URL`의 호스트**
+
+| Django를 어디서 실행하나 | 호스트 | 예 |
+|---|---|---|
+| PC 가상환경 (현재) | `127.0.0.1` | `postgres://lemit:비밀번호@127.0.0.1:5432/lemit` |
+| Docker `web` 컨테이너 (#5부터) | `db` (Compose 서비스 이름) | `postgres://lemit:비밀번호@db:5432/lemit` |
+
+- 컨테이너 안에서 `127.0.0.1`은 자기 자신이라 PostgreSQL에 닿지 않습니다. #5에서 `web` 컨테이너에는 `db` 호스트 값을 따로 넣습니다.
+- 개발용 `compose.yaml`은 DB 포트를 PC 안(`127.0.0.1:5432`)에만 엽니다. **운영 서버에서는 DB 포트를 외부에 열지 않습니다** (#5, #7).
 - 개발 환경에서는 메일을 실제로 보내지 않고 터미널에 출력합니다. `EMAIL_*` 값이 없어도 됩니다.
 - 메일 계정을 바꿀 때는 `.env`의 `EMAIL_*` 값만 바꾸고 재시작하면 됩니다. 코드는 수정하지 않습니다.
 
 `.env` 파일과 비밀번호·키 값은 **절대 커밋하지 않습니다.** (`.gitignore`에 포함)
 
-### 실행
+### 실행 (현재: 로컬 Django + Docker PostgreSQL)
 
 ```bash
-docker compose up --build
-# 최초 실행 시
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py createsuperuser
+# 1) 가상환경 만들기 (Python 3.14)
+py -3.14 -m venv .venv                  # macOS/Linux: python3.14 -m venv .venv
+
+# 2) 가상환경 켜기: 셸마다 명령이 다름
+.\.venv\Scripts\Activate.ps1           # Windows PowerShell
+.venv\Scripts\activate.bat             # Windows CMD
+source .venv/Scripts/activate           # Windows Git Bash
+source .venv/bin/activate               # macOS/Linux
+
+# 3) 패키지 설치
+pip install -r requirements.txt
+
+# 4) 환경변수: .env.example을 .env로 복사(위 "환경변수 설정" 표)한 뒤
+#    DJANGO_SECRET_KEY, POSTGRES_PASSWORD, DATABASE_URL의 비밀번호를 채움
+
+# 5) PostgreSQL 18 실행 (healthy가 될 때까지 대기)
+docker compose up -d --wait db
+
+# 6) DB 테이블 생성, 관리자 계정 생성, 서버 실행
+python manage.py migrate
+python manage.py createsuperuser        # 이메일·이름·비밀번호 입력
+python manage.py runserver
 ```
 
-접속: http://localhost:8000
+접속: http://localhost:8000/admin/ (화면은 UC-01부터 추가)
+
+- `DATABASE_URL`의 호스트는 `localhost` 대신 **`127.0.0.1`**을 씁니다. Windows에서 `localhost`가 IPv6(`::1`)로 먼저 연결을 시도해 DB 연결이 멈추는 문제가 있었습니다.
+- `.env` 값에는 `$` 문자를 쓰지 않습니다. Docker Compose가 변수로 해석합니다.
 
 ### 테스트
 
 ```bash
-docker compose exec web python manage.py test
+python manage.py test
 ```
+
+테스트는 PostgreSQL에 임시 DB(`test_lemit`)를 만들어 실행하고 끝나면 지웁니다.
 
 ## 시연 자료
 
@@ -180,6 +217,12 @@ docker compose exec web python manage.py test
 lemit/
 ├── README.md              # 프로젝트 소개 (이 문서)
 ├── CLAUDE.md              # Claude Code 작업 지침 (devlog 자동 기록 규칙)
+├── manage.py
+├── requirements.txt       # 패키지 버전 고정
+├── compose.yaml           # 개발용 PostgreSQL 18 (web은 #5에서 추가)
+├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
+├── config/                # Django 프로젝트 설정 (settings, urls)
+├── accounts/              # 강사 계정: 이메일 로그인 커스텀 User
 ├── docs/
 │   ├── PROJECT_PLAN.md    # 프로젝트 기획 기준 문서 (원문)
 │   ├── USE_CASES.md       # 기능별 유스케이스 (GitHub 이슈와 1:1 연결)
