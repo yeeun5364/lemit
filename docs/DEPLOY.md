@@ -18,7 +18,7 @@ SSH 22 (내 IP만) ── 관리자
 ## 1. 서버 준비 (한 번만, 사용자가 직접) — Amazon Linux 2023
 
 > 실제 서버: Lightsail `lemit-server`, **Amazon Linux 2023**, Sydney(`ap-southeast-2`), 2GB RAM·2 vCPU·60GB SSD, SSH 사용자 `ec2-user` (2026-11-19 생성).
-> 아래 설치 명령은 `amazonlinux:2023` 컨테이너에서 실행해 확인했습니다. dnf로 docker 25.0·git 설치, Compose·Buildx는 체크섬 검증까지 확인했습니다. **실제 서버에서는 아직 실행하지 않았습니다.**
+> 아래 설치 명령은 `amazonlinux:2023` 컨테이너에서 실행해 확인했습니다. dnf로 docker 25.0·git 설치를 확인했고, 플러그인 설치 스크립트는 정상 설치 외에 변조 파일·체크섬 항목 누락·알 수 없는 아키텍처일 때 아무것도 설치하지 않는 것까지 확인했습니다. **실제 서버에서는 아직 실행하지 않았습니다.**
 
 1. **사양:** 2GB 메모리면 충분합니다.
    - PC 연습에서 잰 사용량은 web 약 250MB(gunicorn worker 2개 + 모델), DB 약 40MB, 프록시 약 13MB입니다.
@@ -31,47 +31,41 @@ SSH 22 (내 IP만) ── 관리자
    - HTTP 80: 허용
    - HTTPS 443: 도메인을 쓸 때 추가
    - **그 외 포트(특히 5432, 8000)는 추가하지 않습니다.** IPv6 방화벽을 켰다면 같은 규칙을 적용합니다.
-4. **스왑 2GB** (서버에서 실행):
+4. **스왑 2GB** (서버에서 실행). 다시 실행해도 안전합니다. 이미 있으면 만들지 않고, fstab에도 중복으로 넣지 않습니다.
    ```bash
-   sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
-   sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # 재부팅 후에도 유지
-   free -h                                                       # Swap 2.0Gi 확인
+   if [ ! -f /swapfile ]; then
+     sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress && sudo chmod 600 /swapfile && sudo mkswap /swapfile
+   fi
+   swapon --show | grep -q '^/swapfile ' || sudo swapon /swapfile
+   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # 재부팅 후에도 유지
+   free -h                                                    # Swap 2.0Gi 확인
    ```
-5. **Docker, git 설치** (Amazon Linux 2023 저장소):
+5. **Docker, git 설치와 코드 받기** (Amazon Linux 2023 저장소):
    ```bash
    sudo dnf install -y docker git
    sudo systemctl enable --now docker
    sudo usermod -aG docker ec2-user   # 로그아웃 후 다시 접속해야 sudo 없이 docker 사용
+   git clone https://github.com/yeeun5364/lemit.git && cd lemit
    ```
 6. **Docker Compose·Buildx 플러그인 설치.** Amazon Linux 2023 저장소에 없어서 GitHub 릴리스에서 받습니다.
-   - 버전은 고정하고, **체크섬을 검증한 뒤** 설치합니다.
-   - 고정한 버전은 Compose v5.6.1(2026-10-21)과 Buildx v0.38.1(2026-10-20)입니다. 나온 지 2주가 지난 버전 중에서 골랐습니다.
    ```bash
-   COMPOSE_VERSION=v5.6.1
-   BUILDX_VERSION=v0.38.1
-   case "$(uname -m)" in x86_64) C_ARCH=x86_64; B_ARCH=amd64 ;; aarch64) C_ARCH=aarch64; B_ARCH=arm64 ;; esac
-   PLUGINS=/usr/local/lib/docker/cli-plugins
-   sudo mkdir -p "$PLUGINS" && cd /tmp
-   curl -fsSLO "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${C_ARCH}"
-   curl -fsSLO "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${C_ARCH}.sha256"
-   sha256sum -c "docker-compose-linux-${C_ARCH}.sha256"                       # OK가 나와야 함
-   curl -fsSLO "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-${B_ARCH}"
-   curl -fsSL "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/checksums.txt"      | grep "buildx-${BUILDX_VERSION}.linux-${B_ARCH}$" | sha256sum -c        # OK가 나와야 함
-   sudo install -m 0755 "docker-compose-linux-${C_ARCH}" "$PLUGINS/docker-compose"
-   sudo install -m 0755 "buildx-${BUILDX_VERSION}.linux-${B_ARCH}" "$PLUGINS/docker-buildx"
-   cd ~ && docker compose version && docker buildx version
+   sudo bash scripts/install_docker_plugins.sh
+   docker compose version && docker buildx version
    ```
-   - 저장소의 docker 버전(25.0)과 Compose v5 조합은 실제 서버에서 처음 실행합니다.
-   - `docker compose up`이나 `build`에서 API 버전 오류가 나면 그 출력 그대로 알려주세요. 대응 방법을 정하겠습니다.
-7. **코드 받기와 서버 점검:**
+   - 버전을 고정합니다: Compose v5.6.1(2026-10-21), Buildx v0.38.1(2026-10-20). 나온 지 2주가 지난 버전 중에서 골랐습니다.
+   - **두 파일의 sha256 체크섬이 모두 맞을 때만 설치합니다.**
+     - 스크립트는 `set -euo pipefail`로 실행되어, 어느 단계든 실패하면 즉시 멈춥니다.
+     - 체크섬이 틀리거나 항목이 없으면 아무것도 설치하지 않고 종료 코드 1로 끝납니다.
+     - 지원하지 않는 CPU 아키텍처(x86_64·aarch64 외)도 바로 중단합니다(PR #41 리뷰).
+   - 저장소의 docker 버전(25.0)과 Compose v5 조합은 실제 서버에서 처음 실행합니다. `docker compose up`이나 `build`에서 API 버전 오류가 나면 그 출력을 그대로 알려주세요.
+7. **서버 점검:**
    ```bash
-   git clone https://github.com/yeeun5364/lemit.git && cd lemit
    bash scripts/server_check.sh   # 읽기 전용. OS·메모리·스왑·디스크·도구·docker 그룹·열린 포트·.env 확인
    ```
    - `[필수]` 항목이 0건이 될 때까지 위 단계를 보완합니다.
+   - 5432·8000이 loopback(127.x, ::1)이 아닌 주소에 열려 있으면 `[필수]`입니다.
+   - 포트 목록을 얻지 못하면 정상으로 보지 않고 `[주의]`로 알립니다(`sudo dnf install -y iproute`).
    - `.env`는 다음 단계에서 만들므로, 이 시점에 `.env`가 없다는 `[주의]`는 정상입니다.
-   - `iproute`가 없다는 `[주의]`가 나오면 `sudo dnf install -y iproute`로 설치합니다.
 
 ## 2. 운영 `.env` 만들기 (서버에서 사용자가 직접)
 

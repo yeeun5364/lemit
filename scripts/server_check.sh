@@ -38,14 +38,30 @@ fi
 id -nG 2>/dev/null | tr ' ' '\n' | grep -qx docker && ok "$(id -un) 사용자가 docker 그룹에 있음" || note "$(id -un) 사용자가 docker 그룹에 없습니다 (sudo usermod -aG docker $(id -un) 후 재접속)"
 
 echo "== 열려 있는 포트 (이 서버에서 듣고 있는 TCP)"
-if have ss; then
-    ss -tln 2>/dev/null | awk 'NR>1 {print "  " $4}' | sort -u
-    ss -tln 2>/dev/null | awk 'NR>1 {print $4}' | grep -Eq '(^|[^0-9.])(0\.0\.0\.0|\*|\[::\]):(5432|8000)$' \
-        && bad "5432 또는 8000이 모든 주소(0.0.0.0)로 열려 있습니다. compose.dev.yaml을 쓰지 않았는지 확인" \
-        || ok "5432·8000이 외부 주소로 열려 있지 않음"
-else
-    note "ss 명령이 없어 포트를 확인하지 못했습니다 (sudo dnf install -y iproute)"
-fi
+# 5432(DB)·8000(web)은 loopback(127.x, ::1)에만 있어야 한다. 그 밖의 주소(0.0.0.0, *, [::], 서버 사설 IP 등)면 필수 실패.
+# 포트 목록을 얻지 못하면 '정상'으로 판단하지 않는다 (PR #41 리뷰). 테스트용: SERVER_CHECK_SS_CMD로 명령 대체
+check_ports() {
+    local listing addrs addr port host exposed=""
+    if ! listing="$(${SERVER_CHECK_SS_CMD:-ss -Htln} 2>/dev/null)"; then
+        note "포트 목록을 가져오지 못했습니다 (sudo dnf install -y iproute 후 다시 실행). 5432·8000 공개 여부는 확인 불가"
+        return
+    fi
+    addrs="$(awk '{print $4}' <<< "$listing" | sort -u)"
+    sed 's/^/  /' <<< "$addrs"
+    while read -r addr; do
+        [ -z "$addr" ] && continue
+        port="${addr##*:}"
+        host="${addr%:*}"
+        case "$port" in 5432|8000) ;; *) continue ;; esac
+        case "$host" in 127.*|"[::1]"|::1) ;; *) exposed="$exposed $addr" ;; esac
+    done <<< "$addrs"
+    if [ -n "$exposed" ]; then
+        bad "5432·8000이 loopback이 아닌 주소에 열려 있습니다:$exposed (compose.dev.yaml을 쓰지 않았는지 확인)"
+    else
+        ok "5432·8000은 loopback(127.x, ::1)에만 있거나 열려 있지 않음"
+    fi
+}
+check_ports
 echo "  ※ 외부 방화벽(Lightsail 네트워킹: 22는 내 IP만, 80·443)은 콘솔에서 확인하세요"
 
 echo "== 운영 설정"

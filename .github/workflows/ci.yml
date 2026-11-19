@@ -96,6 +96,8 @@ jobs:
           EOF
       - name: 배포 사전 점검 시나리오 (잘못된 운영 .env 조합 차단)
         run: bash scripts/test_preflight.sh
+      - name: 서버 점검 포트 판정 시나리오 (DB·web이 loopback 밖에 열리면 필수 실패)
+        run: bash scripts/test_server_check.sh
       - name: 이미지 빌드
         run: docker compose -f compose.yaml build web
       - name: 컨테이너 기동 (db·web이 healthy가 될 때까지 대기)
