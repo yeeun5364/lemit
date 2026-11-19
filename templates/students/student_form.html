@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{% if object %}수강생 수정{% else %}수강생 추가{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head">
+  {% if object %}
+  <a class="back" href="{% url 'students:detail' object.pk %}">&lt; {{ object.name }}</a>
+  {% else %}
+  <a class="back" href="{% url 'students:list' %}">&lt; 수강생</a>
+  {% endif %}
+</div>
+<h1 class="page-title">{% if object %}수강생 수정{% else %}수강생 추가{% endif %}</h1>
+
+<form method="post" class="form" novalidate>
+  {% csrf_token %}
+  {{ form.non_field_errors }}
+  {% for field in form %}
+  <div class="field{% if field.name == 'guardian_phone' or field.name == 'guardian_name' %} guardian-field{% endif %}{% if field.field.widget.input_type == 'checkbox' %} field-check{% endif %}">
+    {% if field.field.widget.input_type == 'checkbox' %}
+    <label>{{ field }} {{ field.label }}</label>
+    {% else %}
+    <label for="{{ field.id_for_label }}">{{ field.label }}{% if field.name == 'name' %} *{% elif field.name == 'guardian_phone' %} * (미성년자){% endif %}</label>
+    {{ field }}
+    {% endif %}
+    {{ field.errors }}
+  </div>
+  {% endfor %}
+  <button type="submit" class="button-primary">저장</button>
+</form>
+
+<script>
+  // 미성년자를 체크했을 때만 보호자 입력란을 보여준다. JS가 꺼져 있으면 항상 보이고, 서버 검증은 그대로 동작한다.
+  (function () {
+    var minor = document.getElementById("id_is_minor");
+    if (!minor) return;
+    function sync() {
+      document.querySelectorAll(".guardian-field").forEach(function (el) { el.hidden = !minor.checked; });
+    }
+    minor.addEventListener("change", sync);
+    sync();
+  })();
+</script>
+{% endblock %}

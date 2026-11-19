@@ -38,6 +38,7 @@
   <nav class="tabbar" aria-label="주 메뉴">
     {% block tabs %}
     <a href="{% url 'home' %}" class="tab{% if request.resolver_match.url_name == 'home' %} is-active{% endif %}">홈</a>
+    <a href="{% url 'students:list' %}" class="tab{% if request.resolver_match.app_name == 'students' %} is-active{% endif %}">수강생</a>
     {% endblock %}
   </nav>
   {% endif %}

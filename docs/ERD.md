@@ -232,6 +232,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 | 관계 | `on_delete` | 이유 |
 |---|---|---|
+| User → Student | `PROTECT` | 강사 계정을 지워도 수강생·수업 기록이 함께 지워지지 않게 (UC-02) |
 | Student → Enrollment | `PROTECT` | 수강생은 삭제 대신 `is_active=false`로 보관 |
 | Label → Enrollment | `SET_NULL` | 라벨을 지우면 레슨권은 "라벨 없음"(회색), 기록은 유지 |
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
@@ -243,6 +244,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 **인덱스**
 - `LessonSession(enrollment_id, start_at)`: 레슨권별 회차 이력
 - `LessonSession(start_at)`: 주간 일정 조회 (UC-05)
+- `Student(teacher_id, is_active, name)`: 수강생 목록·검색 (UC-02)
 - `Conversation(teacher_id, last_message_at)`: 메시지함 목록 (UC-17)
 - `Message(conversation_id, sent_at)`: 대화 상세
 
