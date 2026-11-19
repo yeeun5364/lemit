@@ -181,7 +181,8 @@ lemit/
 ├── docs/
 │   ├── PROJECT_PLAN.md    # 프로젝트 기획 기준 문서 (원문)
 │   ├── USE_CASES.md       # 기능별 유스케이스 (GitHub 이슈와 1:1 연결)
-│   └── ERD.md             # 데이터 모델·ERD
+│   ├── ERD.md             # 데이터 모델·ERD
+│   └── SCREENS.md         # 화면 목록·흐름·와이어프레임
 └── devlog/                # 날짜별 진행 기록 (발표 자료 작성용)
     ├── README.md          # 작성 규칙
     ├── _TEMPLATE.md       # 기록 템플릿
