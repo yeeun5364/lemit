@@ -63,6 +63,44 @@ class StudentFormTests(TestCase):
     def test_invalid_phone_is_rejected(self):
         self.assertIn("phone", StudentForm({**VALID, "phone": "전화번호"}).errors)
 
+    VALID_PHONES = (
+        "010-1234-5678",
+        "01012345678",
+        "02-123-4567",
+        "(02) 1234-5678",
+        "+82 10-1234-5678",
+        "+1 415 555 0100",
+    )
+    INVALID_PHONES = (
+        "--------",  # 숫자 없음 (PR #37 리뷰)
+        "(  )  ++",  # 숫자 없음
+        "1234-5678",  # 숫자 8자리 (최소 9)
+        "1234567890123456",  # 숫자 16자리 (최대 15)
+        "010-1234-567a",  # 문자 섞임
+        "010+1234+5678",  # +는 맨 앞에만
+    )
+
+    def test_phone_rules_for_student_and_guardian(self):
+        """학생 연락처와 보호자 연락처에 같은 규칙: 숫자 9~15자리, 국제번호(+) 허용."""
+        for value in self.VALID_PHONES:
+            with self.subTest(valid=value):
+                form = StudentForm({**VALID, "phone": value, "is_minor": "on", "guardian_phone": value})
+                self.assertTrue(form.is_valid(), form.errors)
+        for value in self.INVALID_PHONES:
+            with self.subTest(invalid=value):
+                form = StudentForm({**VALID, "phone": value, "is_minor": "on", "guardian_phone": value})
+                self.assertFalse(form.is_valid())
+                self.assertIn("phone", form.errors)
+                self.assertIn("guardian_phone", form.errors)
+
+    def test_adult_ignores_invalid_or_too_long_guardian_input(self):
+        """성인이면 보호자 입력을 검사 전에 비우므로, 잘못되거나 너무 긴 값이 남아 있어도 저장된다 (PR #37 리뷰)."""
+        for guardian_phone, guardian_name in (("abc", "보호자"), ("1" * 25, "이" * 60), ("--------", "")):
+            with self.subTest(guardian_phone=guardian_phone[:10]):
+                form = StudentForm({**VALID, "guardian_phone": guardian_phone, "guardian_name": guardian_name})
+                self.assertTrue(form.is_valid(), form.errors)
+                self.assertEqual((form.cleaned_data["guardian_phone"], form.cleaned_data["guardian_name"]), ("", ""))
+
     def test_teacher_is_not_a_form_field(self):
         """강사는 폼으로 받지 않는다 (조작된 POST로 다른 강사에게 등록 불가)."""
         self.assertNotIn("teacher", StudentForm().fields)
@@ -91,6 +129,25 @@ class StudentViewTests(TestCase):
         self.assertRedirects(res, reverse("students:detail", args=[s.pk]))
         s.refresh_from_db()
         self.assertEqual((s.name, s.memo), ("김하늘2", "피아노"))
+
+    def test_minor_to_adult_edit_clears_guardian_even_with_bad_input(self):
+        """미성년자→성인 수정 + 유효하지 않은·너무 긴 기존 보호자 값 회귀 테스트 (PR #37 리뷰)."""
+        for guardian_phone in ("잘못된번호", "1" * 25):
+            with self.subTest(guardian_phone=guardian_phone[:10]):
+                s = Student.objects.create(
+                    teacher=self.teacher,
+                    name="미성년",
+                    is_minor=True,
+                    guardian_phone="010-9999-0000",
+                    guardian_name="보호자",
+                )
+                res = self.client.post(
+                    reverse("students:edit", args=[s.pk]),
+                    {**VALID, "name": "성인됨", "guardian_phone": guardian_phone, "guardian_name": "이" * 60},
+                )
+                self.assertRedirects(res, reverse("students:detail", args=[s.pk]))
+                s.refresh_from_db()
+                self.assertEqual((s.is_minor, s.guardian_phone, s.guardian_name), (False, "", ""))
 
     def test_list_search_and_archive_filter(self):
         Student.objects.create(teacher=self.teacher, name="김하늘")

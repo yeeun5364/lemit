@@ -1,12 +1,27 @@
+import re
+
 from django.conf import settings
-from django.core.validators import RegexValidator
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
-phone_validator = RegexValidator(
-    r"^[0-9+\-\s()]{8,20}$",
-    "연락처는 숫자와 - 기호로 8~20자 입력하세요. 예: 010-1234-5678",
-)
+PHONE_CHARS = re.compile(r"\+?[0-9 ()\-]+")
+PHONE_DIGITS_MIN = 9  # 가장 짧은 국내 번호: 02-123-4567
+PHONE_DIGITS_MAX = 15  # 국제 표준(E.164) 최대 자릿수
+
+
+def validate_phone(value):
+    """연락처: 숫자·공백·-·()만, +는 맨 앞에만(국제번호 허용), 숫자는 9~15자리 (PR #37 리뷰).
+
+    문자 종류만 보면 '--------'처럼 숫자가 없는 값도 통과하므로 숫자 자릿수를 따로 센다.
+    """
+    digits = sum(ch in "0123456789" for ch in value)
+    if not PHONE_CHARS.fullmatch(value) or not PHONE_DIGITS_MIN <= digits <= PHONE_DIGITS_MAX:
+        raise ValidationError(
+            "연락처는 숫자 9~15자리로 입력하세요. -, 공백, 괄호와 맨 앞의 +(국제번호)는 쓸 수 있습니다. "
+            "예: 010-1234-5678, +82 10-1234-5678",
+            code="invalid_phone",
+        )
 
 
 class StudentQuerySet(models.QuerySet):
@@ -28,10 +43,10 @@ class Student(models.Model):
         related_name="students",
     )
     name = models.CharField("이름", max_length=50)
-    phone = models.CharField("연락처", max_length=20, blank=True, validators=[phone_validator])
+    phone = models.CharField("연락처", max_length=20, blank=True, validators=[validate_phone])
     is_minor = models.BooleanField("미성년자", default=False)
     guardian_name = models.CharField("보호자 이름", max_length=50, blank=True)
-    guardian_phone = models.CharField("보호자 연락처", max_length=20, blank=True, validators=[phone_validator])
+    guardian_phone = models.CharField("보호자 연락처", max_length=20, blank=True, validators=[validate_phone])
     memo = models.TextField("메모", blank=True, max_length=1000)
     is_active = models.BooleanField("수강 중", default=True)  # False = 보관(수강 종료)
     created_at = models.DateTimeField(auto_now_add=True)
