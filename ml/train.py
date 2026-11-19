@@ -1,4 +1,4 @@
-"""레슨 메모 분류 모델 학습·평가·저장.
+"""수강생 메시지 분류 모델 학습·평가·저장.
 
     python -m ml.train --version v1
 
@@ -35,7 +35,7 @@ from ml import artifact
 from ml.labels import LABELS
 
 ML_DIR = Path(__file__).resolve().parent
-DATA_PATH = ML_DIR / "data" / "memos.csv"
+DATA_PATH = ML_DIR / "data" / "messages.csv"
 UNSEEN_PATH = ML_DIR / "data" / "unseen.csv"
 RANDOM_STATE = 42
 VAL_SIZE = 0.2
@@ -133,14 +133,15 @@ def format_matrix(cm: dict) -> str:
 
 def write_report(meta: dict, path: Path) -> None:
     lines = [
-        f"# 메모 분류 모델 학습 결과 ({meta['model_version']})",
+        f"# 메시지 분류 모델 학습 결과 ({meta['model_version']})",
         "",
         "> `python -m ml.train`이 자동으로 만드는 파일입니다. 직접 고치지 마세요.",
         "",
         f"- 학습 시각(UTC): {meta['created_at']}",
         f"- 환경: Python {meta['python_version']}, scikit-learn {meta['sklearn_version']}, "
         f"numpy {meta['numpy_version']}",
-        f"- 데이터: `ml/data/memos.csv` {meta['data']['n_total']}건 (SHA-256 앞 12자리 {meta['data']['sha256'][:12]})",
+        f"- 데이터: `ml/data/messages.csv` {meta['data']['n_total']}건 "
+        f"(SHA-256 앞 12자리 {meta['data']['sha256'][:12]})",
         f"- 분리: 학습 {meta['data']['n_train']} / 검증 {meta['data']['n_val']} (층화, 시드 {RANDOM_STATE})",
         f"- 확인용 문장: `ml/data/unseen.csv` {meta['data']['n_unseen']}건 (학습·모델 선택에 쓰지 않음)",
         f"- 선택된 설정: `{meta['best_params']}`",
@@ -195,7 +196,7 @@ def write_report(meta: dict, path: Path) -> None:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="레슨 메모 분류 모델 학습")
+    parser = argparse.ArgumentParser(description="수강생 메시지 분류 모델 학습")
     parser.add_argument("--version", default="v1", help="모델 버전 이름 (예: v1)")
     parser.add_argument("--out-dir", type=Path, default=artifact.DEFAULT_DIR)
     args = parser.parse_args(argv)

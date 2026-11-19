@@ -1,7 +1,7 @@
 from django.apps import AppConfig
 
 
-class MemosConfig(AppConfig):
+class InboxConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
-    name = "memos"
-    verbose_name = "레슨 메모"
+    name = "inbox"
+    verbose_name = "메시지함"

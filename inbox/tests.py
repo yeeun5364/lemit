@@ -9,7 +9,7 @@ from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
-from memos import classifier
+from inbox import classifier
 from ml import artifact, verify
 from ml.labels import LABELS
 from ml.train import UNSEEN_PATH, read_csv
@@ -24,7 +24,7 @@ class BrokenArtifactMixin:
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.addCleanup(classifier.clear_cache)
-        src = Path(settings.MEMO_CLASSIFIER_PATH)
+        src = Path(settings.MESSAGE_CLASSIFIER_PATH)
         self.model_path = self.tmp / src.name
         self.meta_path = artifact.meta_path_for(self.model_path)
         shutil.copy(src, self.model_path)
@@ -36,8 +36,8 @@ class BrokenArtifactMixin:
         self.meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
     def assert_unavailable(self, message_part):
-        with override_settings(MEMO_CLASSIFIER_PATH=self.model_path), self.assertLogs("memos.classifier", "ERROR"):
-            with self.assertRaisesMessage(classifier.MemoClassifierUnavailable, message_part):
+        with override_settings(MESSAGE_CLASSIFIER_PATH=self.model_path), self.assertLogs("inbox.classifier", "ERROR"):
+            with self.assertRaisesMessage(classifier.MessageClassifierUnavailable, message_part):
                 classifier.classify("내일 수업 취소해 주세요")
 
 
@@ -59,12 +59,12 @@ class ClassifyTests(SimpleTestCase):
         correct = sum(classifier.classify(t).label == y for t, y in rows)
         self.assertGreaterEqual(correct / len(rows), classifier.get_model().meta["gate"]["unseen_macro_f1"])
 
-    def test_empty_memo_is_rejected(self):
+    def test_empty_message_is_rejected(self):
         for text in ("", "   ", "\n\t", None):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 classifier.classify(text)
 
-    def test_long_memo_is_truncated(self):
+    def test_long_message_is_truncated(self):
         p = classifier.classify("수업 시간 변경 부탁드려요 " * 200)
         self.assertIn(p.label, LABELS)
 
@@ -77,7 +77,10 @@ class ClassifyTests(SimpleTestCase):
     def test_prediction_error_is_wrapped(self):
         model = classifier.get_model()
         with mock.patch.object(model.pipeline, "predict_proba", side_effect=RuntimeError("boom")):
-            with self.assertRaises(classifier.MemoClassifierUnavailable), self.assertLogs("memos.classifier", "ERROR"):
+            with (
+                self.assertRaises(classifier.MessageClassifierUnavailable),
+                self.assertLogs("inbox.classifier", "ERROR"),
+            ):
                 classifier.classify("내일 수업 취소해 주세요")
 
 
@@ -114,7 +117,7 @@ class ArtifactFailureTests(BrokenArtifactMixin, SimpleTestCase):
         self.model_path.unlink()
         self.assert_unavailable("모델 파일이 없습니다")
         self.model_path.write_bytes(backup)
-        with override_settings(MEMO_CLASSIFIER_PATH=self.model_path):
+        with override_settings(MESSAGE_CLASSIFIER_PATH=self.model_path):
             self.assertEqual(classifier.classify("내일 수업 취소해 주세요").label, "CANCELLATION")
 
 
@@ -122,7 +125,7 @@ class ModelCompatibilityTests(SimpleTestCase):
     def test_committed_model_passes_verify(self):
         """저장소의 모델이 현재 코드·라이브러리·데이터와 맞고, 기록된 점수가 재현되며 기준을 넘는다."""
         with mock.patch("builtins.print"):
-            self.assertEqual(verify.main(settings.MEMO_CLASSIFIER_PATH), 0)
+            self.assertEqual(verify.main(settings.MESSAGE_CLASSIFIER_PATH), 0)
 
 
 class HealthzTests(BrokenArtifactMixin, TestCase):
@@ -132,16 +135,16 @@ class HealthzTests(BrokenArtifactMixin, TestCase):
         body = res.json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["db"], "ok")
-        self.assertEqual(body["memo_classifier"]["status"], "ok")
-        self.assertEqual(body["memo_classifier"]["version"], classifier.get_model().version)
+        self.assertEqual(body["message_classifier"]["status"], "ok")
+        self.assertEqual(body["message_classifier"]["version"], classifier.get_model().version)
         self.assertIn("no-cache", res["Cache-Control"])
 
     def test_missing_model_keeps_service_up(self):
         self.model_path.unlink()
-        with override_settings(MEMO_CLASSIFIER_PATH=self.model_path), self.assertLogs("memos.classifier", "ERROR"):
+        with override_settings(MESSAGE_CLASSIFIER_PATH=self.model_path), self.assertLogs("inbox.classifier", "ERROR"):
             res = self.client.get(reverse("healthz"))
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["memo_classifier"], {"status": "unavailable"})
+        self.assertEqual(res.json()["message_classifier"], {"status": "unavailable"})
 
     def test_db_error_returns_503(self):
         with mock.patch.object(connection, "cursor", side_effect=Exception("db down")):

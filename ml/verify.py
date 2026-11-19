@@ -30,7 +30,7 @@ def main(model_path=None) -> int:
 
     errors = []
     if data_sha256(DATA_PATH) != meta["data"]["sha256"]:
-        errors.append("ml/data/memos.csv가 학습 때와 다릅니다. python -m ml.train으로 다시 학습하세요")
+        errors.append("ml/data/messages.csv가 학습 때와 다릅니다. python -m ml.train으로 다시 학습하세요")
     if data_sha256(UNSEEN_PATH) != meta["data"]["unseen_sha256"]:
         errors.append("ml/data/unseen.csv가 학습 때와 다릅니다. python -m ml.train으로 다시 학습하세요")
 

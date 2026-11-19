@@ -19,8 +19,8 @@ from pathlib import Path
 from ml.labels import LABELS
 
 DEFAULT_DIR = Path(__file__).resolve().parent / "artifacts"
-MODEL_FILENAME = "memo_classifier.joblib"
-META_FILENAME = "memo_classifier.json"
+MODEL_FILENAME = "message_classifier.joblib"
+META_FILENAME = "message_classifier.json"
 
 
 class ArtifactError(Exception):

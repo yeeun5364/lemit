@@ -34,7 +34,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "accounts",
-    "memos",
+    "inbox",
 ]
 
 MIDDLEWARE = [
@@ -100,9 +100,9 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
-# 레슨 메모 분류 모델 (ml/). 학습은 개발 PC에서 하고, 검증된 모델 파일을 저장소·이미지에 포함한다.
-# 경로를 바꿀 때만 MEMO_CLASSIFIER_PATH를 지정한다.
+# 수강생 메시지 분류 모델 (ml/). 학습은 개발 PC에서 하고, 검증된 모델 파일을 저장소·이미지에 포함한다.
+# 경로를 바꿀 때만 MESSAGE_CLASSIFIER_PATH를 지정한다.
 
-MEMO_CLASSIFIER_PATH = Path(
-    env.str("MEMO_CLASSIFIER_PATH", default=str(BASE_DIR / "ml" / "artifacts" / "memo_classifier.joblib"))
+MESSAGE_CLASSIFIER_PATH = Path(
+    env.str("MESSAGE_CLASSIFIER_PATH", default=str(BASE_DIR / "ml" / "artifacts" / "message_classifier.joblib"))
 )

@@ -6,5 +6,5 @@ LABEL_DISPLAY = {
     "CANCELLATION": "휴강 요청",
     "MAKEUP": "보강 요청",
     "RESCHEDULE": "일정 변경",
-    "GENERAL": "일반 메모",
+    "GENERAL": "일반 메시지",
 }
