@@ -35,6 +35,4 @@ class UserAdmin(BaseUserAdmin):
         ("권한", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
         ("기록", {"fields": ("last_login", "date_joined")}),
     )
-    add_fieldsets = (
-        (None, {"classes": ("wide",), "fields": ("email", "name", "password1", "password2")}),
-    )
+    add_fieldsets = ((None, {"classes": ("wide",), "fields": ("email", "name", "password1", "password2")}),)

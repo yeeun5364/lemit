@@ -1,5 +1,7 @@
 # LEMIT (레밋)
 
+[![CI](https://github.com/yeeun5364/lemit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yeeun5364/lemit/actions/workflows/ci.yml)
+
 > **Lesson + Meet** · 배움과 사람이 만나는 공간
 > 수업의 모든 흐름을 하나로
 
@@ -44,7 +46,7 @@
 | 확장 | 수업일지·진도 기록 | ⬜ | |
 | 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
 | 인프라 | Docker 실행 환경 | ⬜ | |
-| 인프라 | GitHub Actions (테스트) | ⬜ | |
+| 인프라 | GitHub Actions (테스트) | 🟡 | 린트·PostgreSQL 18 테스트 워크플로 작성 (#6). 이미지 검증은 #5 이후 |
 | 인프라 | AWS Lightsail 배포 | ⬜ | |
 
 ## 회차 상태와 차감 규칙
@@ -176,13 +178,26 @@ python manage.py runserver
 - `DATABASE_URL`의 호스트는 `localhost` 대신 **`127.0.0.1`**을 씁니다. Windows에서 `localhost`가 IPv6(`::1`)로 먼저 연결을 시도해 DB 연결이 멈추는 문제가 있었습니다.
 - `.env` 값에는 `$` 문자를 쓰지 않습니다. Docker Compose가 변수로 해석합니다.
 
-### 테스트
+### 테스트와 코드 검사
 
 ```bash
-python manage.py test
+python manage.py test                   # 테스트 (PostgreSQL에 임시 DB test_lemit을 만들고 끝나면 지움)
+
+pip install -r requirements-dev.txt     # 개발 도구(ruff) 설치
+ruff check .                            # 린트
+ruff format .                           # 포맷 자동 정리 (CI는 --check로 검사만)
 ```
 
-테스트는 PostgreSQL에 임시 DB(`test_lemit`)를 만들어 실행하고 끝나면 지웁니다.
+### CI (GitHub Actions)
+
+`main`에 push하거나 PR을 올리면 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)이 자동으로 실행됩니다.
+
+| 작업 | 내용 |
+|---|---|
+| 린트 (ruff) | `ruff check`, `ruff format --check` |
+| 테스트 (PostgreSQL 18) | PostgreSQL 18 서비스 컨테이너를 띄우고 `manage.py check`, 마이그레이션 누락 확인(`makemigrations --check`), `manage.py test` |
+
+- Docker 이미지 빌드·스모크 테스트는 Dockerfile이 생기는 #5 이후 추가합니다.
 
 ## 시연 자료
 
@@ -219,6 +234,9 @@ lemit/
 ├── CLAUDE.md              # Claude Code 작업 지침 (devlog 자동 기록 규칙)
 ├── manage.py
 ├── requirements.txt       # 패키지 버전 고정
+├── requirements-dev.txt   # 개발 도구 (ruff)
+├── pyproject.toml         # ruff 설정
+├── .github/workflows/     # CI (GitHub Actions)
 ├── compose.yaml           # 개발용 PostgreSQL 18 (web은 #5에서 추가)
 ├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
 ├── config/                # Django 프로젝트 설정 (settings, urls)
