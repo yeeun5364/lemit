@@ -226,7 +226,9 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `Enrollment.label` | 같은 강사의 라벨만 연결 | 폼 선택지 제한 + 모델 `clean()` 재검증 + 격리 테스트 (2-5, UC-16) |
 | `Conversation` | `student.teacher == teacher`. 다른 강사의 대화는 404 | 폼 선택지 제한 + 모델 `clean()` + 뷰 쿼리셋 + 격리 테스트 (UC-17) |
 | `Message.body` | 공백만 있는 메시지 불가 | 폼 검증 (UC-17) |
-| `Message` AI 분류 | `sender = teacher`이면 분류 필드는 비움. 분류 결과로 일정·상태를 바꾸지 않음 | 앱 (UC-17) |
+| `Message` AI 분류 | `sender = teacher`이면 분류 필드는 비움. 분류 결과로 일정·상태를 바꾸지 않음 | DB `CheckConstraint`(강사 메시지 분류 금지) + 앱 (UC-17) |
+| `Message.confidence` | 0 이상 1 이하 | DB `CheckConstraint` (UC-17) |
+| `Conversation` | 같은 강사·수강생·제목이면 새 대화를 만들지 않고 이어 붙임 | 앱 (UC-17 수강생 메시지 추가) |
 | 시간 겹침 | 같은 강사의 회차가 겹치면 **경고만** (저장 허용) | 앱 검증 (UC-04) |
 
 **삭제 정책 (기록 보존)**
@@ -239,6 +241,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
 | LessonSession → LessonRecord | `CASCADE` | 회차와 일지는 운명을 같이함 |
 | LessonSession → makeup_for | `SET_NULL` | 원래 회차가 없어져도 보강 기록은 유지 |
+| User → Conversation | `PROTECT` | 강사 계정을 지워도 대화 기록이 함께 지워지지 않게 (UC-17) |
 | Student → Conversation | `PROTECT` | 수강생은 보관(`is_active=false`)만 하므로 대화 기록 유지 |
 | Conversation → Message | `CASCADE` | 대화와 메시지는 운명을 같이함 |
 

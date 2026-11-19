@@ -39,6 +39,9 @@
     {% block tabs %}
     <a href="{% url 'home' %}" class="tab{% if request.resolver_match.url_name == 'home' %} is-active{% endif %}">홈</a>
     <a href="{% url 'students:list' %}" class="tab{% if request.resolver_match.app_name == 'students' %} is-active{% endif %}">수강생</a>
+    {% with unread=inbox_unread %}
+    <a href="{% url 'inbox:list' %}" class="tab{% if request.resolver_match.app_name == 'inbox' %} is-active{% endif %}">메시지{% if unread %}<span class="tab-count" aria-label="안 읽은 메시지 {{ unread }}개">{{ unread }}</span>{% endif %}</a>
+    {% endwith %}
     {% endblock %}
   </nav>
   {% endif %}
