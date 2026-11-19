@@ -6,9 +6,7 @@ from django.test import TestCase
 
 class UserModelTests(TestCase):
     def test_create_user_with_email(self):
-        user = get_user_model().objects.create_user(
-            email="Teacher@Example.com", password="s3cure-pass!", name="김강사"
-        )
+        user = get_user_model().objects.create_user(email="Teacher@Example.com", password="s3cure-pass!", name="김강사")
         self.assertEqual(user.email, "Teacher@example.com")  # 도메인 부분은 소문자로 정규화
         self.assertTrue(user.check_password("s3cure-pass!"))
         self.assertNotEqual(user.password, "s3cure-pass!")  # 해시로 저장

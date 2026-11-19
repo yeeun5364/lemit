@@ -1,0 +1,16 @@
+[project]
+name = "lemit"
+version = "0.1.0"
+requires-python = ">=3.14"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: import 정렬, UP: 최신 문법, B: 흔한 버그, DJ: Django 규칙
+select = ["E", "W", "F", "I", "UP", "B", "DJ"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "accounts"]
