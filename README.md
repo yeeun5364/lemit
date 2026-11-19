@@ -50,7 +50,7 @@
 | 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
 | 인프라 | Docker 실행 환경 | 🟡 | web(gunicorn)+db 컨테이너, 이미지 안 모델 검증·추론, 헬스체크·스모크 테스트. PC에서 운영·개발 구성 모두 확인, PR 검토 중 (#5) |
 | 인프라 | GitHub Actions (테스트) | 🟡 | 린트·PostgreSQL 18 테스트 워크플로 작성 (#6). 이미지 검증은 #5 이후 |
-| 인프라 | AWS Lightsail 배포 | 🟡 | 배포 준비 완료: Caddy TLS 프록시, 운영 보안 설정, 배포·자동 롤백 스크립트, 절차서([docs/DEPLOY.md](docs/DEPLOY.md)). PC 연습 배포·롤백 검증. **실제 서버 배포는 아직** (#7) |
+| 인프라 | AWS Lightsail 배포 | 🟡 | 배포 준비 완료: Caddy TLS 프록시, 운영 보안 설정, 배포·자동 롤백 스크립트, 절차서([docs/DEPLOY.md](docs/DEPLOY.md)). PC 연습 배포·롤백 검증. Lightsail 서버(Amazon Linux 2023, 2GB) 생성됨, 서버 준비 절차(dnf·Compose/Buildx 플러그인·스왑·고정 IP)와 `scripts/server_check.sh` 추가. **실제 서버 배포는 아직** (#7) |
 
 ## 회차 상태와 차감 규칙
 

@@ -1,6 +1,7 @@
 # LEMIT 배포 절차서 (AWS Lightsail)
 
 > **상태 (2026-11-19):** 절차와 스크립트는 **PC에서 연습 배포로 검증**했습니다. 검증한 항목은 첫 배포, 두 번째 배포, 수동 롤백, 모델 손상 시 자동 롤백, Caddy 프록시를 거친 웹 동선, 공개 경로 확인 실패 시 미확정, 운영 `.env` 사전 점검(14개 시나리오)입니다. 프록시 시나리오와 사전 점검 시나리오는 CI에서도 매번 돌립니다. **실제 Lightsail 서버 배포는 아직 하지 않았습니다** (#7).
+> 실제 서버 `lemit-server`(Amazon Linux 2023)는 생성되었고, 서버 준비(§1)부터 사용자가 직접 진행합니다. §1의 설치 명령은 Ubuntu에서 Amazon Linux 2023 기준으로 바꿨습니다(2026-11-19).
 > 기준 문서: [OPERATIONS.md](OPERATIONS.md) (운영 원칙), [ML.md](ML.md) §6 (모델 배포·롤백)
 
 ## 0. 구성 한눈에 보기
@@ -14,31 +15,57 @@ SSH 22 (내 IP만) ── 관리자
 - 인터넷에 여는 포트는 **22(관리자 IP만), 80, 443**뿐입니다. 8000(web)과 5432(DB)는 열지 않습니다.
 - 앱 이미지 태그 = 커밋 SHA입니다. 모델 파일이 이미지 안에 있어서 **앱과 모델이 함께 배포되고 함께 롤백**됩니다.
 
-## 1. 서버 준비 (한 번만, 사용자가 직접)
+## 1. 서버 준비 (한 번만, 사용자가 직접) — Amazon Linux 2023
 
-1. **Lightsail 인스턴스:** Linux/Unix → **Ubuntu 24.04 LTS**.
-   - 권장 사양은 **2GB 메모리** 이상입니다(최소 1GB).
-   - PC 연습에서 잰 사용량은 web 약 250MB(gunicorn worker 2개 + 모델), DB 약 40MB, 프록시 약 13MB였습니다.
-   - 2GB를 권장하는 이유는 서버에서 이미지를 빌드(패키지 설치)할 때 메모리가 더 들기 때문입니다.
-2. **고정 IP(Static IP)** 를 만들어 인스턴스에 연결합니다.
-3. **Lightsail 네트워킹(방화벽):**
-   - SSH 22: "내 IP로 제한"
-   - HTTP 80, HTTPS 443: 허용
-   - **그 외 포트(특히 5432, 8000)는 추가하지 않습니다.**
-4. SSH 키로 접속합니다. Lightsail 콘솔에서 받은 키 또는 내 공개키를 씁니다. 비밀번호 로그인은 쓰지 않습니다.
-5. Docker를 설치합니다. 공식 문서의 Ubuntu 저장소 방식을 따릅니다.
+> 실제 서버: Lightsail `lemit-server`, **Amazon Linux 2023**, Sydney(`ap-southeast-2`), 2GB RAM·2 vCPU·60GB SSD, SSH 사용자 `ec2-user` (2026-11-19 생성).
+> 아래 설치 명령은 `amazonlinux:2023` 컨테이너에서 실행해 확인했습니다. dnf로 docker 25.0·git 설치를 확인했고, 플러그인 설치 스크립트는 정상 설치 외에 변조 파일·체크섬 항목 누락·알 수 없는 아키텍처일 때 아무것도 설치하지 않는 것까지 확인했습니다. **실제 서버에서는 아직 실행하지 않았습니다.**
+
+1. **사양:** 2GB 메모리면 충분합니다.
+   - PC 연습에서 잰 사용량은 web 약 250MB(gunicorn worker 2개 + 모델), DB 약 40MB, 프록시 약 13MB입니다.
+   - 서버에서 이미지를 빌드(패키지 설치)할 때는 메모리가 더 들고, 기본 상태에는 스왑이 없으므로 아래 4번에서 **스왑 2GB**를 만듭니다.
+2. **고정 IP(Static IP):** Lightsail 콘솔 → 네트워킹 → 고정 IP 생성 → `lemit-server`에 연결합니다.
+   - 연결하지 않으면 인스턴스를 중지했다 시작할 때 공인 IP가 바뀝니다. 그러면 `.env`의 `DJANGO_ALLOWED_HOSTS`, 시연 주소, SSH 접속 주소가 모두 틀어집니다.
+   - 고정 IP를 연결하면 공인 IP가 새 고정 IP로 바뀝니다. 이후에는 **고정 IP를 기준으로** `.env`와 SSH 주소를 씁니다.
+3. **Lightsail 네트워킹(방화벽)**, 인스턴스의 IPv4 방화벽 기준입니다.
+   - SSH 22: **"IP 주소로 제한"에서 내 IP만 허용.** Lightsail 기본값은 모든 IP 허용입니다.
+   - HTTP 80: 허용
+   - HTTPS 443: 도메인을 쓸 때 추가
+   - **그 외 포트(특히 5432, 8000)는 추가하지 않습니다.** IPv6 방화벽을 켰다면 같은 규칙을 적용합니다.
+4. **스왑 2GB** (서버에서 실행). 다시 실행해도 안전합니다. 이미 있으면 만들지 않고, fstab에도 중복으로 넣지 않습니다.
    ```bash
-   sudo apt-get update && sudo apt-get install -y ca-certificates curl git
-   sudo install -m 0755 -d /etc/apt/keyrings
-   sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | sudo tee /etc/apt/sources.list.d/docker.list
-   sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-   sudo usermod -aG docker $USER   # 다시 접속하면 sudo 없이 docker 사용
+   if [ ! -f /swapfile ]; then
+     sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress && sudo chmod 600 /swapfile && sudo mkswap /swapfile
+   fi
+   swapon --show | grep -q '^/swapfile ' || sudo swapon /swapfile
+   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # 재부팅 후에도 유지
+   free -h                                                    # Swap 2.0Gi 확인
    ```
-6. 코드를 받습니다.
+5. **Docker, git 설치와 코드 받기** (Amazon Linux 2023 저장소):
    ```bash
+   sudo dnf install -y docker git
+   sudo systemctl enable --now docker
+   sudo usermod -aG docker ec2-user   # 로그아웃 후 다시 접속해야 sudo 없이 docker 사용
    git clone https://github.com/yeeun5364/lemit.git && cd lemit
    ```
+6. **Docker Compose·Buildx 플러그인 설치.** Amazon Linux 2023 저장소에 없어서 GitHub 릴리스에서 받습니다.
+   ```bash
+   sudo bash scripts/install_docker_plugins.sh
+   docker compose version && docker buildx version
+   ```
+   - 버전을 고정합니다: Compose v5.6.1(2026-10-21), Buildx v0.38.1(2026-10-20). 나온 지 2주가 지난 버전 중에서 골랐습니다.
+   - **두 파일의 sha256 체크섬이 모두 맞을 때만 설치합니다.**
+     - 스크립트는 `set -euo pipefail`로 실행되어, 어느 단계든 실패하면 즉시 멈춥니다.
+     - 체크섬이 틀리거나 항목이 없으면 아무것도 설치하지 않고 종료 코드 1로 끝납니다.
+     - 지원하지 않는 CPU 아키텍처(x86_64·aarch64 외)도 바로 중단합니다(PR #41 리뷰).
+   - 저장소의 docker 버전(25.0)과 Compose v5 조합은 실제 서버에서 처음 실행합니다. `docker compose up`이나 `build`에서 API 버전 오류가 나면 그 출력을 그대로 알려주세요.
+7. **서버 점검:**
+   ```bash
+   bash scripts/server_check.sh   # 읽기 전용. OS·메모리·스왑·디스크·도구·docker 그룹·열린 포트·.env 확인
+   ```
+   - `[필수]` 항목이 0건이 될 때까지 위 단계를 보완합니다.
+   - 5432·8000이 loopback(127.x, ::1)이 아닌 주소에 열려 있으면 `[필수]`입니다.
+   - 포트 목록을 얻지 못하면 정상으로 보지 않고 `[주의]`로 알립니다(`sudo dnf install -y iproute`).
+   - `.env`는 다음 단계에서 만들므로, 이 시점에 `.env`가 없다는 `[주의]`는 정상입니다.
 
 ## 2. 운영 `.env` 만들기 (서버에서 사용자가 직접)
 
@@ -48,15 +75,16 @@ SSH 22 (내 IP만) ── 관리자
 cp .env.example .env
 python3 -c "import secrets; print('DJANGO_SECRET_KEY=' + secrets.token_urlsafe(50))"   # 출력값을 .env에 붙여넣기
 python3 -c "import secrets; print('POSTGRES_PASSWORD=' + secrets.token_urlsafe(32))"   # 출력값을 .env에 붙여넣기
-nano .env
+vi .env                     # nano를 쓰려면: sudo dnf install -y nano
 chmod 600 .env
+bash scripts/server_check.sh   # 운영 .env 사전 점검까지 다시 확인
 ```
 
 | 변수 | 도메인 + HTTPS | IP로 HTTP 시연 (도메인 없음) |
 |---|---|---|
 | `DJANGO_DEBUG` | `False` | `False` |
-| `DJANGO_ALLOWED_HOSTS` | `lemit.example.com,localhost` | `서버IP,localhost` |
-| `DJANGO_CSRF_TRUSTED_ORIGINS` | `https://lemit.example.com` | `http://서버IP` |
+| `DJANGO_ALLOWED_HOSTS` | `lemit.example.com,localhost` | `고정IP,localhost` |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | `https://lemit.example.com` | `http://고정IP` |
 | `SITE_ADDRESS` | `lemit.example.com` (Caddy가 인증서 자동 발급) | `:80` |
 | `DJANGO_BEHIND_PROXY` | `True` | `True` |
 | `DJANGO_SECURE_HTTPS` | `True` (HTTPS 강제, 보안 쿠키) | `False` |
@@ -123,10 +151,11 @@ docker compose exec web python manage.py createsuperuser
    2. 수강생 등록
    3. **메시지함 → [+ 수강생 메시지]** → "수요일에 못 가서 금요일에 보강 가능할까요?" 입력
    4. **분류 배지**(예: "보강 요청 · 63%")와 메시지함 '보강' 탭 확인
-3. 외부에서 막혀 있어야 하는 포트를 확인합니다(PC에서 실행). 둘 다 연결되지 않아야 합니다.
-   ```bash
-   nc -vz 서버IP 5432
-   nc -vz 서버IP 8000
+3. 외부에서 막혀 있어야 하는 포트를 확인합니다. **Windows PC의 PowerShell**에서 실행하며, 5432·8000은 `TcpTestSucceeded : False`, 80은 `True`여야 합니다.
+   ```powershell
+   Test-NetConnection 고정IP -Port 5432
+   Test-NetConnection 고정IP -Port 8000
+   Test-NetConnection 고정IP -Port 80
    ```
 4. 컨테이너 상태와 메모리를 확인합니다.
    ```bash
