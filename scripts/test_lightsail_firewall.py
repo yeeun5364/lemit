@@ -101,13 +101,20 @@ if __name__ == "__main__":
 
 # ---------- 가짜 aws CLI로 실제 적용 흐름 시험 (PR #43 리뷰 P1·P2) ----------
 
+import io  # noqa: E402
 import os  # noqa: E402
 import tempfile  # noqa: E402
+from contextlib import redirect_stdout  # noqa: E402
 
 from lightsail_firewall import FirewallError, apply, main, ssh_allows  # noqa: E402
 
 FAKE = Path(__file__).resolve().parent / "fake_aws_lightsail.py"
 HTTPS_RULE = {"fromPort": 443, "toPort": 443, "protocol": "tcp", "cidrs": ["0.0.0.0/0"]}
+
+
+def utf8_env():
+    """하위 프로세스 출력을 UTF-8로 읽도록 (Windows 기본 cp949에서는 한국어 출력 해석 실패, #53)."""
+    return dict(os.environ, PYTHONIOENCODING="utf-8")
 
 
 class ApplyWithFakeAwsTests(unittest.TestCase):
@@ -222,14 +229,44 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=utf8_env(),
         )
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(ssh_allows(self.read(), RUNNER))
         self.assertNotIn(ADMIN.split("/")[0], done.stdout + done.stderr)
 
+    # aws CLI가 실패하는 상황: stderr에 이유를 남기고 종료 코드 3
+    FAILING_AWS = f'"{sys.executable}" -c "import sys; sys.stderr.write(\'fake aws denied\'); sys.exit(3)"'
+    EXPECTED_ERROR = "::error::[firewall] aws lightsail get-instance-port-states 실패: fake aws denied"
+
     def test_main_reports_aws_failure(self):
-        os.environ["LIGHTSAIL_AWS_CLI"] = f'"{sys.executable}" -c "import sys; sys.exit(3)"'
-        self.assertEqual(main(["open", "--instance", "lemit-server", "--cidr", RUNNER]), 1)
+        """aws 실패 → 종료 코드 1과 ::error:: 한 줄 (#53).
+
+        이 출력은 배포 워크플로에서 오류 주석이 되도록 일부러 ::error::로 시작한다. 테스트에서는 캡처해
+        검증만 하고 CI 로그로 내보내지 않는다 (내보내면 CI에 가짜 오류 주석이 생긴다).
+        """
+        os.environ["LIGHTSAIL_AWS_CLI"] = self.FAILING_AWS
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(["open", "--instance", "lemit-server", "--cidr", RUNNER])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.getvalue().splitlines(), [self.EXPECTED_ERROR])
+        self.assertEqual(self.read().get("puts", 0), 0)  # 실패 시 규칙을 쓰지 않음
+
+    def test_cli_process_reports_aws_failure(self):
+        """명령줄 실행(워크플로와 같은 방식)도 종료 코드 1과 같은 오류 줄. 출력은 subprocess가 캡처한다 (#53)."""
+        os.environ["LIGHTSAIL_AWS_CLI"] = self.FAILING_AWS
+        script = Path(__file__).resolve().parent / "lightsail_firewall.py"
+        done = subprocess.run(
+            [sys.executable, str(script), "open", "--instance", "lemit-server", "--cidr", RUNNER],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=utf8_env(),
+        )
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(done.stdout.splitlines(), [self.EXPECTED_ERROR])
+        self.assertEqual(done.stderr, "")
 
 
 def normalize_states(db):
