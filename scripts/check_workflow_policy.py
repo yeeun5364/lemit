@@ -1,19 +1,23 @@
 """Self-hosted 러너 사용 규칙 검사 (#56). CI 린트 작업에서:  python scripts/check_workflow_policy.py
 
 공개 저장소에서 개인 PC의 Self-hosted 러너를 쓰므로, 워크플로가 실수로 바뀌어 PR 코드가 러너에서 돌지 않게 한다.
-(악의적인 포크 PR은 자기 워크플로 파일을 바꿀 수 있으므로, 그 경우는 저장소 설정 '외부 기여자 승인'이 막는다.
- 이 검사는 저장소 안의 실수를 막는 장치다. docs/CD.md §보안)
+이 검사는 **저장소 안의 실수**를 막는 장치다. 포크 PR은 자기 워크플로 파일로 실행되므로 이 검사로는 막을 수 없고,
+저장소 설정 '모든 외부 기여자 승인'과 러너 격리에 의존한다 (완전한 차단이 아님, docs/CD.md §1).
 
 규칙
-1. self-hosted 러너는 deploy.yml만 쓴다. 다른 워크플로에는 'self-hosted' 글자 자체가 없어야 한다.
-2. deploy.yml의 트리거는 workflow_run(CI, main 브랜치)과 workflow_dispatch만. pull_request·push 등은 금지.
-3. deploy.yml에서 self-hosted 작업은
+1. deploy.yml이 아닌 워크플로
+   - 'self-hosted' 글자가 주석 밖에 없어야 한다.
+   - 모든 작업의 runs-on은 GitHub-hosted 라벨 문자열(ubuntu-*, windows-*, macos-*)이어야 한다 (표현식·그룹 금지).
+2. deploy.yml 트리거는 workflow_run {workflows: [CI], types: [completed], branches: [main]}과 workflow_dispatch만.
+3. deploy.yml의 self-hosted 작업은 정확히 하나이고
    - environment: production (배포 키 Secret은 main 브랜치에서만 받음)
-   - needs로 GitHub-hosted 검증 작업 뒤에 실행
-   - if에 github.repository 조건 (포크에서 실행 안 함)
+   - needs의 모든 작업이 GitHub-hosted이고, 그 작업의 if에 저장소·이벤트·ref 조건이 모두 있음
+   - 자기 if에 github.repository 조건
+   - 작업 단위 concurrency(cancel-in-progress: false)
    - 액션(uses)을 쓰지 않고 run 단계만 (저장소 코드·외부 액션을 개인 PC에서 실행하지 않음)
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -21,21 +25,22 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 DEPLOY = "deploy.yml"
-ALLOWED_TRIGGERS = {"workflow_run", "workflow_dispatch"}
+HOSTED = re.compile(r"^(ubuntu|windows|macos)-[A-Za-z0-9.\-]+$")
+WORKFLOW_RUN = {"workflows": ["CI"], "types": ["completed"], "branches": ["main"]}
+# 검증 작업(GitHub-hosted)의 if에 반드시 있어야 하는 조건 (공백은 무시하고 비교)
+GATE_CONDITIONS = [
+    "github.repository == 'yeeun5364/lemit'",
+    "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+    "github.event_name == 'workflow_run'",
+    "github.event.workflow_run.conclusion == 'success'",
+    "github.event.workflow_run.event == 'push'",
+    "github.event.workflow_run.head_branch == 'main'",
+    "github.event.workflow_run.head_repository.full_name == github.repository",
+]
 
 
-def _labels(runs_on):
-    """runs-on 값(문자열·목록·{group, labels})에서 라벨 문자열을 모두 꺼낸다."""
-    if isinstance(runs_on, str):
-        return [runs_on]
-    if isinstance(runs_on, list):
-        return [str(x) for x in runs_on]
-    if isinstance(runs_on, dict):
-        out = []
-        for v in runs_on.values():
-            out.extend(_labels(v))
-        return out
-    return [] if runs_on is None else [str(runs_on)]
+def _squash(text):
+    return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
 def _triggers(doc):
@@ -47,49 +52,66 @@ def _triggers(doc):
     return on or {}
 
 
+def _is_hosted(job):
+    runs_on = (job or {}).get("runs-on")
+    return isinstance(runs_on, str) and bool(HOSTED.match(runs_on))
+
+
 def _is_self_hosted(job):
-    labels = _labels(job.get("runs-on"))
-    return any("self-hosted" in label for label in labels) or isinstance(job.get("runs-on"), dict)
+    runs_on = (job or {}).get("runs-on")
+    if runs_on is None:
+        return False
+    return not _is_hosted(job)  # GitHub-hosted 문자열이 아니면 모두 self-hosted로 본다 (목록·그룹·표현식)
 
 
-def check_text(name, text):
-    """deploy.yml이 아닌 워크플로: 주석을 뺀 본문에 self-hosted가 있으면 안 된다 (표현식으로 넣는 경우까지)."""
-    if name == DEPLOY:
-        return []
+def check_other(name, text, doc):
+    errors = []
     for n, line in enumerate(text.splitlines(), 1):
-        code = line.split("#", 1)[0]
-        if "self-hosted" in code:
-            return [f"{name}:{n}: self-hosted 러너는 {DEPLOY}에서만 쓸 수 있습니다"]
-    return []
+        if "self-hosted" in line.split("#", 1)[0]:
+            errors.append(f"{name}:{n}: self-hosted 러너는 {DEPLOY}에서만 쓸 수 있습니다")
+            break
+    for key, job in (doc.get("jobs") or {}).items():
+        if (job or {}).get("runs-on") is not None and not _is_hosted(job):
+            errors.append(f"{name} jobs.{key}: runs-on은 GitHub-hosted 라벨 문자열이어야 합니다 (ubuntu-latest 등)")
+    return errors
 
 
 def check_deploy(doc):
     errors = []
     triggers = _triggers(doc)
-    extra = set(triggers) - ALLOWED_TRIGGERS
+    extra = set(triggers) - {"workflow_run", "workflow_dispatch"}
     if extra:
         errors.append(f"{DEPLOY}: 허용하지 않는 트리거 {sorted(extra)} (workflow_run·workflow_dispatch만)")
-    run = triggers.get("workflow_run")
-    if "workflow_run" in triggers:
-        run = run or {}
-        if run.get("workflows") != ["CI"] or run.get("branches") != ["main"]:
-            errors.append(f"{DEPLOY}: workflow_run은 workflows: [CI], branches: [main]이어야 합니다")
+    if "workflow_run" in triggers and (triggers["workflow_run"] or {}) != WORKFLOW_RUN:
+        errors.append(f"{DEPLOY}: workflow_run은 workflows: [CI], types: [completed], branches: [main]만 허용합니다")
+
     jobs = doc.get("jobs") or {}
-    self_hosted = {k: j for k, j in jobs.items() if _is_self_hosted(j or {})}
-    if not self_hosted:
-        errors.append(f"{DEPLOY}: self-hosted 작업이 없습니다")
+    self_hosted = {k: j for k, j in jobs.items() if _is_self_hosted(j)}
+    if len(self_hosted) != 1:
+        errors.append(f"{DEPLOY}: self-hosted 작업은 정확히 하나여야 합니다 (지금 {len(self_hosted)}개)")
     for key, job in self_hosted.items():
         where = f"{DEPLOY} jobs.{key}"
         env = job.get("environment")
-        env_name = env.get("name") if isinstance(env, dict) else env
-        if env_name != "production":
+        if (env.get("name") if isinstance(env, dict) else env) != "production":
             errors.append(f"{where}: environment: production 이어야 합니다")
         needs = job.get("needs") or []
         needs = [needs] if isinstance(needs, str) else list(needs)
-        if not needs or any(_is_self_hosted(jobs.get(n) or {}) for n in needs):
+        if not needs:
             errors.append(f"{where}: needs로 GitHub-hosted 검증 작업 뒤에 실행해야 합니다")
+        for need in needs:
+            gate = jobs.get(need)
+            if not _is_hosted(gate):
+                errors.append(f"{where}: needs의 {need}는 GitHub-hosted 검증 작업이어야 합니다")
+                continue
+            cond = _squash(gate.get("if"))
+            for c in GATE_CONDITIONS:
+                if _squash(c) not in cond:
+                    errors.append(f"{DEPLOY} jobs.{need}: if에 조건이 없습니다: {c}")
         if "github.repository ==" not in str(job.get("if", "")):
             errors.append(f"{where}: if에 github.repository 조건이 있어야 합니다")
+        conc = job.get("concurrency")
+        if not isinstance(conc, dict) or not conc.get("group") or conc.get("cancel-in-progress") is not False:
+            errors.append(f"{where}: 작업 단위 concurrency(group, cancel-in-progress: false)가 있어야 합니다")
         for i, step in enumerate(job.get("steps") or []):
             if "uses" in (step or {}):
                 errors.append(f"{where}.steps[{i}]: self-hosted 작업에서는 액션(uses)을 쓰지 않습니다")
@@ -101,14 +123,8 @@ def check(workflows_dir=WORKFLOWS):
     files = sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml"))
     for path in files:
         text = path.read_text(encoding="utf-8")
-        errors += check_text(path.name, text)
-        if path.name == DEPLOY:
-            errors += check_deploy(yaml.safe_load(text) or {})
-        else:
-            doc = yaml.safe_load(text) or {}
-            for key, job in (doc.get("jobs") or {}).items():
-                if _is_self_hosted(job or {}):
-                    errors.append(f"{path.name} jobs.{key}: self-hosted 러너는 {DEPLOY}에서만 쓸 수 있습니다")
+        doc = yaml.safe_load(text) or {}
+        errors += check_deploy(doc) if path.name == DEPLOY else check_other(path.name, text, doc)
     if not any(p.name == DEPLOY for p in files):
         errors.append(f"{DEPLOY}가 없습니다")
     return errors
@@ -120,7 +136,9 @@ def main():
         print(f"[workflow-policy] {e}")
     if errors:
         return 1
-    print("[workflow-policy] 통과: self-hosted 러너는 deploy.yml의 배포 작업만, PR 트리거 없음")
+    print(
+        "[workflow-policy] 통과: self-hosted 러너는 deploy.yml의 배포 작업 하나만, PR 트리거 없음, 검증 작업 조건 있음"
+    )
     return 0
 
 
