@@ -1449,3 +1449,40 @@ class StudentListRemainingTests(TestCase):
         page = self.client.get(reverse("students:detail", args=[s.pk]))
         self.assertContains(page, "잔여 적음")
         self.assertContains(page, 'class="is-low"')
+
+
+# ---------------------------------------------------------------------------
+# UC-02 보관 마무리 (#9): 한 트랜잭션, 보관 해제의 의미
+# ---------------------------------------------------------------------------
+
+
+class ArchiveTransactionTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        e = make_pass(self.student)
+        self.planned = [add_session(e, day=d) for d in (21, 22)]
+        self.done = add_session(e, LessonSession.Status.COMPLETED, day=14)
+        self.client.force_login(self.teacher)
+
+    def test_archive_failure_rolls_back_session_deletion(self):
+        """예정 회차를 지운 뒤 보관 저장이 실패하면 삭제도 되돌린다 (둘 다 되거나 둘 다 안 됨)."""
+        from unittest import mock
+
+        with (
+            mock.patch.object(Student, "save", side_effect=RuntimeError("저장 실패")),
+            self.assertRaises(RuntimeError),
+            self.assertLogs("django.request", "ERROR"),  # 의도된 500 로그는 테스트 출력에 남기지 않음
+        ):
+            self.client.post(reverse("students:archive", args=[self.student.pk]))
+        self.student.refresh_from_db()
+        self.assertTrue(self.student.is_active)
+        self.assertEqual(LessonSession.objects.filter(status="scheduled").count(), 2)
+
+    def test_restore_brings_back_active_status_but_not_deleted_sessions(self):
+        """보관 해제는 '수강 중' 상태만 되돌린다. 보관 때 지운 예정 회차는 되살리지 않는다 (필요하면 다시 등록)."""
+        self.client.post(reverse("students:archive", args=[self.student.pk]))
+        self.client.post(reverse("students:restore", args=[self.student.pk]))
+        self.student.refresh_from_db()
+        self.assertTrue(self.student.is_active)
+        self.assertEqual(list(LessonSession.objects.all()), [self.done])

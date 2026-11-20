@@ -116,10 +116,34 @@ class ClassificationFlowTests(InboxTestBase):
         self.assertEqual(self.client.get(reverse("inbox:list")).context["inbox_unread"](), 0)
 
     def test_classification_does_not_change_student_or_other_data(self):
-        """예측은 참고용: 분류 후 수강생 정보가 바뀌지 않는다. (회차 불변 확인은 UC-04 회차 모델이 생기면 추가)"""
+        """예측은 참고용: 분류 후 수강생 정보가 바뀌지 않는다."""
         before = Student.objects.values().get(pk=self.student.pk)
         self.post_student_message()
         self.assertEqual(Student.objects.values().get(pk=self.student.pk), before)
+
+    def test_classification_does_not_change_sessions_or_passes(self):
+        """UC-17 수용 기준: 휴강·보강·일정 변경으로 분류돼도 회차의 상태·일시와 레슨권은 그대로다 (ERD 2-10)."""
+        import datetime
+
+        from lessons.models import Enrollment, LessonSession
+
+        e = Enrollment.objects.create(
+            student=self.student, title="피아노", total_count=8, start_date=datetime.date(2026, 11, 1)
+        )
+        start = timezone.make_aware(datetime.datetime(2026, 11, 25, 16))
+        session = LessonSession.objects.create(enrollment=e, start_at=start, end_at=start + datetime.timedelta(hours=1))
+        before = (list(LessonSession.objects.values()), list(Enrollment.objects.values()))
+        for body in (
+            "다음 주 수요일 수업 쉬어도 될까요? 아파서 못 갈 것 같아요",
+            MAKEUP_TEXT,
+            "수업 시간을 5시로 바꿀 수 있을까요?",
+        ):
+            self.post_student_message(body=body)
+        labels = set(Message.objects.values_list("predicted_label", flat=True))
+        self.assertTrue(labels & {"CANCELLATION", "MAKEUP", "RESCHEDULE"}, labels)  # 일정 관련으로 분류됐는데도
+        self.assertEqual((list(LessonSession.objects.values()), list(Enrollment.objects.values())), before)
+        session.refresh_from_db()
+        self.assertEqual(session.status, LessonSession.Status.SCHEDULED)
 
     def test_body_is_html_escaped(self):
         self.post_student_message(body="<script>alert(1)</script> 보강 가능할까요")
