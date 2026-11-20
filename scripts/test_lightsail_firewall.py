@@ -150,6 +150,13 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
     def apply(self, action):
         return apply("lemit-server", RUNNER, action, log=lambda *_: None)
 
+    def run_main(self, *argv):
+        """main()을 실행하고 표준 출력을 캡처한다. 실패 시 ::error:: 줄이 CI 로그로 나가 주석이 되지 않게 (#53)."""
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(list(argv))
+        return code, out.getvalue()
+
     def test_open_then_close_restores_original_rules(self):
         self.apply("open")
         self.assertTrue(ssh_allows(self.read(), RUNNER))
@@ -205,8 +212,9 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
             {"fromPort": 8080, "toPort": 8080, "protocol": "tcp", "state": "open", "cidrs": [RUNNER]}
         )
         self.write(db)
-        self.assertEqual(main(["open", "--instance", "lemit-server", "--cidr", RUNNER]), 0)
-        self.assertEqual(main(["close", "--instance", "lemit-server", "--cidr", RUNNER]), 0)
+        for action in ("open", "close"):
+            code, out = self.run_main(action, "--instance", "lemit-server", "--cidr", RUNNER)
+            self.assertEqual(code, 0, repr(out))  # repr: 실패 보고서에도 ::error::가 줄 맨 앞에 오지 않게
         db = self.read()
         self.assertFalse(ssh_allows(db, RUNNER))
         self.assertEqual(rule(db["portStates"], 8080)[0]["cidrs"], [RUNNER])  # 다른 포트 규칙은 그대로
@@ -231,13 +239,32 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
             encoding="utf-8",
             env=utf8_env(),
         )
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0, repr(done.stdout + done.stderr))
         self.assertTrue(ssh_allows(self.read(), RUNNER))
         self.assertNotIn(ADMIN.split("/")[0], done.stdout + done.stderr)
 
-    # aws CLI가 실패하는 상황: stderr에 이유를 남기고 종료 코드 3
-    FAILING_AWS = f'"{sys.executable}" -c "import sys; sys.stderr.write(\'fake aws denied\'); sys.exit(3)"'
+    # aws CLI가 실패하는 상황: 호출한 명령(서비스·동작)을 기록하고, stderr에 이유를 남기고 종료 코드 3
+    FAILING_AWS = (
+        f'"{sys.executable}" -c "import os, sys; '
+        "open(os.environ['FAKE_AWS_CALLS'], 'a', encoding='utf-8').write(' '.join(sys.argv[1:3]) + chr(10)); "
+        "sys.stderr.write('fake aws denied'); sys.exit(3)\""
+    )
     EXPECTED_ERROR = "::error::[firewall] aws lightsail get-instance-port-states 실패: fake aws denied"
+
+    def use_failing_aws(self):
+        """실패하는 가짜 aws로 바꾸고, 호출 기록 파일 경로를 돌려준다."""
+        fd, calls = tempfile.mkstemp(suffix=".log")
+        os.close(fd)
+        self.addCleanup(os.unlink, calls)
+        os.environ["LIGHTSAIL_AWS_CLI"] = self.FAILING_AWS
+        os.environ["FAKE_AWS_CALLS"] = calls
+        self.addCleanup(os.environ.pop, "FAKE_AWS_CALLS", None)
+        return calls
+
+    def assert_only_read_attempted(self, calls):
+        """첫 조회에서 실패하면 쓰기(put-instance-public-ports)를 시도하지 않는다."""
+        with open(calls, encoding="utf-8") as f:
+            self.assertEqual(f.read().splitlines(), ["lightsail get-instance-port-states"])
 
     def test_main_reports_aws_failure(self):
         """aws 실패 → 종료 코드 1과 ::error:: 한 줄 (#53).
@@ -245,17 +272,15 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
         이 출력은 배포 워크플로에서 오류 주석이 되도록 일부러 ::error::로 시작한다. 테스트에서는 캡처해
         검증만 하고 CI 로그로 내보내지 않는다 (내보내면 CI에 가짜 오류 주석이 생긴다).
         """
-        os.environ["LIGHTSAIL_AWS_CLI"] = self.FAILING_AWS
-        out = io.StringIO()
-        with redirect_stdout(out):
-            code = main(["open", "--instance", "lemit-server", "--cidr", RUNNER])
-        self.assertEqual(code, 1)
-        self.assertEqual(out.getvalue().splitlines(), [self.EXPECTED_ERROR])
-        self.assertEqual(self.read().get("puts", 0), 0)  # 실패 시 규칙을 쓰지 않음
+        calls = self.use_failing_aws()
+        code, out = self.run_main("open", "--instance", "lemit-server", "--cidr", RUNNER)
+        self.assertEqual(code, 1, repr(out))
+        self.assertEqual(out.splitlines(), [self.EXPECTED_ERROR])
+        self.assert_only_read_attempted(calls)
 
     def test_cli_process_reports_aws_failure(self):
         """명령줄 실행(워크플로와 같은 방식)도 종료 코드 1과 같은 오류 줄. 출력은 subprocess가 캡처한다 (#53)."""
-        os.environ["LIGHTSAIL_AWS_CLI"] = self.FAILING_AWS
+        calls = self.use_failing_aws()
         script = Path(__file__).resolve().parent / "lightsail_firewall.py"
         done = subprocess.run(
             [sys.executable, str(script), "open", "--instance", "lemit-server", "--cidr", RUNNER],
@@ -264,9 +289,10 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
             encoding="utf-8",
             env=utf8_env(),
         )
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 1, repr(done.stdout + done.stderr))
         self.assertEqual(done.stdout.splitlines(), [self.EXPECTED_ERROR])
         self.assertEqual(done.stderr, "")
+        self.assert_only_read_attempted(calls)
 
 
 def normalize_states(db):
