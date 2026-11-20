@@ -5,6 +5,7 @@
 """
 
 from django.contrib import messages
+from django.db import transaction
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -91,10 +92,16 @@ class StudentUpdateView(TeacherScopedQuerysetMixin, UpdateView):
 @require_POST
 def archive(request, pk):
     """수강 종료(보관). 남은 '예정' 회차 삭제는 회차 기능(UC-04)을 만들 때 이 동작에 추가한다."""
-    student = get_owned_or_404(Student, request.user, pk=pk)
-    if student.is_active:
-        student.is_active = False
-        student.save(update_fields=["is_active", "updated_at"])
+    with transaction.atomic():
+        # 레슨권 등록과 같은 수강생 행 잠금을 써서, 보관과 등록이 엇갈려 보관된 수강생에게 레슨권이 생기지 않게 한다
+        student = get_owned_or_404(Student.objects.select_for_update(), request.user, pk=pk)
+        if student.is_active:
+            student.is_active = False
+            student.save(update_fields=["is_active", "updated_at"])
+            archived = True
+        else:
+            archived = False
+    if archived:
         messages.success(request, f"{student.name} 수강생을 보관했습니다. 목록에서 '보관 포함'으로 볼 수 있습니다.")
     return redirect("students:detail", pk=student.pk)
 

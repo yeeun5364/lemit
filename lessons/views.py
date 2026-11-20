@@ -6,6 +6,7 @@
 from django.contrib import messages
 from django.db import transaction
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import get_owned_or_404
@@ -23,16 +24,31 @@ def enrollment_create(request, student_pk):
 
     form = EnrollmentForm(request.POST or None, student=student)
     if request.method == "POST" and form.is_valid():
+        selected = [e.pk for e in form.cleaned_data.get("end_exhausted") or []]
         with transaction.atomic():
+            # 검증과 저장 사이에 수강생이 보관되거나 레슨권 상태가 바뀔 수 있으므로(다른 탭·동시 요청),
+            # 수강생 행을 잠근 뒤 다시 확인한다. 보관(students.archive)도 같은 행을 잠근다 (PR #55 리뷰)
+            locked = Student.objects.select_for_update().get(pk=student.pk)
+            if not locked.is_active:
+                messages.error(request, "보관된 수강생에게는 레슨권을 추가할 수 없습니다. 보관을 해제한 뒤 추가하세요.")
+                return redirect("students:detail", pk=student.pk)
+            still = set(
+                Enrollment.objects.filter(student=locked, pk__in=selected)
+                .active()
+                .exhausted()
+                .values_list("pk", flat=True)
+            )
+            if still != set(selected):
+                form.add_error("end_exhausted", "선택한 레슨권의 상태가 바뀌었습니다. 화면을 다시 확인하세요.")
+                return render(request, "lessons/enrollment_form.html", {"form": form, "student": student})
             enrollment = form.save()
-            ended = form.cleaned_data.get("end_exhausted") or []
-            if ended:
-                Enrollment.objects.filter(pk__in=[e.pk for e in ended], status=Enrollment.Status.ACTIVE).update(
-                    status=Enrollment.Status.ENDED
-                )
+            ended = Enrollment.objects.filter(pk__in=still).update(
+                status=Enrollment.Status.ENDED,
+                updated_at=timezone.now(),  # update()는 auto_now를 갱신하지 않음
+            )
         text = f"'{enrollment.title}' 레슨권({enrollment.total_count}회)을 등록했습니다."
         if ended:
-            text += f" 소진된 레슨권 {len(ended)}개를 종료했습니다."
+            text += f" 소진된 레슨권 {ended}개를 종료했습니다."
         messages.success(request, text)
         return redirect("students:detail", pk=student.pk)
     return render(request, "lessons/enrollment_form.html", {"form": form, "student": student})
