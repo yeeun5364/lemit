@@ -4,7 +4,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-SHA="0123456789abcdef0123456789abcdef01234567"
+# deploy는 main 포함 여부를 확인하므로 실제 커밋을 쓴다. 기준은 현재 HEAD, fetch는 하지 않는다 (#56)
+export CI_DEPLOY_MAIN_REF=HEAD CI_DEPLOY_SKIP_FETCH=1
+SHA="$(git rev-parse HEAD)"
+# HEAD에 포함되지 않은 커밋: HEAD 위에 새 커밋 객체를 만든다 (브랜치·작업 폴더는 바꾸지 않음)
+OUTSIDE="$(git -c user.name=test -c user.email=test@example.invalid commit-tree "HEAD^{tree}" -p HEAD -m "outside main (test)")"
+MISSING="0123456789abcdef0123456789abcdef01234567"   # 저장소에 없는 커밋
 TAG="0123456789ab"
 pass=0; fail=0
 
@@ -27,6 +32,8 @@ expect "DRY_RUN: status"                       "status"
 expect REJECT ""
 expect REJECT "deploy"
 expect REJECT "deploy main"
+expect REJECT "deploy $OUTSIDE"                 # main에 포함되지 않은 커밋 (#56)
+expect REJECT "deploy $MISSING"                 # 없는 커밋 (#56)
 expect REJECT "deploy ${SHA^^}"                 # 대문자
 expect REJECT "deploy ${SHA:0:39}"              # 39자리
 expect REJECT "deploy $SHA; rm -rf /"           # 명령 이어 붙이기

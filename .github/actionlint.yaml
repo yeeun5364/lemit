@@ -1,0 +1,4 @@
+# actionlint 설정: Self-hosted 러너의 전용 라벨 (#56, docs/CD.md)
+self-hosted-runner:
+  labels:
+    - lemit-deploy

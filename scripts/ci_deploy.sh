@@ -10,7 +10,12 @@
 #   status                        → 현재 태그·최근 배포 기록·컨테이너 상태·공개 경로 확인 (읽기 전용)
 #
 # 요청 문자열을 셸로 실행(eval)하지 않는다. 단어로 나눈 뒤 형식을 정규식으로 검사한다.
-# 테스트용: CI_DEPLOY_DRY_RUN=1 이면 실행할 명령을 출력만 한다 (SSH 클라이언트는 이 환경변수를 넘길 수 없음).
+# deploy는 그 커밋이 origin/main에 포함됐는지 서버에서 다시 확인한다 (#56). 배포 키가 유출되거나 러너가
+# 오염돼도 main 밖의 커밋(다른 브랜치·임의 커밋)은 배포되지 않는다.
+# 테스트용 환경변수 (SSH 클라이언트는 환경변수를 넘길 수 없으므로 배포 키로는 바꿀 수 없음):
+#   CI_DEPLOY_DRY_RUN=1   실행할 명령을 출력만 한다
+#   CI_DEPLOY_MAIN_REF    main 포함 확인 기준 (기본 origin/main)
+#   CI_DEPLOY_SKIP_FETCH=1  확인 전에 git fetch를 하지 않는다
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -35,6 +40,11 @@ run() {
 case "${ACTION:-}" in
     deploy)
         [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
+        MAIN_REF="${CI_DEPLOY_MAIN_REF:-origin/main}"
+        if [ "${CI_DEPLOY_SKIP_FETCH:-0}" != "1" ]; then
+            git fetch --quiet origin main || { echo "[ci_deploy] git fetch 실패 (서버 네트워크 확인)" >&2; exit 1; }
+        fi
+        git cat-file -e "${ARG}^{commit}" 2> /dev/null && git merge-base --is-ancestor "$ARG" "$MAIN_REF"             || reject "main에 포함되지 않은 커밋입니다"
         run bash scripts/deploy.sh "$ARG"
         ;;
     rollback)
