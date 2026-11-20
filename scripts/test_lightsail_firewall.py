@@ -127,7 +127,8 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
             "LIGHTSAIL_AWS_CLI": f'"{sys.executable}" "{FAKE}"',
             "LIGHTSAIL_FIREWALL_WAIT": "0",
         }
-        self._old = {k: os.environ.get(k) for k in mock_env}
+        # 테스트가 바꾸는 환경 변수는 모두 원래 값으로 복원 (FAKE_AWS_CALLS는 실패 테스트에서만 설정)
+        self._old = {k: os.environ.get(k) for k in [*mock_env, "FAKE_AWS_CALLS"]}
         os.environ.update(mock_env)
         self.addCleanup(self._restore)
         self.write(copy.deepcopy(STATE))
@@ -257,8 +258,7 @@ class ApplyWithFakeAwsTests(unittest.TestCase):
         os.close(fd)
         self.addCleanup(os.unlink, calls)
         os.environ["LIGHTSAIL_AWS_CLI"] = self.FAILING_AWS
-        os.environ["FAKE_AWS_CALLS"] = calls
-        self.addCleanup(os.environ.pop, "FAKE_AWS_CALLS", None)
+        os.environ["FAKE_AWS_CALLS"] = calls  # setUp의 _restore가 원래 값으로 되돌림
         return calls
 
     def assert_only_read_attempted(self, calls):
