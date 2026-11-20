@@ -14,13 +14,18 @@ DEST="${CI_DEPLOY_DEST:-/usr/local/bin/lemit-ci-deploy}"
 [ "$(id -u)" -eq 0 ] || { echo "[install-ci-deploy] sudo로 실행하세요"; exit 1; }
 bash -n scripts/ci_deploy.sh
 
+# 설치 폴더가 root 소유이고 다른 사용자가 쓸 수 없어야 한다 (아니면 파일을 바꿔치기할 수 있음)
+DIR="$(dirname "$DEST")"
+[ "$(stat -c '%u' "$DIR")" = "0" ] && [ -z "$(find "$DIR" -maxdepth 0 -perm /022)" ]     || { echo "[install-ci-deploy] $DIR 가 root 소유가 아니거나 다른 사용자가 쓸 수 있습니다. 설치하지 않습니다"; exit 1; }
+
 if [ -f "$DEST" ] && cmp -s scripts/ci_deploy.sh "$DEST"; then
-    echo "[install-ci-deploy] 이미 같은 버전입니다: $DEST"
+    echo "[install-ci-deploy] 내용은 이미 같은 버전입니다: $DEST (소유자·권한은 다시 맞춤)"
 else
     [ -f "$DEST" ] && { echo "[install-ci-deploy] 바뀌는 내용:"; diff -u "$DEST" scripts/ci_deploy.sh || true; }
-    install -o root -g root -m 0755 scripts/ci_deploy.sh "$DEST"
-    echo "[install-ci-deploy] 설치: $DEST ($(sha256sum "$DEST" | cut -c1-12))"
 fi
-ls -l "$DEST"
+# 내용이 같아도 항상 다시 설치해 소유자 root:root, 권한 755로 맞춘다 (PR #58 2차 리뷰 P3)
+install -o root -g root -m 0755 scripts/ci_deploy.sh "$DEST"
+[ "$(stat -c '%u:%g %a' "$DEST")" = "0:0 755" ] || { echo "[install-ci-deploy] 소유자·권한 확인 실패: $(stat -c '%U:%G %a' "$DEST")"; exit 1; }
+echo "[install-ci-deploy] 설치: $DEST ($(sha256sum "$DEST" | cut -c1-12), root:root 755)"
 echo "[install-ci-deploy] authorized_keys의 배포 키 줄은 다음 형식이어야 합니다 (docs/CD.md §3-2):"
 echo "  command=\"$DEST\",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc ssh-ed25519 AAAA... lemit-github-deploy"

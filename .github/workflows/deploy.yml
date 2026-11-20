@@ -74,6 +74,16 @@ jobs:
         run: |
           if [ "$EVENT" = "workflow_run" ]; then ACTION=deploy; SHA="$RUN_SHA"; TAG=""
           else ACTION="$IN_ACTION"; SHA="$IN_SHA"; TAG="$IN_TAG"; fi
+          # 자동 배포인데 그사이 main에 더 새 커밋이 있으면 여기서 끝낸다 (deploy 작업이 대기열에 들어가
+          # 기다리던 rollback 등을 밀어내지 않게, PR #58 리뷰 P2). 러너도 실행 직전에 한 번 더 확인한다.
+          if [ "$EVENT" = "workflow_run" ]; then
+            head="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+            if [ "$head" != "$SHA" ]; then
+              echo "::notice::main에 더 새 커밋이 있어 이 자동 배포는 건너뜁니다. 새 커밋의 CI가 성공하면 배포됩니다."
+              { echo "action=skip"; echo "sha="; echo "remote="; } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           case "$ACTION" in
             deploy)
               [ -n "$SHA" ] || SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
@@ -145,24 +155,34 @@ jobs:
       EVENT: ${{ github.event_name }}
       REPO: ${{ github.repository }}
     steps:
-      # 러너가 개인 개발 환경과 분리됐는지 매번 확인한다. 하나라도 아니면 배포 키를 쓰기 전에 멈춘다 (docs/CD.md §2)
+      # 러너가 개인 개발 환경과 분리됐는지 매번 확인한다. 하나라도 아니면 배포 키를 쓰기 전에 멈춘다 (docs/CD.md §2, §4).
+      # 이 확인은 배포 작업에만 있다. 승인된 포크 PR 작업은 이 단계를 거치지 않으므로 격리 자체가 방어선이다.
+      # LEMIT_CHECK_MOUNTINFO·LEMIT_CHECK_BINFMT는 테스트용 (scripts/test_runner_isolation_check.py)
       - name: 러너 격리 확인
         run: |
           problems=""
-          [ "$(id -u)" != "0" ] || problems="$problems root로 실행 중;"
-          if id -nG | tr ' ' '\n' | grep -qxE 'sudo|wheel|admin|docker'; then problems="$problems 관리자·docker 그룹 사용자;"; fi
-          if sudo -n true 2> /dev/null; then problems="$problems 비밀번호 없는 sudo 가능;"; fi
-          if [ -e /mnt/c ]; then problems="$problems Windows C 드라이브가 연결됨(/mnt/c);"; fi
-          if grep -qs '^enabled' /proc/sys/fs/binfmt_misc/WSLInterop /proc/sys/fs/binfmt_misc/WSLInterop-late; then
-            problems="$problems Windows 프로그램 실행(interop)이 켜져 있음;"
-          fi
+          add() { problems="$problems $1;"; }
+          [ "$(id -u)" != "0" ] || add "root로 실행 중"
+          if id -nG | tr ' ' '\n' | grep -qxE 'sudo|wheel|admin|docker|lxd'; then add "관리자·docker 그룹 사용자"; fi
+          # 비밀번호 없이 쓸 수 있는 sudo 권한이 하나라도 있으면 (명령 하나만 허용한 NOPASSWD 포함)
+          if command -v sudo > /dev/null 2>&1 && sudo -n -l > /dev/null 2>&1; then add "비밀번호 없는 sudo 권한"; fi
+          # Windows 드라이브 마운트: WSL2는 9p + aname=drvfs, 원본이 C:\ 형태 (/mnt 밖·fstab 마운트 포함).
+          # 항상 있는 /usr/lib/wsl/drivers(aname=drivers, 읽기 전용 드라이버 저장소)는 제외한다
+          mountinfo="${LEMIT_CHECK_MOUNTINFO:-/proc/self/mountinfo}"
+          win="$(awk '{ s = 0; for (i = 1; i <= NF; i++) if ($i == "-") { s = i; break }
+                        if (!s) next
+                        if ($(s+1) == "drvfs" || $(s+3) ~ /(^|[,;])aname=drvfs/ || $(s+2) ~ /^[A-Za-z]:/) printf "%s ", $5 }' "$mountinfo")"
+          [ -z "$win" ] || add "Windows 드라이브가 연결됨(${win% })"
+          for f in "${LEMIT_CHECK_BINFMT:-/proc/sys/fs/binfmt_misc}"/WSLInterop*; do
+            if [ -f "$f" ] && head -n 1 "$f" | grep -qx enabled; then add "Windows 프로그램 실행(interop)이 켜져 있음"; break; fi
+          done
           for exe in powershell.exe cmd.exe wsl.exe; do
-            if command -v "$exe" > /dev/null 2>&1; then problems="$problems Windows 프로그램($exe)이 PATH에 있음;"; fi
+            if command -v "$exe" > /dev/null 2>&1; then add "Windows 프로그램($exe)이 PATH에 있음"; fi
           done
           if [ -n "$problems" ]; then
             echo "::error::러너가 격리되지 않았습니다:$problems 배포하지 않습니다 (docs/CD.md §2)"; exit 1
           fi
-          echo "러너 격리 확인: 일반 사용자, sudo 불가, Windows 드라이브·프로그램 접근 없음"
+          echo "러너 격리 확인: 일반 사용자, 비밀번호 없는 sudo 없음, Windows 드라이브·프로그램 접근 없음"
 
       - name: 설정값·러너 도구 확인
         env:
@@ -194,7 +214,7 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # 키는 이 단계 안에서만 만들고 쓰고 지운다. 이전 작업이 비정상 종료로 남긴 키 폴더도 먼저 지운다.
+      # 키는 이 단계 안에서만 새 임시 폴더에 만들고 쓰고 지운다. 이전 작업이 비정상 종료로 남긴 키 폴더도 먼저 지운다.
       # 러너의 SSH 설정·전역 known_hosts는 쓰지 않는다 (-F /dev/null, GlobalKnownHostsFile=/dev/null)
       - name: 서버에서 실행 (${{ needs.plan.outputs.action }})
         if: steps.fresh.outputs.skip != 'true'
@@ -202,8 +222,8 @@ jobs:
           SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           KNOWN_HOSTS: ${{ vars.LIGHTSAIL_KNOWN_HOSTS }}
         run: |
-          dir="$RUNNER_TEMP/lemit-ssh"
-          rm -rf "$dir" && install -m 700 -d "$dir"
+          rm -rf "$RUNNER_TEMP"/lemit-ssh.*            # 이전 작업이 비정상 종료로 남긴 키 폴더
+          dir="$(mktemp -d "$RUNNER_TEMP/lemit-ssh.XXXXXXXX")"   # 새 폴더(700). 실패하면 여기서 중단 (bash -e)
           trap 'rm -rf "$dir"' EXIT
           (umask 077 && printf '%s\n' "$SSH_KEY" > "$dir/key" && printf '%s\n' "$KNOWN_HOSTS" > "$dir/known_hosts")
           unset SSH_KEY
@@ -224,7 +244,7 @@ jobs:
 
       - name: 정리 (임시 키 폴더가 남았으면 삭제)
         if: always()
-        run: rm -rf "$RUNNER_TEMP/lemit-ssh"
+        run: rm -rf "$RUNNER_TEMP"/lemit-ssh.*
 
       - name: 요약
         if: always()

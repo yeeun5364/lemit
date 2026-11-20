@@ -7,14 +7,17 @@
 규칙
 1. deploy.yml이 아닌 워크플로
    - 'self-hosted' 글자가 주석 밖에 없어야 한다.
-   - 모든 작업의 runs-on은 GitHub-hosted 라벨 문자열(ubuntu-*, windows-*, macos-*)이어야 한다 (표현식·그룹 금지).
+   - 모든 작업의 runs-on은 GitHub-hosted 표준 라벨(HOSTED_LABELS) 문자열이어야 한다 (표현식·그룹·사용자 지정 라벨 금지).
 2. deploy.yml 트리거는 workflow_run {workflows: [CI], types: [completed], branches: [main]}과 workflow_dispatch만.
+   워크플로 최상위 concurrency 금지 (검증 전 실행이 대기 중인 배포를 밀어내지 않게, 작업 단위로만).
 3. deploy.yml의 self-hosted 작업은 정확히 하나이고
    - environment: production (배포 키 Secret은 main 브랜치에서만 받음)
-   - needs의 모든 작업이 GitHub-hosted이고, 그 작업의 if에 저장소·이벤트·ref 조건이 모두 있음
+   - needs의 모든 작업이 GitHub-hosted이고, 그 작업의 if에 저장소·이벤트·ref·자동 배포 스위치 조건이 모두 있음
    - 자기 if에 github.repository 조건
-   - 작업 단위 concurrency(cancel-in-progress: false)
+   - 작업 단위 concurrency(cancel-in-progress: false), check는 배포와 다른 그룹
    - 액션(uses)을 쓰지 않고 run 단계만 (저장소 코드·외부 액션을 개인 PC에서 실행하지 않음)
+
+한계: 조건 문자열이 **있는지** 확인하며, 조건식 전체의 논리를 증명하지는 않는다 (docs/CD.md §8).
 """
 
 import re
@@ -25,13 +28,29 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 DEPLOY = "deploy.yml"
-HOSTED = re.compile(r"^(ubuntu|windows|macos)-[A-Za-z0-9.\-]+$")
+# GitHub-hosted 표준 러너 라벨만 (접두사가 같은 사용자 지정 라벨, 예: ubuntu-personal은 거부)
+HOSTED_LABELS = {
+    "ubuntu-latest",
+    "ubuntu-24.04",
+    "ubuntu-22.04",
+    "ubuntu-24.04-arm",
+    "ubuntu-22.04-arm",
+    "windows-latest",
+    "windows-2025",
+    "windows-2022",
+    "windows-11-arm",
+    "macos-latest",
+    "macos-15",
+    "macos-14",
+    "macos-13",
+}
 WORKFLOW_RUN = {"workflows": ["CI"], "types": ["completed"], "branches": ["main"]}
 # 검증 작업(GitHub-hosted)의 if에 반드시 있어야 하는 조건 (공백은 무시하고 비교)
 GATE_CONDITIONS = [
     "github.repository == 'yeeun5364/lemit'",
     "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
     "github.event_name == 'workflow_run'",
+    "vars.CD_AUTO_DEPLOY == 'true'",
     "github.event.workflow_run.conclusion == 'success'",
     "github.event.workflow_run.event == 'push'",
     "github.event.workflow_run.head_branch == 'main'",
@@ -54,7 +73,7 @@ def _triggers(doc):
 
 def _is_hosted(job):
     runs_on = (job or {}).get("runs-on")
-    return isinstance(runs_on, str) and bool(HOSTED.match(runs_on))
+    return isinstance(runs_on, str) and runs_on in HOSTED_LABELS
 
 
 def _is_self_hosted(job):
@@ -85,6 +104,8 @@ def check_deploy(doc):
     if "workflow_run" in triggers and (triggers["workflow_run"] or {}) != WORKFLOW_RUN:
         errors.append(f"{DEPLOY}: workflow_run은 workflows: [CI], types: [completed], branches: [main]만 허용합니다")
 
+    if "concurrency" in doc:
+        errors.append(f"{DEPLOY}: 워크플로 최상위 concurrency는 쓰지 않습니다 (검증을 통과한 작업 단위로만)")
     jobs = doc.get("jobs") or {}
     self_hosted = {k: j for k, j in jobs.items() if _is_self_hosted(j)}
     if len(self_hosted) != 1:
@@ -112,6 +133,12 @@ def check_deploy(doc):
         conc = job.get("concurrency")
         if not isinstance(conc, dict) or not conc.get("group") or conc.get("cancel-in-progress") is not False:
             errors.append(f"{where}: 작업 단위 concurrency(group, cancel-in-progress: false)가 있어야 합니다")
+        else:
+            group = _squash(conc.get("group"))
+            if not all(x in group for x in ("== 'check'", "'deploy-production-check'", "'deploy-production'")):
+                errors.append(
+                    f"{where}: concurrency group은 check와 배포(deploy·rollback)를 다른 그룹으로 나눠야 합니다"
+                )
         for i, step in enumerate(job.get("steps") or []):
             if "uses" in (step or {}):
                 errors.append(f"{where}.steps[{i}]: self-hosted 작업에서는 액션(uses)을 쓰지 않습니다")

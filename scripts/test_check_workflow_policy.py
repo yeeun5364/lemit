@@ -24,6 +24,7 @@ jobs:
       github.repository == 'yeeun5364/lemit' &&
       ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
        (github.event_name == 'workflow_run' &&
+        vars.CD_AUTO_DEPLOY == 'true' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_branch == 'main' &&
@@ -37,7 +38,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, lemit-deploy]
     environment: production
     concurrency:
-      group: deploy-production
+      group: ${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' || 'deploy-production' }}
       cancel-in-progress: false
     steps:
       - run: echo deploy
@@ -87,6 +88,7 @@ class WorkflowPolicyTests(unittest.TestCase):
             "${{ vars.RUNNER }}": "GitHub-hosted 라벨",  # 표현식으로 라벨을 숨기는 경우
             "{group: mine}": "GitHub-hosted 라벨",
             "lemit-deploy": "GitHub-hosted 라벨",
+            "ubuntu-personal": "GitHub-hosted 라벨",  # 접두사만 같은 사용자 지정 라벨
         }
         for runs_on, msg in cases.items():
             with self.subTest(runs_on=runs_on):
@@ -130,7 +132,12 @@ class WorkflowPolicyTests(unittest.TestCase):
             ),
             ("      - run: echo deploy", "      - uses: actions/checkout@v5", "액션(uses)"),
             ("      cancel-in-progress: false\n", "      cancel-in-progress: true\n", "concurrency"),
-            ("    concurrency:\n      group: deploy-production\n      cancel-in-progress: false\n", "", "concurrency"),
+            ("    concurrency:\n", "    no_concurrency:\n", "concurrency"),
+            (
+                "${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' || 'deploy-production' }}",
+                "deploy-production",
+                "다른 그룹",
+            ),
         ]
         for old, new, msg in cases:
             with self.subTest(change=new or f"삭제: {old.strip()[:30]}"):
@@ -146,10 +153,15 @@ class WorkflowPolicyTests(unittest.TestCase):
             "github.event.workflow_run.event == 'push'",
             "github.event.workflow_run.head_repository.full_name == github.repository",
             "github.event.workflow_run.conclusion == 'success'",
+            "vars.CD_AUTO_DEPLOY == 'true'",
         ):
             with self.subTest(removed=cond):
                 errors = self.deploy_with(cond, "true")
                 self.assert_error(errors, "if에 조건이 없습니다")
+
+    def test_workflow_level_concurrency_is_rejected(self):
+        errors = self.deploy_with("jobs:\n", "concurrency:\n  group: deploy-production\njobs:\n")
+        self.assert_error(errors, "최상위 concurrency")
 
     def test_gate_job_must_be_github_hosted(self):
         errors = self.deploy_with("    runs-on: ubuntu-latest\n", "    runs-on: [self-hosted]\n")
