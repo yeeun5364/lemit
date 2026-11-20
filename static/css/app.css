@@ -480,6 +480,25 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .notice-field .check-field label { overflow-wrap: anywhere; }
 .notice-field legend { padding: 0 var(--space-1); }
 
+/* 회차 (S06·S07·S10, UC-04): 상태는 색이 아니라 모양으로 (SCREENS §4) */
+.field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.state { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+.state-done { color: var(--text-muted); }
+.state-off { color: var(--text-muted); font-weight: 400; font-size: var(--fs-xs); }
+.group-title { font-size: var(--fs-sm); font-weight: 700; color: var(--text-muted); margin: var(--space-4) 0 var(--space-2); }
+.card-head + .group-title { margin-top: 0; }
+.sessions { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.session-row { padding: var(--space-3) var(--space-4); }
+.session-row.is-completed .row-title { color: var(--text-muted); font-weight: 500; }
+.session-row.is-cancelled .row-title, .session-row.is-absent .row-title { text-decoration: line-through; color: var(--text-muted); font-weight: 500; }
+.session-row .row-side { flex-direction: row; align-items: center; }
+.card-title + .info, .card-title + .passes { margin-top: var(--space-4); }
+@media (max-width: 767px) {
+  /* 회차 행은 아바타가 없으므로 상태를 같은 줄 오른쪽에 둔다 */
+  .rows .row.session-row { flex-wrap: nowrap; align-items: center; }
+  .rows .row.session-row .row-side { width: auto; padding-left: 0; }
+}
+
 /* 8. 로그인·회원가입 ------------------------------------------------------- */
 .auth-body { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: var(--space-6) var(--space-4); background: var(--bg); }
 .auth-wrap { width: 100%; max-width: 420px; }

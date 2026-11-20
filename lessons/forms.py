@@ -1,7 +1,10 @@
+import datetime
+
 from django import forms
 from django.utils import timezone
 
-from lessons.models import Enrollment
+from accounts.permissions import scope_to_teacher
+from lessons.models import Enrollment, LessonSession
 
 
 class EnrollmentForm(forms.ModelForm):
@@ -58,3 +61,62 @@ class EnrollmentForm(forms.ModelForm):
         if not title:
             raise forms.ValidationError("레슨명을 입력하세요.")
         return title
+
+
+class EnrollmentChoiceField(forms.ModelChoiceField):
+    def label_from_instance(self, e):
+        return f"{e.student.name} · {e.title}"
+
+
+class SessionForm(forms.ModelForm):
+    """S07 회차 등록·수정 (UC-04). 날짜·시작·종료 시간을 따로 받아 Asia/Seoul 기준 datetime으로 합친다.
+
+    - 레슨권 선택지: 로그인한 강사의 '진행 중' 레슨권(보관 수강생 제외). 조작된 POST로 다른 강사의
+      레슨권을 보내면 폼 오류 (ERD 2-5).
+    - 수정이면 **같은 수강생**의 레슨권으로만 바꿀 수 있다(지금 레슨권은 종료됐어도 포함). 회차를 다른
+      수강생에게 옮기면 진행 기록이 엉뚱한 수강생에게 붙기 때문이다.
+    - 상태는 받지 않는다. 새 회차는 항상 '예정'.
+    - 저장 직전 재확인(수강생 보관·레슨권 종료·회차 상태)은 뷰가 수강생 행 잠금 안에서 한다.
+    """
+
+    enrollment = EnrollmentChoiceField(label="수강생·레슨권", queryset=Enrollment.objects.none())
+    date = forms.DateField(label="날짜", widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"))
+    start_time = forms.TimeField(label="시작", widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"))
+    end_time = forms.TimeField(
+        label="종료", widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"), help_text="기본: 시작 + 1시간"
+    )
+
+    class Meta:
+        model = LessonSession
+        fields = ("enrollment", "place")
+        widgets = {"place": forms.TextInput(attrs={"placeholder": "예: A 레슨실"})}
+        labels = {"place": "장소 메모"}
+
+    def __init__(self, *args, teacher, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = Enrollment.objects.active().filter(student__is_active=True)
+        if self.instance.pk:
+            choices = choices.filter(student_id=self.instance.enrollment.student_id) | Enrollment.objects.filter(
+                pk=self.instance.enrollment_id
+            )
+        self.fields["enrollment"].queryset = (
+            scope_to_teacher(choices, teacher, "student__teacher")
+            .select_related("student")
+            .order_by("student__name", "-start_date", "id")
+        )
+        if self.instance.pk:
+            start = timezone.localtime(self.instance.start_at)
+            end = timezone.localtime(self.instance.end_at)
+            self.initial.update(date=start.date(), start_time=start.time(), end_time=end.time())
+
+    def clean(self):
+        cleaned = super().clean()
+        date, start, end = cleaned.get("date"), cleaned.get("start_time"), cleaned.get("end_time")
+        if date and start and end:
+            if end <= start:
+                self.add_error("end_time", "종료 시간은 시작 시간보다 늦어야 합니다.")
+            else:
+                tz = timezone.get_current_timezone()
+                self.instance.start_at = timezone.make_aware(datetime.datetime.combine(date, start), tz)
+                self.instance.end_at = timezone.make_aware(datetime.datetime.combine(date, end), tz)
+        return cleaned
