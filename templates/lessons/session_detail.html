@@ -16,7 +16,21 @@
       <dt>장소</dt><dd>{{ session.place|default:"—" }}</dd>
       <dt>상태</dt><dd>{% include "lessons/_session_state.html" with s=session %}</dd>
     </dl>
-    {# 완료 처리·완료 취소 버튼은 UC-06에서 추가 #}
+    {% if session.status == "scheduled" %}
+    <form method="post" action="{% url 'lessons:session_complete' session.pk %}" class="status-action"
+          {% if not_started %}data-confirm="아직 시작 전인 수업입니다 ({{ session.start_at|date:'n/j' }} {{ session.start_at|time:'H:i' }}). 완료할까요?"{% endif %}>
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary btn-block">{% include "ui/icon.html" with name="check" size="sm" %}완료 처리</button>
+      <p class="muted small">완료하면 레슨권에서 1회 차감됩니다.{% if enrollment.remaining_count <= 0 %} <strong class="warn-text">잔여 회차가 없어 초과 진행으로 기록됩니다.</strong>{% endif %}</p>
+    </form>
+    {% elif session.status == "completed" and session.enrollment.student.is_active %}
+    <form method="post" action="{% url 'lessons:session_uncomplete' session.pk %}" class="status-action"
+          data-confirm="완료를 취소하고 예정으로 되돌릴까요? 차감한 1회가 복구됩니다.">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-secondary btn-block">{% include "ui/icon.html" with name="restore" size="sm" %}완료 취소</button>
+      <p class="muted small">잘못 누른 완료를 되돌립니다.{% if session.completed_at %} 완료 처리: {{ session.completed_at|date:"n/j H:i" }}{% endif %}</p>
+    </form>
+    {% endif %}
   </section>
   <section class="card" aria-labelledby="pass-title">
     <h2 id="pass-title" class="card-title">레슨권</h2>
