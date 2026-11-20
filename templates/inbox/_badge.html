@@ -1,6 +1,7 @@
-{# AI 분류 배지. label/confidence를 받는다. 비어 있으면 '분류 불가'. 예측은 참고용이다. #}
+{% comment %} AI 분류 배지. label/confidence/display를 받는다. 비어 있으면 '분류 불가'. 예측은 참고용이다.
+   색 + 글자(분류 이름·확신도·'확신 낮음')로 구분하고, 'AI' 표시로 확정 사실이 아님을 드러낸다. {% endcomment %}
 {% if label %}
-<span class="ai-badge ai-{{ label|lower }}">{{ display }}{% if confidence is not None %} · {% widthratio confidence 1 100 %}%{% endif %}{% if confidence is not None and confidence < 0.5 %} · 확신 낮음{% endif %}</span>
+<span class="badge ai-badge ai-{{ label|lower }}{% if confidence is not None and confidence < 0.5 %} is-low{% endif %}" title="AI 분류 결과 (참고용)"><span class="ai-mark">AI</span>{{ display }}{% if confidence is not None %} · {% widthratio confidence 1 100 %}%{% endif %}{% if confidence is not None and confidence < 0.5 %} · 확신 낮음{% endif %}</span>
 {% else %}
-<span class="ai-badge ai-none">분류 불가</span>
+<span class="badge ai-badge ai-none" title="AI 분류를 사용할 수 없었던 메시지">분류 불가</span>
 {% endif %}

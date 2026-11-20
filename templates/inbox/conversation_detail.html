@@ -1,34 +1,54 @@
 {% extends "base.html" %}
 {% block title %}{{ conversation.subject }}{% endblock %}
+{% block content_class %} content-wide{% endblock %}
+{% block back %}<a class="back-link" href="{% url 'inbox:list' %}{% if current_label %}?label={{ current_label }}{% endif %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}메시지함</a>{% endblock %}
+{% block page_title %}메시지함{% endblock %}
+{% block page_actions %}{% if conversation.student.is_active %}<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ conversation.student_id }}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 메시지</a>{% endif %}{% endblock %}
 {% block content %}
-<div class="page-head">
-  <a class="back" href="{% url 'inbox:list' %}">&lt; 메시지함</a>
-</div>
-<h1 class="page-title conv-heading">{{ conversation.student.name }} · {{ conversation.subject }}</h1>
-
-<ol class="thread">
-  {% for m in messages_list %}
-  <li class="bubble {% if m.is_from_student %}from-student{% else %}from-teacher{% endif %}">
-    <div class="bubble-meta">{% if m.is_from_student %}[수강생]{% else %}[나]{% endif %} {{ m.sent_at|date:"n/j H:i" }}</div>
-    <div class="bubble-body pre">{{ m.body }}</div>
-    {% if m.is_from_student %}
-    <div class="bubble-ai">
-      {% include "inbox/_badge.html" with label=m.predicted_label confidence=m.confidence display=m.get_predicted_label_display %}
-      <span class="muted small">AI 예측·참고용</span>
+<div class="inbox has-selection">
+  {% include "inbox/_list_pane.html" %}
+  <section class="inbox-pane inbox-detail-pane card card-flush" aria-labelledby="conv-title">
+    <div class="detail-head">
+      <div class="detail-people">
+        <span class="avatar avatar-mint" aria-hidden="true">{{ conversation.student.name|slice:":1" }}</span>
+        <div>
+          <h2 id="conv-title" class="detail-title">{{ conversation.student.name }} · {{ conversation.subject }}</h2>
+          <div class="detail-meta">
+            <span>수강생</span>
+            {% if conversation.student.is_minor %}<span class="badge badge-amber">미성년자</span>{% endif %}
+            {% if not conversation.student.is_active %}<span class="badge badge-neutral">보관</span>{% endif %}
+            <span aria-hidden="true">·</span><span>메시지 {{ messages_list|length }}개</span>
+          </div>
+        </div>
+      </div>
+      {# 일정 추가·회차 보기 바로가기는 회차 기능(UC-04) 구현 후 추가. 일정은 강사가 직접 처리한다 #}
+      <a class="btn btn-secondary btn-sm" href="{% url 'students:detail' conversation.student_id %}">{% include "ui/icon.html" with name="users" size="sm" %}수강생 상세</a>
     </div>
-    {% endif %}
-  </li>
-  {% endfor %}
-</ol>
 
-<form method="post" action="{% url 'inbox:reply' conversation.pk %}" class="form reply-form" novalidate>
-  {% csrf_token %}
-  {{ form.as_div }}
-  <button type="submit" class="button-primary">보내기</button>
-</form>
+    <ol class="thread" aria-label="메시지">
+      {% for m in messages_list %}
+      <li class="bubble {% if m.is_from_student %}from-student{% else %}from-teacher{% endif %}">
+        <div class="bubble-meta"><span class="bubble-who">{% if m.is_from_student %}{{ conversation.student.name }} (수강생){% else %}나{% endif %}</span><time datetime="{{ m.sent_at|date:'c' }}">{{ m.sent_at|date:"n/j H:i" }}</time></div>
+        <div class="bubble-card">
+          <div class="pre">{{ m.body }}</div>
+        </div>
+        {% if m.is_from_student %}
+        <div class="bubble-ai">
+          {% include "inbox/_badge.html" with label=m.predicted_label confidence=m.confidence display=m.get_predicted_label_display %}
+          <span class="ai-note">AI 예측·참고용</span>
+        </div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
 
-<p class="shortcuts">
-  {# 일정 추가·회차 보기 바로가기는 회차 기능(UC-04) 구현 후 추가. 일정은 강사가 직접 처리한다 #}
-  <a href="{% url 'students:detail' conversation.student_id %}">수강생 상세</a>
-</p>
+    <div class="reply">
+      <form method="post" action="{% url 'inbox:reply' conversation.pk %}{% if current_label %}?label={{ current_label }}{% endif %}" class="form" novalidate>
+        {% csrf_token %}
+        {% include "ui/field.html" with field=form.body %}
+        <div class="reply-actions"><button type="submit" class="btn btn-primary">{% include "ui/icon.html" with name="message" size="sm" %}보내기</button></div>
+      </form>
+    </div>
+  </section>
+</div>
 {% endblock %}

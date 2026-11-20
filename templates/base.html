@@ -1,49 +1,84 @@
 {% load static %}<!doctype html>
-<html lang="ko">
+<html lang="ko" class="no-js">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
+  <meta name="color-scheme" content="light">
   <title>{% block title %}LEMIT{% endblock %} · LEMIT</title>
+  <link rel="icon" href="{% static 'img/favicon.svg' %}" type="image/svg+xml">
   <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  <script src="{% static 'js/app.js' %}" defer></script>
 </head>
-<body class="{% block body_class %}{% endblock %}">
-  {% if user.is_authenticated %}
-  <header class="topbar">
-    <a class="brand" href="{% url 'home' %}">LEMIT</a>
-    <div class="account">
-      <span class="account-name">{{ user.name }}</span>
-      <form method="post" action="{% url 'logout' %}">
-        {% csrf_token %}
-        <button type="submit" class="link-button">로그아웃</button>
-      </form>
+{% if user.is_authenticated %}
+{% with url_name=request.resolver_match.url_name app_name=request.resolver_match.app_name %}
+<body>
+  <a class="skip-link" href="#main">본문 바로가기</a>
+  <div class="shell">
+    {# 사이드바: PC는 왼쪽 고정, 1023px 이하는 접이식 메뉴 (static/js/app.js) #}
+    <aside class="sidebar" id="sidebar" aria-label="주 메뉴 영역">
+      <div class="sidebar-head">
+        <a class="logo" href="{% url 'home' %}" aria-label="LEMIT 대시보드">lemit<span class="logo-dot">.</span></a>
+        <button type="button" class="btn btn-ghost btn-icon sidebar-close" data-nav-close aria-label="메뉴 닫기">{% include "ui/icon.html" with name="close" %}</button>
+      </div>
+      <nav aria-label="주 메뉴">
+        <ul class="nav">
+          <li><a href="{% url 'home' %}" class="nav-item{% if url_name == 'home' %} is-active{% endif %}"{% if url_name == 'home' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="dashboard" %}대시보드</a></li>
+          {# 일정 기능(UC-04·05, #11·#12)은 아직 없어 링크 없이 '준비 중'으로만 표시한다 #}
+          <li><span class="nav-item is-disabled" aria-disabled="true">{% include "ui/icon.html" with name="calendar" %}수업 일정<span class="nav-meta badge badge-neutral">준비 중</span></span></li>
+          <li><a href="{% url 'students:list' %}" class="nav-item{% if app_name == 'students' %} is-active{% endif %}"{% if app_name == 'students' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="users" %}수강생</a></li>
+          {% with unread=inbox_unread %}
+          <li><a href="{% url 'inbox:list' %}" class="nav-item{% if app_name == 'inbox' %} is-active{% endif %}"{% if app_name == 'inbox' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="inbox" %}메시지함{% if unread %}<span class="nav-count" aria-label="안 읽은 메시지 {{ unread }}개">{{ unread }}</span>{% endif %}</a></li>
+          {% endwith %}
+        </ul>
+      </nav>
+      <div class="sidebar-foot">
+        <p class="ai-note">{% include "ui/icon.html" with name="sparkle" size="sm" %}AI 분류는 참고용 정보입니다</p>
+      </div>
+    </aside>
+    <div class="nav-backdrop" data-nav-close hidden></div>
+
+    <div class="main-col">
+      <header class="topbar">
+        <button type="button" class="btn btn-ghost btn-icon menu-toggle" data-nav-toggle aria-controls="sidebar" aria-expanded="false" aria-label="메뉴 열기">{% include "ui/icon.html" with name="menu" %}</button>
+        <a class="logo topbar-logo" href="{% url 'home' %}" aria-label="LEMIT 대시보드">lemit<span class="logo-dot">.</span></a>
+        <div class="user-menu">
+          <div class="user-chip">
+            <span class="avatar" aria-hidden="true">{{ user.name|slice:":1" }}</span>
+            <span class="user-text"><span class="user-name">{{ user.name }}</span><span class="user-email">{{ user.email }}</span></span>
+          </div>
+          <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-ghost btn-sm">{% include "ui/icon.html" with name="logout" size="sm" %}로그아웃</button>
+          </form>
+        </div>
+      </header>
+
+      <main id="main" class="content{% block content_class %}{% endblock %}" tabindex="-1">
+        <div class="page-header">
+          <div class="page-heading">
+            {% block back %}{% endblock %}
+            <h1 class="page-title">{% block page_title %}{% endblock %}</h1>
+            {% block page_desc %}{% endblock %}
+          </div>
+          <div class="page-actions">{% block page_actions %}{% endblock %}</div>
+        </div>
+        {% include "ui/messages.html" %}
+        {% block content %}{% endblock %}
+      </main>
     </div>
-  </header>
-  {% endif %}
-
-  <main class="page">
-    {% if messages %}
-    <ul class="alerts" role="status">
-      {% for message in messages %}
-      <li class="alert alert-{{ message.tags }}">{{ message }}</li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-
-    {% block content %}{% endblock %}
-  </main>
-
-  {% if user.is_authenticated %}
-  {# 하단 탭: 화면이 생길 때 항목을 추가한다 (일정 UC-05, 수강생 UC-02, 메시지 UC-17) #}
-  <nav class="tabbar" aria-label="주 메뉴">
-    {% block tabs %}
-    <a href="{% url 'home' %}" class="tab{% if request.resolver_match.url_name == 'home' %} is-active{% endif %}">홈</a>
-    <a href="{% url 'students:list' %}" class="tab{% if request.resolver_match.app_name == 'students' %} is-active{% endif %}">수강생</a>
-    {% with unread=inbox_unread %}
-    <a href="{% url 'inbox:list' %}" class="tab{% if request.resolver_match.app_name == 'inbox' %} is-active{% endif %}">메시지{% if unread %}<span class="tab-count" aria-label="안 읽은 메시지 {{ unread }}개">{{ unread }}</span>{% endif %}</a>
-    {% endwith %}
-    {% endblock %}
-  </nav>
-  {% endif %}
+  </div>
 </body>
+{% endwith %}
+{% else %}
+<body class="auth-body">
+  <main id="main" class="auth-wrap">
+    <div class="auth-brand">
+      <a class="logo" href="{% url 'login' %}">lemit<span class="logo-dot">.</span></a>
+      <p class="auth-tagline">{% block tagline %}수업의 모든 흐름을 하나로{% endblock %}</p>
+    </div>
+    {% include "ui/messages.html" %}
+    {% block auth_content %}{% endblock %}
+  </main>
+</body>
+{% endif %}
 </html>

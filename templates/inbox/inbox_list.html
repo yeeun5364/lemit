@@ -1,39 +1,19 @@
 {% extends "base.html" %}
 {% block title %}메시지함{% endblock %}
+{% block content_class %} content-wide{% endblock %}
+{% block page_title %}메시지함{% endblock %}
+{% block page_desc %}<p class="page-desc">수강생 메시지를 AI가 휴강·보강·일정 변경·일반으로 분류해 보여줘요.</p>{% endblock %}
+{% block page_actions %}<a class="btn btn-primary" href="{% url 'inbox:new' %}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 메시지</a>{% endblock %}
 {% block content %}
-<div class="page-head">
-  <h1 class="page-title">메시지함</h1>
-  <a class="head-action" href="{% url 'inbox:new' %}">+ 수강생 메시지</a>
+<div class="inbox">
+  {% include "inbox/_list_pane.html" %}
+  {# PC·태블릿에서만 보이는 오른쪽 칸. 모바일은 목록만 보여주고, 대화를 누르면 상세 화면으로 이동한다 #}
+  <section class="inbox-pane inbox-detail-pane card inbox-placeholder" aria-label="대화 상세">
+    <div class="empty-state">
+      <span class="empty-icon">{% include "ui/icon.html" with name="message" %}</span>
+      <p class="empty-title">대화를 선택하세요</p>
+      <p class="empty-text">왼쪽 목록에서 대화를 고르면 메시지 전체 내용과 AI 분류, 답장 입력란이 여기에 표시됩니다.</p>
+    </div>
+  </section>
 </div>
-
-<nav class="seg-tabs" aria-label="AI 분류">
-  {% for value, label in tabs %}
-  <a href="{% url 'inbox:list' %}{% if value %}?label={{ value }}{% endif %}"
-     class="seg{% if value == current_label %} is-active{% endif %}"{% if value == current_label %} aria-current="page"{% endif %}>{{ label }}</a>
-  {% endfor %}
-</nav>
-<p class="muted small">분류는 직접 학습시킨 AI 모델의 예측이며 참고용입니다. 일정은 자동으로 바뀌지 않습니다.</p>
-
-{% if conversations %}
-<ul class="list">
-  {% for c in conversations %}
-  <li>
-    <a class="list-row conv-row{% if c.unread %} is-unread{% endif %}" href="{% url 'inbox:detail' c.pk %}">
-      <span class="conv-main">
-        <span class="conv-title">{% if c.unread %}<span class="dot" aria-label="안 읽음"></span>{% endif %}{{ c.student.name }} · {{ c.subject }}</span>
-        {% if c.latest_body %}<span class="conv-preview">{{ c.latest_body|truncatechars:40 }}</span>{% endif %}
-      </span>
-      <span class="conv-side">
-        {% if c.latest_body %}{% include "inbox/_badge.html" with label=c.latest_label confidence=c.latest_confidence display=c.latest_display %}{% endif %}
-        <span class="row-sub">{{ c.last_message_at|date:"n/j H:i" }}</span>
-      </span>
-    </a>
-  </li>
-  {% endfor %}
-</ul>
-{% elif current_label %}
-<p class="empty">이 분류의 메시지가 없습니다.</p>
-{% else %}
-<p class="empty">아직 메시지가 없습니다. <a href="{% url 'inbox:new' %}">수강생 메시지 추가</a>로 시연용 메시지를 등록해 보세요.</p>
-{% endif %}
 {% endblock %}
