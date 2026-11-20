@@ -83,8 +83,17 @@ if [ "$WANT_COMPOSE" = 1 ]; then install -m 0755 "$COMPOSE_FILE" "${PLUGINS_DIR}
 if [ "$WANT_BUILDX" = 1 ]; then install -m 0755 "$BUILDX_FILE" "${PLUGINS_DIR}/docker-buildx"; fi
 
 # 4) 설치한 파일 자체의 버전 확인 + 우선순위가 더 높은 위치에 다른 플러그인이 있으면 경고
-if [ "$WANT_BUILDX" = 1 ]; then echo "[plugins] $("${PLUGINS_DIR}/docker-buildx" version)"; fi
-if [ "$WANT_COMPOSE" = 1 ]; then echo "[plugins] $("${PLUGINS_DIR}/docker-compose" version)"; fi
+#    `echo "$(명령)"`은 명령이 실패해도 echo가 성공해 set -e가 동작하지 않으므로, 결과를 먼저 받아 실패를 확인한다 (Codex 재리뷰 P2)
+verify_plugin() {
+    local out
+    if ! out="$("${PLUGINS_DIR}/$1" version 2>&1)"; then
+        echo "[plugins] 설치한 $1 이(가) 실행되지 않습니다: ${out:0:200}"
+        exit 1
+    fi
+    echo "[plugins] $out"
+}
+if [ "$WANT_BUILDX" = 1 ]; then verify_plugin docker-buildx; fi
+if [ "$WANT_COMPOSE" = 1 ]; then verify_plugin docker-compose; fi
 for user_home in /root "/home/${SUDO_USER:-}"; do
     for name in docker-buildx docker-compose; do
         if [ -e "$user_home/.docker/cli-plugins/$name" ]; then
