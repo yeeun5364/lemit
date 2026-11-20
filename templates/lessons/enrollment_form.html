@@ -11,14 +11,15 @@
     {% include "ui/field.html" with field=form.title %}
     {% include "ui/field.html" with field=form.total_count %}
     {% include "ui/field.html" with field=form.start_date %}
-    {% if form.end_exhausted %}
-    <fieldset class="field notice-field">
+    {% if form.has_exhausted or form.end_exhausted.errors %}
+    {# 도움말·오류를 묶음에 연결해 스크린 리더가 체크박스로 바로 이동해도 종료 효과를 읽게 한다 #}
+    <fieldset class="field notice-field" aria-describedby="{% if form.has_exhausted %}{{ form.end_exhausted.auto_id }}_helptext{% endif %}{% if form.has_exhausted and form.end_exhausted.errors %} {% endif %}{% if form.end_exhausted.errors %}{{ form.end_exhausted.auto_id }}_error{% endif %}"{% if form.end_exhausted.errors %} aria-invalid="true"{% endif %}>
       <legend class="field-label">{{ form.end_exhausted.label }}</legend>
-      <p class="helptext" id="{{ form.end_exhausted.auto_id }}_helptext">잔여 회차를 다 쓴 진행 중 레슨권이 있습니다. {{ form.end_exhausted.help_text }}</p>
+      {% if form.has_exhausted %}<p class="helptext" id="{{ form.end_exhausted.auto_id }}_helptext">잔여 회차를 다 쓴 진행 중 레슨권이 있습니다. {{ form.end_exhausted.help_text }}</p>{% endif %}
       {% for choice in form.end_exhausted %}
       <div class="check-field"><label>{{ choice.tag }} {{ choice.choice_label }}</label></div>
       {% endfor %}
-      {{ form.end_exhausted.errors }}
+      {% if form.end_exhausted.errors %}<ul class="errorlist" id="{{ form.end_exhausted.auto_id }}_error">{% for e in form.end_exhausted.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
     </fieldset>
     {% endif %}
     <div class="form-actions">

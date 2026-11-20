@@ -5,6 +5,7 @@
 """
 
 from django.contrib import messages
+from django.db import transaction
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -80,9 +81,12 @@ class StudentUpdateView(TeacherScopedQuerysetMixin, UpdateView):
     template_name = "students/student_form.html"
 
     def form_valid(self, form):
-        response = super().form_valid(form)
+        # 폼이 다루는 필드만 저장한다. 객체 전체를 저장하면 화면을 연 뒤 다른 탭에서 한 보관(is_active)을
+        # 예전 값으로 되돌려, 보관된 수강생이 다시 '수강 중'이 된다 (PR #55 리뷰 2차)
+        self.object = form.save(commit=False)
+        self.object.save(update_fields=[*form.Meta.fields, "updated_at"])
         messages.success(self.request, "수강생 정보를 수정했습니다.")
-        return response
+        return redirect(self.get_success_url())
 
     def get_success_url(self):
         return reverse("students:detail", args=[self.object.pk])
@@ -91,10 +95,16 @@ class StudentUpdateView(TeacherScopedQuerysetMixin, UpdateView):
 @require_POST
 def archive(request, pk):
     """수강 종료(보관). 남은 '예정' 회차 삭제는 회차 기능(UC-04)을 만들 때 이 동작에 추가한다."""
-    student = get_owned_or_404(Student, request.user, pk=pk)
-    if student.is_active:
-        student.is_active = False
-        student.save(update_fields=["is_active", "updated_at"])
+    with transaction.atomic():
+        # 레슨권 등록과 같은 수강생 행 잠금을 써서, 보관과 등록이 엇갈려 보관된 수강생에게 레슨권이 생기지 않게 한다
+        student = get_owned_or_404(Student.objects.select_for_update(), request.user, pk=pk)
+        if student.is_active:
+            student.is_active = False
+            student.save(update_fields=["is_active", "updated_at"])
+            archived = True
+        else:
+            archived = False
+    if archived:
         messages.success(request, f"{student.name} 수강생을 보관했습니다. 목록에서 '보관 포함'으로 볼 수 있습니다.")
     return redirect("students:detail", pk=student.pk)
 

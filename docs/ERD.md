@@ -143,7 +143,7 @@ erDiagram
 - `remaining_count` 같은 컬럼을 두면 상태를 바꿀 때마다 같이 고쳐야 해서 **값이 어긋날 위험**이 있습니다.
 - 대신 Django ORM 집계(`annotate` + `Count(filter=...)`)로 매번 계산합니다. 강사 1명의 데이터 규모에서는 성능 문제가 없습니다.
 - 이 계산은 `Enrollment`의 메서드·쿼리셋 한 곳에만 두고 단위 테스트합니다. (UC-06, UC-07)
-  - 구현: `EnrollmentQuerySet.with_usage()`가 `used_count`(차감 회차)·`remaining_count`(잔여)를 붙이고, `exhausted()`는 잔여 0 이하만 고릅니다 (`lessons/models.py`, 2026-11-20). 잔여는 초과 진행 시 음수가 될 수 있습니다.
+  - 구현: `EnrollmentQuerySet.with_usage()`가 `used_count`(차감 회차)·`remaining_count`(잔여)를 붙이고, `exhausted()`는 잔여 0 이하만 고릅니다 (`lessons/models.py`, 2026-11-20). 잔여는 초과 진행 시 음수가 될 수 있습니다. 레슨권마다 따로 세는 **서브쿼리**로 계산해, 앞뒤에 회차 조건(`filter(sessions__...)`)이 붙어도 차감 회차가 부풀거나 빠지지 않습니다 (PR #55 리뷰 1·2차).
 
 ### 2-3. 기획서의 `Lesson` 모델은 MVP에서 `Enrollment`에 합침
 
@@ -214,7 +214,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
 | `LessonSession.absence_deducted` | `absent`일 때만 true일 수 있음 (다른 상태에서 true로 남으면 잔여 계산이 어긋남) | DB `CheckConstraint` (UC-03 구현 때 추가, 2026-11-20) |
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
-| `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함 | 앱 검증 (모델 `clean`) |
+| `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함. 보강이 연결된 뒤 원래 회차를 다른 상태(차감 결석·완료 등)로 바꾸는 것도 거절 | 앱 검증 (모델 `clean`, PR #55 리뷰) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
 | `LessonRecord.session` | 회차당 일지 1개 | DB `OneToOneField` |
 | `LessonSession` 완료 취소 | `completed` → `scheduled`만 가능, `completed_at`을 비움. **수업일지(`LessonRecord`)가 있으면 불가** | 앱 검증 (UC-06) |
@@ -232,6 +232,13 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `Message.confidence` | 0 이상 1 이하 | DB `CheckConstraint` (UC-17) |
 | `Conversation` | (강사, 수강생, 제목) 유일. 같은 강사·수강생·제목이면 새 대화를 만들지 않고 이어 붙임(동시 요청에도 중복 없음) | DB `UniqueConstraint` + `get_or_create` (UC-17, PR #38 리뷰) |
 | 시간 겹침 | 같은 강사의 회차가 겹치면 **경고만** (저장 허용) | 앱 검증 (UC-04) |
+
+**동시 변경 규칙 (PR #55 리뷰, 2026-11-20)**
+
+- 잔여 회차·레슨권 상태를 바꾸는 쓰기는 **같은 수강생 행을 `select_for_update`로 잠근 트랜잭션** 안에서 최신 상태를 다시 읽고 판단합니다. 현재 적용: 레슨권 등록(소진 레슨권 종료 포함), 레슨권 직접 종료, 수강생 보관.
+- **이후 구현 조건:** 회차 완료·완료 취소(UC-06), 휴강·보강 연결(UC-08·09), 결석 처리(UC-10)도 같은 잠금을 씁니다. 특히 보강 연결과 원래 회차 상태 변경은 같은 트랜잭션에서 원래 회차를 잠근 뒤 `can_have_makeup()`을 다시 확인해야 동시 요청으로 두 번 차감되지 않습니다.
+- 수정 화면은 폼이 다루는 필드만 저장합니다(`update_fields`). 객체 전체를 저장하면 다른 탭에서 바꾼 값(예: 보관)을 예전 값으로 되돌립니다.
+- **알려진 한계:** Django 관리자(운영자 전용)의 회차 수정·삭제는 이 잠금을 쓰지 않습니다. 관리자에서 삭제 확인과 실제 삭제 사이에 회차가 완료되면 완료 회차가 지워질 수 있으므로, 운영 중에는 관리자에서 회차를 고치지 않습니다.
 
 **삭제 정책 (기록 보존)**
 

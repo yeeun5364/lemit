@@ -148,7 +148,8 @@ class EnrollmentCreateViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "레슨권 추가")
         self.assertEqual(response.context["form"]["start_date"].value(), timezone.localdate())
-        self.assertNotIn("end_exhausted", response.context["form"].fields)
+        self.assertFalse(response.context["form"].has_exhausted)
+        self.assertNotContains(response, "소진된 레슨권 종료")
 
     def test_create_pass_and_show_remaining_as_total(self):
         response = self.post()
@@ -300,3 +301,244 @@ class TeacherIsolationTests(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.url.startswith(reverse(settings.LOGIN_URL)))
+
+
+# ---------------------------------------------------------------------------
+# PR #55 Codex 리뷰 반영
+# ---------------------------------------------------------------------------
+
+
+class UsageJoinTests(TestCase):
+    """회차 조건과 함께 써도 차감 회차가 부풀거나 빠지지 않는다 (서브쿼리 집계, PR #55 리뷰 1·2차)."""
+
+    def setUp(self):
+        teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=teacher, name="박서연")
+
+    def test_join_after_usage_does_not_inflate(self):
+        e = make_pass(self.student, total=3)
+        add_session(e, LessonSession.Status.COMPLETED, day=1)
+        for day in (2, 3, 4):
+            add_session(e, LessonSession.Status.SCHEDULED, day=day)
+        joined = Enrollment.objects.with_usage().filter(sessions__status="scheduled").distinct().get()
+        self.assertEqual((joined.used_count, joined.remaining_count), (1, 2))
+
+    def test_filter_before_usage_does_not_drop_deducted(self):
+        """총 1회, 완료 1·예정 1: 예정 회차로 먼저 걸러도 완료 1회가 집계되어 소진으로 잡힌다."""
+        e = make_pass(self.student, total=1)
+        add_session(e, LessonSession.Status.COMPLETED, day=1)
+        add_session(e, LessonSession.Status.SCHEDULED, day=2)
+        pre = Enrollment.objects.filter(sessions__status="scheduled").with_usage().get()
+        self.assertEqual((pre.used_count, pre.remaining_count), (1, 0))
+        self.assertTrue(Enrollment.objects.filter(sessions__status="scheduled").exhausted().exists())
+
+    def test_pass_without_sessions_counts_zero(self):
+        e = make_pass(self.student, total=2)
+        self.assertEqual(Enrollment.objects.with_usage().get(pk=e.pk).used_count, 0)
+
+
+class EnrollmentCreateRaceTests(TestCase):
+    """검증과 저장 사이에 상태가 바뀌거나, 조작·지난 선택이 오면 새 레슨권을 만들지 않는다."""
+
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.client.force_login(self.teacher)
+        self.url = reverse("lessons:enrollment_create", args=[self.student.pk])
+
+    def data(self, **extra):
+        return {"title": "새 8회권", "total_count": "8", "start_date": "2026-11-20", **extra}
+
+    def used_up_pass(self):
+        e = make_pass(self.student, title="이전 2회권", total=2)
+        sessions = [add_session(e, LessonSession.Status.COMPLETED, day=d) for d in (1, 2)]
+        return e, sessions
+
+    def after_validation(self, change):
+        """폼 검증 직후(저장 트랜잭션 전)에 change()를 실행해 다른 탭·관리자의 변경을 흉내 낸다."""
+        from unittest import mock
+
+        from lessons.forms import EnrollmentForm
+
+        original = EnrollmentForm.is_valid
+
+        def is_valid(form):
+            ok = original(form)
+            change()
+            return ok
+
+        return mock.patch.object(EnrollmentForm, "is_valid", is_valid)
+
+    def test_tampered_choice_without_candidates_is_error_and_no_new_pass(self):
+        other = make_teacher("b@example.com", "B강사")
+        foreign = make_pass(Student.objects.create(teacher=other, name="B의 학생"))
+        response = self.client.post(self.url, self.data(end_exhausted=[foreign.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("end_exhausted", response.context["form"].errors)
+        self.assertFalse(Enrollment.objects.filter(title="새 8회권").exists())
+
+    def test_already_ended_choice_from_other_tab_is_error(self):
+        e, _ = self.used_up_pass()
+        Enrollment.objects.filter(pk=e.pk).update(status=Enrollment.Status.ENDED)  # 다른 탭에서 먼저 종료
+        response = self.client.post(self.url, self.data(end_exhausted=[e.pk]))
+        self.assertIn("end_exhausted", response.context["form"].errors)
+        self.assertFalse(Enrollment.objects.filter(title="새 8회권").exists())
+        # 후보가 사라졌으므로 '소진 레슨권이 있습니다' 안내는 빼고 오류만 연결한다
+        self.assertNotContains(response, "잔여 회차를 다 쓴 진행 중 레슨권이 있습니다")
+        self.assertContains(response, 'aria-describedby="id_end_exhausted_error"')
+
+    def test_pass_no_longer_exhausted_after_validation_is_not_ended(self):
+        e, sessions = self.used_up_pass()
+
+        def reopen():  # 관리자가 완료 1회를 예정으로 되돌림 → 잔여 1
+            LessonSession.objects.filter(pk=sessions[0].pk).update(status=LessonSession.Status.SCHEDULED)
+
+        with self.after_validation(reopen):
+            response = self.client.post(self.url, self.data(end_exhausted=[e.pk]))
+        self.assertEqual(response.status_code, 200)
+        form = response.context["form"]
+        self.assertIn("end_exhausted", form.errors)
+        # 최신 후보로 다시 만든 폼: 후보가 없으니 '소진 레슨권이 있습니다' 안내는 빠지고, 입력값은 유지
+        self.assertFalse(form.has_exhausted)
+        self.assertNotContains(response, "잔여 회차를 다 쓴 진행 중 레슨권이 있습니다")
+        self.assertEqual(form["title"].value(), "새 8회권")
+        e.refresh_from_db()
+        self.assertEqual(e.status, Enrollment.Status.ACTIVE)
+        self.assertFalse(Enrollment.objects.filter(title="새 8회권").exists())
+
+    def test_student_archived_after_validation_gets_no_pass(self):
+        def archive():
+            Student.objects.filter(pk=self.student.pk).update(is_active=False)
+
+        with self.after_validation(archive):
+            response = self.client.post(self.url, self.data())
+        self.assertRedirects(response, reverse("students:detail", args=[self.student.pk]))
+        self.assertFalse(Enrollment.objects.exists())
+
+    def test_ended_count_and_updated_at(self):
+        e, _ = self.used_up_pass()
+        before = e.updated_at
+        response = self.client.post(self.url, self.data(end_exhausted=[e.pk]), follow=True)
+        self.assertContains(response, "소진된 레슨권 1개를 종료했습니다.")
+        e.refresh_from_db()
+        self.assertEqual(e.status, Enrollment.Status.ENDED)
+        self.assertGreater(e.updated_at, before)
+
+    def test_error_is_linked_to_fieldset_for_screen_readers(self):
+        e, _ = self.used_up_pass()
+        Enrollment.objects.filter(pk=e.pk).update(status=Enrollment.Status.ENDED)
+        make_pass(self.student, title="다른 소진", total=1)
+        add_session(Enrollment.objects.get(title="다른 소진"), LessonSession.Status.COMPLETED, day=5)
+        response = self.client.post(self.url, self.data(end_exhausted=[e.pk]))
+        self.assertContains(response, 'aria-describedby="id_end_exhausted_helptext id_end_exhausted_error"')
+        self.assertContains(response, 'id="id_end_exhausted_error"')
+
+
+class MakeupOriginalGuardTests(TestCase):
+    """보강이 연결된 원래 회차를 보강할 수 없는 상태로 바꾸면 거절한다 (중복 차감 방지)."""
+
+    def test_cannot_deduct_absence_that_has_makeup(self):
+        teacher = make_teacher("a@example.com", "A강사")
+        e = make_pass(Student.objects.create(teacher=teacher, name="박서연"))
+        original = add_session(e, LessonSession.Status.ABSENT, deducted=False, day=1)
+        makeup = add_session(e, day=2)
+        makeup.makeup_for = original
+        makeup.full_clean()
+        makeup.save()
+        original.absence_deducted = True
+        with self.assertRaises(ValidationError):
+            original.full_clean()
+        original.refresh_from_db()
+        original.status = LessonSession.Status.COMPLETED
+        with self.assertRaises(ValidationError):
+            original.full_clean()
+
+    def test_session_without_makeup_can_change_freely(self):
+        teacher = make_teacher("a@example.com", "A강사")
+        s = add_session(make_pass(Student.objects.create(teacher=teacher, name="박서연")), day=1)
+        s.status = LessonSession.Status.ABSENT
+        s.absence_deducted = True
+        s.full_clean()
+
+
+class AdminSessionDeleteTests(TestCase):
+    """관리자 화면도 '예정' 회차만 삭제할 수 있고 일괄 삭제는 없다 (ERD §3 기록 보존)."""
+
+    def setUp(self):
+        admin_user = User.objects.create_superuser(email="admin@example.com", password=PASSWORD, name="운영자")
+        teacher = make_teacher("a@example.com", "A강사")
+        e = make_pass(Student.objects.create(teacher=teacher, name="박서연"))
+        self.done = add_session(e, LessonSession.Status.COMPLETED, day=1)
+        self.planned = add_session(e, day=2)
+        self.client.force_login(admin_user)
+
+    def test_completed_session_cannot_be_deleted(self):
+        url = reverse("admin:lessons_lessonsession_delete", args=[self.done.pk])
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.assertEqual(self.client.post(url, {"post": "yes"}).status_code, 403)
+        self.assertTrue(LessonSession.objects.filter(pk=self.done.pk).exists())
+
+    def test_scheduled_session_can_be_deleted(self):
+        url = reverse("admin:lessons_lessonsession_delete", args=[self.planned.pk])
+        self.client.post(url, {"post": "yes"})
+        self.assertFalse(LessonSession.objects.filter(pk=self.planned.pk).exists())
+
+    def test_bulk_delete_action_is_removed(self):
+        response = self.client.get(reverse("admin:lessons_lessonsession_changelist"))
+        self.assertNotContains(response, 'value="delete_selected"')
+
+
+# ---------------------------------------------------------------------------
+# PR #55 Codex 2차 리뷰 반영
+# ---------------------------------------------------------------------------
+
+
+class Round2Tests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.client.force_login(self.teacher)
+
+    def test_makeup_cycle_is_rejected(self):
+        e = make_pass(self.student)
+        a = add_session(e, LessonSession.Status.CANCELLED, day=1)
+        b = add_session(e, LessonSession.Status.CANCELLED, day=2)
+        b.makeup_for = a
+        b.full_clean()
+        b.save()
+        a.makeup_for = b
+        with self.assertRaises(ValidationError):
+            a.full_clean()
+
+    def test_direct_end_of_already_ended_pass_reports_nothing(self):
+        e = make_pass(self.student, status=Enrollment.Status.ENDED)
+        response = self.client.post(reverse("lessons:enrollment_end", args=[e.pk]), follow=True)
+        self.assertNotContains(response, "레슨권을 종료했습니다")
+
+    def test_direct_end_updates_timestamp(self):
+        e = make_pass(self.student)
+        before = e.updated_at
+        self.client.post(reverse("lessons:enrollment_end", args=[e.pk]))
+        e.refresh_from_db()
+        self.assertEqual(e.status, Enrollment.Status.ENDED)
+        self.assertGreater(e.updated_at, before)
+
+    def test_student_edit_does_not_undo_concurrent_archive(self):
+        """수정 화면을 연 뒤 다른 탭에서 보관하면, 수정 저장이 보관을 되돌리지 않는다."""
+        from unittest import mock
+
+        from students.forms import StudentForm
+
+        original = StudentForm.is_valid
+
+        def is_valid(form):
+            ok = original(form)
+            Student.objects.filter(pk=self.student.pk).update(is_active=False)  # 다른 탭에서 보관
+            return ok
+
+        data = {"name": "박서연2", "phone": "", "is_minor": "", "guardian_phone": "", "guardian_name": "", "memo": ""}
+        with mock.patch.object(StudentForm, "is_valid", is_valid):
+            self.client.post(reverse("students:edit", args=[self.student.pk]), data)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.name, "박서연2")
+        self.assertFalse(self.student.is_active)
