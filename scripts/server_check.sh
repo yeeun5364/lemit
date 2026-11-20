@@ -31,7 +31,8 @@ if have docker; then
     if docker info > /dev/null 2>&1; then ok "docker 데몬 실행 중, 현재 사용자로 접근 가능"
     else bad "docker 데몬에 접근할 수 없습니다 (sudo systemctl enable --now docker, docker 그룹 추가 후 재접속)"; fi
     docker compose version > /dev/null 2>&1 && ok "$(docker compose version 2>&1)" || bad "docker compose 플러그인이 없습니다 (DEPLOY.md §1)"
-    docker buildx version > /dev/null 2>&1 && ok "buildx: $(docker buildx version 2>&1)" || bad "docker buildx 플러그인이 없습니다 (DEPLOY.md §1)"
+    # 있는지만 보면 Amazon Linux 2023 docker 패키지의 buildx 0.12도 통과해 빌드에서 실패한다 → 버전까지 검사 (#48)
+    if bx="$(bash scripts/buildx_check.sh)"; then ok "$bx"; else bad "$bx"; fi
 else
     bad "docker 가 없습니다 (sudo dnf install -y docker)"
 fi

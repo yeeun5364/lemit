@@ -47,6 +47,11 @@ main() {
     echo "$PREFLIGHT" | sed '$d'
     MODE="$(echo "$PREFLIGHT" | tail -1)"
 
+    # 0-1) 빌드 도구 확인: Compose 빌드에는 buildx 0.17.0 이상 필요 (#48). 부족하면 해결 방법과 함께 중단.
+    #      git checkout보다 먼저 한다: 이 검사 스크립트가 없는 예전 커밋을 배포해도 검사가 실행되게 (Codex 리뷰 P2)
+    BX="$(bash scripts/buildx_check.sh)" || { log "$BX"; exit 1; }
+    log "$BX"
+
     # 1) 코드 받기
     if [ "${DEPLOY_SKIP_GIT:-0}" != "1" ]; then
         if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
