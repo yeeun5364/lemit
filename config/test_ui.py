@@ -71,12 +71,12 @@ class DashboardTests(UiTestBase):
         self.assertContains(res, "안 읽음 2")
         self.assertEqual(res.context["label_summary"], [("MAKEUP", "보강 요청", 1), ("RESCHEDULE", "일정 변경", 1)])
 
-    def test_schedule_is_shown_as_pending_not_fake_data(self):
-        """일정 기능(UC-04·05)이 없으므로 오늘 수업 수·일정 목록을 지어내지 않는다."""
+    def test_today_schedule_uses_real_sessions(self):
+        """오늘 수업 수·오늘의 일정은 실제 회차로 (UC-05). 회차가 없으면 0과 빈 상태, '준비 중'은 없다."""
         res = self.client.get(reverse("home"))
-        self.assertContains(res, "수업 일정 기능을 준비하고 있어요")
-        self.assertContains(res, "준비 중")
-        self.assertNotIn("today_lessons", res.context)
+        self.assertEqual(res.context["today_sessions"], [])
+        self.assertContains(res, "오늘은 수업이 없어요")
+        self.assertNotContains(res, "준비 중")
 
     def test_empty_state_when_everything_is_read(self):
         Message.objects.filter(conversation__teacher=self.a).update(read_at=timezone.now())
@@ -86,9 +86,11 @@ class DashboardTests(UiTestBase):
 
 
 class LayoutTests(UiTestBase):
-    def test_sidebar_marks_current_section_and_schedule_is_not_a_link(self):
+    def test_sidebar_marks_current_section(self):
         cases = [
             (reverse("home"), reverse("home")),
+            (reverse("lessons:schedule"), reverse("lessons:schedule")),
+            (reverse("lessons:session_create"), reverse("lessons:schedule")),
             (reverse("students:list"), reverse("students:list")),
             (reverse("students:detail", args=[self.sky.pk]), reverse("students:list")),
             (reverse("inbox:list"), reverse("inbox:list")),
@@ -98,7 +100,7 @@ class LayoutTests(UiTestBase):
                 html = self.client.get(url).content.decode()
                 self.assertIn(f'href="{active_href}" class="nav-item is-active" aria-current="page"', html)
                 self.assertEqual(html.count('class="nav-item is-active"'), 1)
-                self.assertIn('<span class="nav-item is-disabled" aria-disabled="true">', html)
+                self.assertNotIn("is-disabled", html)  # '수업 일정'은 이제 링크 (UC-05)
 
     def test_accessibility_hooks_and_logout(self):
         res = self.client.get(reverse("home"))

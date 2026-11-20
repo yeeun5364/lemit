@@ -1,7 +1,9 @@
-"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07).
+"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07), UC-05 일정 조회 (S05).
 
 모든 동작은 **로그인한 강사의 수강생·레슨권**에서만 객체를 찾는다 (ERD 2-5). 다른 강사의 번호면 404.
 """
+
+import datetime
 
 from django.contrib import messages
 from django.db import transaction
@@ -90,7 +92,10 @@ def _initial_from_query(request):
     선택지(SessionForm)와 같은 조건(내 진행 중 레슨권, 수강 중인 수강생)으로만 찾으므로 다른 강사나
     보관된 수강생의 번호를 넣어도 선택되지 않는다.
     """
-    initial = {"date": timezone.localdate()}
+    from lessons.schedule import parse_date
+
+    today = timezone.localdate()
+    initial = {"date": parse_date(request.GET.get("date"), today)}  # 일정 화면의 빈 날에서 '일정 추가'
     mine = scope_to_teacher(
         Enrollment.objects.active().filter(student__is_active=True), request.user, "student__teacher"
     )
@@ -164,8 +169,11 @@ def session_create(request):
             "back_url": reverse("students:detail", args=[preselected.student_id]),
             "back_label": preselected.student.name,
         }
-    else:
-        back = {"back_url": reverse("students:list"), "back_label": "수강생"}
+    else:  # 일정 화면·대시보드에서 왔으면 고른 날짜의 일정으로 돌아간다
+        back = {
+            "back_url": reverse("lessons:schedule") + f"?date={initial['date'].isoformat()}",
+            "back_label": "수업 일정",
+        }
     return render(request, "lessons/session_form.html", {"form": form, **back})
 
 
@@ -311,3 +319,76 @@ def _back_to_session(session):
     if LessonSession.objects.filter(pk=session.pk).exists():
         return redirect("lessons:session_detail", pk=session.pk)
     return redirect("students:detail", pk=session.enrollment.student_id)  # 그사이 삭제됨
+
+
+def schedule(request):
+    """S05·S05-W 수업 일정 (UC-05). ?view=month|week&date=YYYY-MM-DD&student=<id>
+
+    링크(GET)만으로 이동하므로 JS 없이 동작한다. 잘못된 값은 기본값(월간·오늘·전체)으로 바꿔 보여 준다.
+    """
+    from urllib.parse import urlencode
+
+    from lessons import schedule as sch
+
+    today = timezone.localdate()
+    view = "week" if request.GET.get("view") == "week" else "month"
+    selected = sch.parse_date(request.GET.get("date"), today)
+    students = Student.objects.for_teacher(request.user).active().order_by("name", "id")
+    student_id = request.GET.get("student", "")
+    student = students.filter(pk=student_id).first() if student_id.isdigit() else None
+
+    def link(**changes):
+        params = {"view": view, "date": selected.isoformat(), **({"student": student.pk} if student else {})}
+        params.update(changes)
+        return "?" + urlencode(params)
+
+    if view == "month":
+        weeks = sch.month_weeks(selected)
+        days = sch.sessions_by_day(request.user, weeks[0][0], weeks[-1][-1], student and student.pk)
+        grid = [
+            [
+                {
+                    "date": d,
+                    "in_month": d.month == selected.month,
+                    "is_today": d == today,
+                    "is_selected": d == selected,
+                    "count": len(days.get(d, [])),
+                    "url": link(date=d.isoformat()),
+                }
+                for d in week
+            ]
+            for week in weeks
+        ]
+        prev_date, next_date = sch.add_months(selected, -1), sch.add_months(selected, 1)
+        context = {"grid": grid, "day_sessions": days.get(selected, [])}
+    else:
+        start = sch.week_start(selected)
+        week = [start + datetime.timedelta(days=i) for i in range(7)]
+        days = sch.sessions_by_day(request.user, week[0], week[-1], student and student.pk)
+        context = {
+            "week": [{"date": d, "is_today": d == today, "sessions": days.get(d, [])} for d in week],
+            "week_first": week[0],
+            "week_last": week[-1],
+        }
+        prev_date, next_date = selected - datetime.timedelta(days=7), selected + datetime.timedelta(days=7)
+
+    add_params = {"date": selected.isoformat(), **({"student": student.pk} if student else {})}
+    return render(
+        request,
+        "lessons/schedule.html",
+        {
+            **context,
+            "view": view,
+            "selected": selected,
+            "today": today,
+            "weekdays": sch.WEEKDAYS,
+            "students": students,
+            "student": student,
+            "prev_url": link(date=prev_date.isoformat()),
+            "next_url": link(date=next_date.isoformat()),
+            "today_url": link(date=today.isoformat()),
+            "month_url": link(view="month"),
+            "week_url": link(view="week"),
+            "add_url": reverse("lessons:session_create") + "?" + urlencode(add_params),
+        },
+    )
