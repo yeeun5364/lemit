@@ -2,7 +2,8 @@
 # docker buildx 버전이 Compose 빌드에 충분한지 검사 (#48). server_check.sh·deploy.sh가 같은 기준으로 쓴다.
 #   bash scripts/buildx_check.sh      → 충분하면 종료 코드 0, 부족·없음이면 1 (해결 방법 출력)
 #
-# Docker Compose v2.37+ / v5의 `compose build`는 buildx 0.17.0 이상이 필요하다.
+# 이 프로젝트가 쓰는 Compose v5(install_docker_plugins.sh가 고정)의 `compose build`는 buildx 0.17.0 이상이 필요하다.
+# 더 오래된 Compose 조합은 지원 대상이 아니므로 Compose 버전과 관계없이 같은 기준을 쓴다 (Codex 재리뷰, PR #49).
 # Amazon Linux 2023의 docker 패키지에는 0.12.x가 들어 있어 그대로는 빌드가 실패한다.
 # 테스트용: BUILDX_VERSION_OUTPUT에 `docker buildx version` 출력을 넣으면 그 값으로 판정한다.
 set -uo pipefail
