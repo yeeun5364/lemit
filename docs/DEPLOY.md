@@ -47,17 +47,23 @@ SSH 22 (내 IP만) ── 관리자
    sudo usermod -aG docker ec2-user   # 로그아웃 후 다시 접속해야 sudo 없이 docker 사용
    git clone https://github.com/yeeun5364/lemit.git && cd lemit
    ```
-6. **Docker Compose·Buildx 플러그인 설치.** Amazon Linux 2023 저장소에 없어서 GitHub 릴리스에서 받습니다.
+6. **Docker Compose·Buildx 플러그인 설치.** Amazon Linux 2023 저장소에 없거나(Compose) 너무 오래된 버전만 있어서(Buildx) GitHub 릴리스에서 받습니다.
    ```bash
-   sudo bash scripts/install_docker_plugins.sh
-   docker compose version && docker buildx version
+   sudo bash scripts/install_docker_plugins.sh                 # 둘 다
+   sudo bash scripts/install_docker_plugins.sh --only buildx   # Compose를 따로 설치했다면 buildx만
+   docker compose version && docker buildx version             # buildx가 v0.17.0 이상이어야 함
    ```
+   - **주의 (#48, 2026-11-20 실제 서버에서 발생):** Amazon Linux 2023의 `docker` 패키지에는 **buildx 0.12.x가 함께 설치**됩니다(`/usr/libexec/docker/cli-plugins`).
+     - Compose v5의 `compose build`는 buildx **0.17.0 이상**이 필요해서, 이 상태로 배포하면 `compose build requires buildx 0.17.0 or later`로 멈춥니다.
+     - 위 스크립트는 우선순위가 더 높은 `/usr/local/lib/docker/cli-plugins`에 설치하므로 패키지 파일을 지우지 않아도 새 버전이 쓰입니다.
+     - docker CLI가 플러그인을 찾는 순서: `~/.docker/cli-plugins` → `/usr/local/lib/docker/cli-plugins` → `/usr/local/libexec/...` → `/usr/lib/...` → `/usr/libexec/docker/cli-plugins`
+     - `server_check.sh`와 `deploy.sh`가 buildx 버전(0.17.0 이상)을 검사하고, 부족하면 이 명령을 안내합니다.
    - 버전을 고정합니다: Compose v5.6.1(2026-10-21), Buildx v0.38.1(2026-10-20). 나온 지 2주가 지난 버전 중에서 골랐습니다.
    - **두 파일의 sha256 체크섬이 모두 맞을 때만 설치합니다.**
      - 스크립트는 `set -euo pipefail`로 실행되어, 어느 단계든 실패하면 즉시 멈춥니다.
      - 체크섬이 틀리거나 항목이 없으면 아무것도 설치하지 않고 종료 코드 1로 끝납니다.
      - 지원하지 않는 CPU 아키텍처(x86_64·aarch64 외)도 바로 중단합니다(PR #41 리뷰).
-   - 저장소의 docker 버전(25.0)과 Compose v5 조합은 실제 서버에서 처음 실행합니다. `docker compose up`이나 `build`에서 API 버전 오류가 나면 그 출력을 그대로 알려주세요.
+   - 실제 서버 확인(2026-11-20, #48): docker 25.0.14 + Compose v5.8.0 + Buildx v0.38.1 조합으로 빌드·배포.
 7. **서버 점검:**
    ```bash
    bash scripts/server_check.sh   # 읽기 전용. OS·메모리·스왑·디스크·도구·docker 그룹·열린 포트·.env 확인

@@ -39,5 +39,38 @@ if grep -q "포트 목록을 가져오지 못했습니다" <<< "$out" && ! grep 
     pass=$((pass+1)); echo "[통과] ss 실패 시 '확인 불가' (정상으로 오판하지 않음)"
 else fail=$((fail+1)); echo "[실패] ss 실패 시 판정"; fi
 
-echo "=== server_check 포트 시나리오: 통과 $pass, 실패 $fail ==="
+# buildx 버전 판정 (#48): Amazon Linux 2023 docker 패키지의 0.12.2는 필수 실패여야 한다
+bx() {
+    local want="$1" output="$2" name="$3" code
+    BUILDX_VERSION_OUTPUT="$output" bash scripts/buildx_check.sh > /dev/null 2>&1; code=$?
+    if { [ "$want" = ok ] && [ "$code" -eq 0 ]; } || { [ "$want" = bad ] && [ "$code" -ne 0 ]; }; then
+        pass=$((pass+1)); echo "[통과] buildx $name → $want"
+    else fail=$((fail+1)); echo "[실패] buildx $name: 기대 $want, 종료 $code"; fi
+}
+bx bad "github.com/docker/buildx 0.12.2-m.2 e9943654268c" "0.12.2 (AL2023 패키지)"
+bx bad "github.com/docker/buildx v0.16.9 abcdef"          "0.16.9"
+bx ok  "github.com/docker/buildx v0.17.0 abcdef"          "0.17.0 (경계값)"
+bx ok  "github.com/docker/buildx v0.38.1 0dbe87f36ed4"    "0.38.1"
+bx ok  "github.com/docker/buildx v1.0.0 abcdef"           "1.0.0"
+bx bad ""                                                  "없음"
+bx bad "docker: 'buildx' is not a docker command."        "명령 없음"
+# server_check 전체 실행에서도 같은 판정이 나오는지. 호스트에 Docker가 없어도 buildx 분기에 도달하도록
+# 가짜 docker 명령을 PATH 맨 앞에 넣는다 (Codex 리뷰 P3)
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+    "--version "*) echo "Docker version 25.0.14, build stub" ;;
+    "info "*) exit 0 ;;
+    "compose version") echo "Docker Compose version v5.8.0" ;;
+    "buildx version") echo "github.com/docker/buildx 0.12.2-m.2 stub" ;;
+    *) exit 1 ;;
+esac
+STUB
+chmod +x "$TMP/bin/docker"
+out="$(PATH="$TMP/bin:$PATH" SERVER_CHECK_SS_CMD="true" bash scripts/server_check.sh 2>&1)"
+if grep -q "\[필수\] buildx 0.12.2 < 0.17.0" <<< "$out"; then pass=$((pass+1)); echo "[통과] server_check가 buildx 0.12.2를 필수 실패로 표시"
+else fail=$((fail+1)); echo "[실패] server_check buildx 판정: $(grep -i buildx <<< "$out")"; fi
+
+echo "=== server_check 포트·buildx 시나리오: 통과 $pass, 실패 $fail ==="
 [ "$fail" -eq 0 ]

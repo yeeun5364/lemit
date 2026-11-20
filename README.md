@@ -50,7 +50,7 @@
 | 인프라 | Django + PostgreSQL 연결 | ✅ | Django 5.2.19 + PostgreSQL 18, 커스텀 User(이메일 로그인), 테스트 6개 통과 (2026-11-19) |
 | 인프라 | Docker 실행 환경 | 🟡 | web(gunicorn)+db 컨테이너, 이미지 안 모델 검증·추론, 헬스체크·스모크 테스트. PC에서 운영·개발 구성 모두 확인, PR 검토 중 (#5) |
 | 인프라 | GitHub Actions (테스트) | 🟡 | 린트·PostgreSQL 18 테스트 워크플로 작성 (#6). 이미지 검증은 #5 이후 |
-| 인프라 | AWS Lightsail 배포 | 🟡 | 배포 준비 완료: Caddy TLS 프록시, 운영 보안 설정, 배포·자동 롤백 스크립트, 절차서([docs/DEPLOY.md](docs/DEPLOY.md)). PC 연습 배포·롤백 검증. Lightsail 서버(Amazon Linux 2023, 2GB) 생성됨, 서버 준비 절차(dnf·Compose/Buildx 플러그인·스왑·고정 IP)와 `scripts/server_check.sh` 추가. **실제 서버 배포는 아직** (#7) |
+| 인프라 | AWS Lightsail 배포 | ✅ | **첫 수동 배포 성공 (2026-11-20, `c848f2c`)**: Amazon Linux 2023, db·web·proxy healthy, 스모크 6항목(AI 모델 v2 추론 포함)·공개 경로 확인 통과, 외부에서 5432·8000 차단 확인. IP로 HTTP 시연 모드(도메인·HTTPS는 도메인 확정 후). 브라우저 기능 확인·관리자 계정 생성은 사용자 진행 (#48, [docs/DEPLOY.md](docs/DEPLOY.md)) |
 | 인프라 | GitHub Actions 자동 배포(CD) | 🟡 | `deploy.yml`: CI 성공한 main 커밋만, OIDC(장기 AWS 키 없음), 배포 중에만 SSH 22번에 러너 IP 임시 추가, 배포 전용 키(강제 명령), 호스트 키 검증, 동시 배포 잠금. 스크립트 테스트 통과, **AWS·GitHub 설정과 실제 배포 시험은 아직** ([docs/CD.md](docs/CD.md), #42) |
 
 ## 회차 상태와 차감 규칙
@@ -238,7 +238,7 @@ python -m ml.train --version v3         # 모델 다시 학습 (데이터를 바
 
 > 발표(2026-11-24) 전까지 채웁니다. 실제로 동작을 확인한 내용만 올립니다.
 
-- **배포 주소:** (배포 후 추가)
+- **배포 주소:** http://15.135.58.179 (2026-11-20 첫 배포, 시연용 HTTP. 실제 개인정보·다른 곳에서 쓰는 비밀번호를 입력하지 않습니다)
 - **데모 계정:** (데모용 가짜 데이터만 사용)
 - **데모 데이터:** 관리 명령 `python manage.py seed_demo`로 넣을 예정 (아직 구현 전)
 
