@@ -1,0 +1,48 @@
+{# 메시지함 왼쪽 칸: 분류 탭 + 대화 목록. selected가 있으면 그 대화를 강조한다 #}
+<section class="inbox-pane inbox-list-pane card card-flush" aria-label="대화 목록">
+  <div class="summary-bar">
+    <nav class="filter-tabs" aria-label="AI 분류 필터">
+      {% for value, label in tabs %}
+      <a href="{% url 'inbox:list' %}{% if value %}?label={{ value }}{% endif %}"
+         class="filter-tab{% if value == current_label %} is-active{% endif %}"{% if value == current_label %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <p class="ai-note">{% include "ui/icon.html" with name="sparkle" size="sm" %}분류는 AI 예측이며 참고용입니다. 일정은 자동으로 바뀌지 않습니다.</p>
+  </div>
+  {% if conversations %}
+  <ul class="rows">
+    {% for c in conversations %}
+    <li>
+      <a class="conv{% if c.unread %} is-unread{% endif %}{% if selected and selected.pk == c.pk %} is-selected{% endif %}"
+         href="{% url 'inbox:detail' c.pk %}{% if current_label %}?label={{ current_label }}{% endif %}"{% if selected and selected.pk == c.pk %} aria-current="true"{% endif %}>
+        {% if c.unread %}<span class="unread-dot" aria-hidden="true"></span>{% else %}<span class="read-spacer" aria-hidden="true"></span>{% endif %}
+        <span class="conv-body">
+          <span class="conv-top">
+            <span class="conv-title">{{ c.student.name }} · {{ c.subject }}</span>
+            <span class="conv-time"><time datetime="{{ c.last_message_at|date:'c' }}">{{ c.last_message_at|date:"n/j H:i" }}</time></span>
+          </span>
+          {% if c.latest_body %}<span class="conv-preview">{{ c.latest_body|truncatechars:60 }}</span>{% endif %}
+          <span class="conv-meta">
+            {% if c.latest_body %}{% include "inbox/_badge.html" with label=c.latest_label confidence=c.latest_confidence display=c.latest_display %}{% endif %}
+            {% if c.unread %}<span class="badge badge-blue">안 읽음 {{ c.unread }}</span>{% else %}<span class="badge badge-neutral">읽음</span>{% endif %}
+          </span>
+        </span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif current_label %}
+  <div class="empty-state">
+    <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="inbox" %}</span>
+    <p class="empty-title">이 분류의 메시지가 없습니다.</p>
+    <p class="empty-text"><a href="{% url 'inbox:list' %}">전체 메시지 보기</a></p>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon">{% include "ui/icon.html" with name="inbox" %}</span>
+    <p class="empty-title">아직 메시지가 없습니다.</p>
+    <p class="empty-text">시연용 '수강생 메시지 추가'로 수강생이 보낸 메시지를 등록하면 AI가 분류합니다.</p>
+    <a class="btn btn-primary btn-sm" href="{% url 'inbox:new' %}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 메시지 추가</a>
+  </div>
+  {% endif %}
+</section>
