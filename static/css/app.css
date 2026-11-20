@@ -475,7 +475,9 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .ended-passes { margin-top: var(--space-4); }
 .ended-passes summary { cursor: pointer; color: var(--text-muted); font-size: var(--fs-sm); font-weight: 600; padding: var(--space-1) 0; }
 .ended-passes .passes { margin-top: var(--space-3); }
-.notice-field { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-4); margin: 0; background: var(--warning-soft); }
+.notice-field { border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-4); margin: 0; background: var(--warning-soft); min-inline-size: 0; }
+.notice-field[aria-invalid="true"] { border-color: var(--danger); }
+.notice-field .check-field label { overflow-wrap: anywhere; }
 .notice-field legend { padding: 0 var(--space-1); }
 
 /* 8. 로그인·회원가입 ------------------------------------------------------- */

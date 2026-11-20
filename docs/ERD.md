@@ -143,7 +143,7 @@ erDiagram
 - `remaining_count` 같은 컬럼을 두면 상태를 바꿀 때마다 같이 고쳐야 해서 **값이 어긋날 위험**이 있습니다.
 - 대신 Django ORM 집계(`annotate` + `Count(filter=...)`)로 매번 계산합니다. 강사 1명의 데이터 규모에서는 성능 문제가 없습니다.
 - 이 계산은 `Enrollment`의 메서드·쿼리셋 한 곳에만 두고 단위 테스트합니다. (UC-06, UC-07)
-  - 구현: `EnrollmentQuerySet.with_usage()`가 `used_count`(차감 회차)·`remaining_count`(잔여)를 붙이고, `exhausted()`는 잔여 0 이하만 고릅니다 (`lessons/models.py`, 2026-11-20). 잔여는 초과 진행 시 음수가 될 수 있습니다.
+  - 구현: `EnrollmentQuerySet.with_usage()`가 `used_count`(차감 회차)·`remaining_count`(잔여)를 붙이고, `exhausted()`는 잔여 0 이하만 고릅니다 (`lessons/models.py`, 2026-11-20). 잔여는 초과 진행 시 음수가 될 수 있습니다. 다른 회차 조건과 조인해도 부풀지 않도록 `Count(distinct=True)`로 셉니다 (PR #55 리뷰).
 
 ### 2-3. 기획서의 `Lesson` 모델은 MVP에서 `Enrollment`에 합침
 
@@ -214,7 +214,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
 | `LessonSession.absence_deducted` | `absent`일 때만 true일 수 있음 (다른 상태에서 true로 남으면 잔여 계산이 어긋남) | DB `CheckConstraint` (UC-03 구현 때 추가, 2026-11-20) |
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
-| `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함 | 앱 검증 (모델 `clean`) |
+| `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함. 보강이 연결된 뒤 원래 회차를 다른 상태(차감 결석·완료 등)로 바꾸는 것도 거절 | 앱 검증 (모델 `clean`, PR #55 리뷰) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
 | `LessonRecord.session` | 회차당 일지 1개 | DB `OneToOneField` |
 | `LessonSession` 완료 취소 | `completed` → `scheduled`만 가능, `completed_at`을 비움. **수업일지(`LessonRecord`)가 있으면 불가** | 앱 검증 (UC-06) |
