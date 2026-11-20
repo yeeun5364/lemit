@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -601,6 +601,13 @@ class SessionCreateTests(TestCase):
                 self.assertIn("end_time", response.context["form"].errors)
         self.assertFalse(LessonSession.objects.exists())
 
+    def test_preselect_ignores_archived_student(self):
+        self.student.is_active = False
+        self.student.save()
+        response = self.client.get(self.url, {"student": self.student.pk})
+        self.assertIsNone(response.context["form"]["enrollment"].value())
+        self.assertEqual(response.context["back_url"], reverse("students:list"))
+
     def test_preselect_from_student_detail(self):
         response = self.client.get(self.url, {"student": self.student.pk})
         self.assertEqual(response.context["form"]["enrollment"].value(), self.enrollment.pk)
@@ -787,3 +794,198 @@ class SessionIsolationTests(TestCase):
         self.assertIsNone(response.context["form"]["enrollment"].value())
         response = self.client.get(reverse("lessons:session_create"), {"student": self.a_pass.student_id})
         self.assertIsNone(response.context["form"]["enrollment"].value())
+
+
+# ---------------------------------------------------------------------------
+# UC-04 회차 저장의 수강생 행 잠금·재확인 (ERD 동시 변경 규칙)
+# ---------------------------------------------------------------------------
+
+
+def after_session_validation(change):
+    """SessionForm 검증 직후(잠금 트랜잭션 전)에 change()를 실행해 다른 탭·요청의 변경을 흉내 낸다."""
+    from unittest import mock
+
+    from lessons.forms import SessionForm
+
+    original = SessionForm.is_valid
+
+    def is_valid(form):
+        ok = original(form)
+        change()
+        return ok
+
+    return mock.patch.object(SessionForm, "is_valid", is_valid)
+
+
+class SessionSaveRecheckTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.enrollment = make_pass(self.student)
+        self.client.force_login(self.teacher)
+
+    def data(self, enrollment=None, start="16:00", end="17:00"):
+        return {
+            "enrollment": (enrollment or self.enrollment).pk,
+            "date": "2026-11-21",
+            "start_time": start,
+            "end_time": end,
+            "place": "",
+        }
+
+    # --- 등록 ---
+    def test_create_rejected_if_student_archived_after_validation(self):
+        def archive():
+            Student.objects.filter(pk=self.student.pk).update(is_active=False)
+
+        with after_session_validation(archive):
+            response = self.client.post(reverse("lessons:session_create"), self.data())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("보관된 수강생", str(response.context["form"].non_field_errors()))
+        self.assertFalse(LessonSession.objects.exists())
+
+    def test_create_rejected_if_pass_ended_after_validation(self):
+        def end():
+            Enrollment.objects.filter(pk=self.enrollment.pk).update(status=Enrollment.Status.ENDED)
+
+        with after_session_validation(end):
+            response = self.client.post(reverse("lessons:session_create"), self.data())
+        self.assertIn("종료된 레슨권", str(response.context["form"].non_field_errors()))
+        self.assertFalse(LessonSession.objects.exists())
+
+    # --- 수정 ---
+    def test_edit_rejected_if_session_completed_after_validation(self):
+        s = add_session(self.enrollment, day=21)
+
+        def complete():
+            LessonSession.objects.filter(pk=s.pk).update(status=LessonSession.Status.COMPLETED)
+
+        with after_session_validation(complete):
+            response = self.client.post(
+                reverse("lessons:session_edit", args=[s.pk]), self.data(start="09:00", end="10:00")
+            )
+        self.assertRedirects(response, reverse("lessons:session_detail", args=[s.pk]))
+        s.refresh_from_db()
+        self.assertEqual(s.status, LessonSession.Status.COMPLETED)
+        self.assertEqual(timezone.localtime(s.start_at).hour, 17)  # 시간도 그대로
+
+    def test_edit_of_session_deleted_meanwhile_goes_to_student(self):
+        s = add_session(self.enrollment, day=21)
+
+        def delete():
+            LessonSession.objects.filter(pk=s.pk).delete()
+
+        with after_session_validation(delete):
+            response = self.client.post(reverse("lessons:session_edit", args=[s.pk]), self.data())
+        self.assertRedirects(response, reverse("students:detail", args=[self.student.pk]))
+        self.assertFalse(LessonSession.objects.exists())
+
+    def test_edit_keeps_fields_changed_elsewhere(self):
+        """수정은 폼 필드만 저장하므로, 화면을 연 뒤 다른 곳에서 바뀐 사유는 덮어쓰지 않는다."""
+        s = add_session(self.enrollment, day=21)
+
+        def set_reason():
+            LessonSession.objects.filter(pk=s.pk).update(reason="다른 탭에서 남긴 메모")
+
+        with after_session_validation(set_reason):
+            self.client.post(reverse("lessons:session_edit", args=[s.pk]), self.data(start="09:00", end="10:00"))
+        s.refresh_from_db()
+        self.assertEqual(timezone.localtime(s.start_at).hour, 9)
+        self.assertEqual(s.reason, "다른 탭에서 남긴 메모")
+
+    def test_edit_cannot_move_session_to_another_students_pass(self):
+        other = make_pass(Student.objects.create(teacher=self.teacher, name="이도윤"), title="바이올린")
+        s = add_session(self.enrollment, day=21)
+        form = self.client.get(reverse("lessons:session_edit", args=[s.pk])).context["form"]
+        self.assertNotIn(other, form.fields["enrollment"].queryset)
+        response = self.client.post(reverse("lessons:session_edit", args=[s.pk]), self.data(enrollment=other))
+        self.assertIn("enrollment", response.context["form"].errors)
+        s.refresh_from_db()
+        self.assertEqual(s.enrollment, self.enrollment)
+
+    def test_edit_can_move_to_another_pass_of_same_student(self):
+        second = make_pass(self.student, title="작곡")
+        s = add_session(self.enrollment, day=21)
+        self.client.post(reverse("lessons:session_edit", args=[s.pk]), self.data(enrollment=second))
+        s.refresh_from_db()
+        self.assertEqual(s.enrollment, second)
+
+    def test_edit_cannot_move_to_pass_ended_after_validation(self):
+        second = make_pass(self.student, title="작곡")
+        s = add_session(self.enrollment, day=21)
+
+        def end_second():
+            Enrollment.objects.filter(pk=second.pk).update(status=Enrollment.Status.ENDED)
+
+        with after_session_validation(end_second):
+            self.client.post(reverse("lessons:session_edit", args=[s.pk]), self.data(enrollment=second))
+        s.refresh_from_db()
+        self.assertEqual(s.enrollment, self.enrollment)
+
+    def test_edit_keeps_working_when_own_pass_was_ended(self):
+        """지금 레슨권이 종료됐어도 그 회차의 시간은 고칠 수 있다 (레슨권을 바꾸지 않는 경우)."""
+        s = add_session(self.enrollment, day=21)
+        Enrollment.objects.filter(pk=self.enrollment.pk).update(status=Enrollment.Status.ENDED)
+        self.client.post(reverse("lessons:session_edit", args=[s.pk]), self.data(start="09:00", end="10:00"))
+        s.refresh_from_db()
+        self.assertEqual(timezone.localtime(s.start_at).hour, 9)
+
+    # --- 삭제 ---
+    def test_delete_rejected_if_session_completed_after_check(self):
+        from unittest import mock
+
+        from lessons import views
+
+        s = add_session(self.enrollment, day=21)
+        original = views._owned_session
+
+        def stale_fetch(request, pk):
+            obj = original(request, pk)  # '예정'으로 읽은 뒤
+            LessonSession.objects.filter(pk=pk).update(status=LessonSession.Status.COMPLETED)  # 다른 요청이 완료
+            return obj
+
+        with mock.patch.object(views, "_owned_session", stale_fetch):
+            response = self.client.post(reverse("lessons:session_delete", args=[s.pk]))
+        self.assertRedirects(response, reverse("lessons:session_detail", args=[s.pk]))
+        self.assertTrue(LessonSession.objects.filter(pk=s.pk, status=LessonSession.Status.COMPLETED).exists())
+
+
+class SessionArchiveConcurrencyTests(TransactionTestCase):
+    """실제 두 DB 연결: 보관 트랜잭션이 수강생 행을 잡고 있는 동안 회차 등록은 기다렸다가, 보관이 끝나면 거절된다.
+
+    잠금·재확인이 없으면 검증 시점에는 수강생이 '수강 중'이라 회차가 저장되고, 보관된 수강생에게 예정 회차가 남는다.
+    """
+
+    def test_create_waits_for_archive_lock_then_rejects(self):
+        import threading
+
+        from django.db import connection
+
+        teacher = make_teacher("a@example.com", "A강사")
+        student = Student.objects.create(teacher=teacher, name="박서연")
+        enrollment = make_pass(student)
+        self.client.force_login(teacher)
+        locked, release = threading.Event(), threading.Event()
+
+        def archive_in_other_connection():
+            try:
+                with transaction.atomic():
+                    s = Student.objects.select_for_update().get(pk=student.pk)
+                    s.is_active = False
+                    s.save(update_fields=["is_active", "updated_at"])
+                    locked.set()
+                    release.wait(5)
+            finally:
+                connection.close()
+
+        worker = threading.Thread(target=archive_in_other_connection)
+        worker.start()
+        self.assertTrue(locked.wait(5))
+        # 보관은 아직 커밋 전: 폼 검증은 '수강 중'으로 통과하고, 저장 단계의 잠금에서 기다린다
+        threading.Timer(0.5, release.set).start()
+        data = {"enrollment": enrollment.pk, "date": "2026-11-21", "start_time": "16:00", "end_time": "17:00"}
+        response = self.client.post(reverse("lessons:session_create"), data)
+        worker.join(5)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("보관된 수강생", str(response.context["form"].non_field_errors()))
+        self.assertFalse(LessonSession.objects.exists())

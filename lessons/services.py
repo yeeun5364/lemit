@@ -3,6 +3,7 @@
 from django.utils import timezone
 
 from lessons.models import Enrollment, LessonSession
+from students.models import Student
 
 
 def overlapping_sessions(session):
@@ -55,3 +56,12 @@ def deletable(session):
 
 def scheduled_sessions_of(student):
     return LessonSession.objects.filter(enrollment__student=student, status=LessonSession.Status.SCHEDULED)
+
+
+def lock_student(student_id):
+    """수강생 행을 잠그고 최신 값을 돌려준다. 트랜잭션 안에서만 쓴다.
+
+    잔여 회차·레슨권·회차 상태를 바꾸는 쓰기의 공통 직렬화 지점 (ERD 동시 변경 규칙):
+    레슨권 등록·종료, 수강생 보관, 회차 등록·수정·삭제. UC-06 완료 처리도 이것을 쓴다.
+    """
+    return Student.objects.select_for_update().get(pk=student_id)

@@ -32,7 +32,7 @@ def enrollment_create(request, student_pk):
         with transaction.atomic():
             # 검증과 저장 사이에 수강생이 보관되거나 레슨권 상태가 바뀔 수 있으므로(다른 탭·동시 요청),
             # 수강생 행을 잠근 뒤 다시 확인한다. 보관(students.archive)도 같은 행을 잠근다 (PR #55 리뷰)
-            locked = Student.objects.select_for_update().get(pk=student.pk)
+            locked = services.lock_student(student.pk)
             if not locked.is_active:
                 messages.error(request, "보관된 수강생에게는 레슨권을 추가할 수 없습니다. 보관을 해제한 뒤 추가하세요.")
                 return redirect("students:detail", pk=student.pk)
@@ -70,7 +70,7 @@ def enrollment_end(request, pk):
     enrollment = get_owned_or_404(Enrollment.objects.select_related("student"), request.user, "student__teacher", pk=pk)
     with transaction.atomic():
         # 레슨권 등록(소진 레슨권 종료)과 같은 수강생 행 잠금 규약을 쓴다 (PR #55 리뷰 2차)
-        Student.objects.select_for_update().get(pk=enrollment.student_id)
+        services.lock_student(enrollment.student_id)
         changed = Enrollment.objects.filter(pk=enrollment.pk, status=Enrollment.Status.ACTIVE).update(
             status=Enrollment.Status.ENDED, updated_at=timezone.now()
         )
@@ -87,10 +87,13 @@ def _owned_session(request, pk):
 def _initial_from_query(request):
     """수강생 상세의 '+ 일정'처럼 ?enrollment= 또는 ?student= 로 들어오면 레슨권을 미리 선택한다.
 
-    값은 선택지(내 진행 중 레슨권)에 있을 때만 쓰이므로 다른 강사의 번호를 넣어도 선택되지 않는다.
+    선택지(SessionForm)와 같은 조건(내 진행 중 레슨권, 수강 중인 수강생)으로만 찾으므로 다른 강사나
+    보관된 수강생의 번호를 넣어도 선택되지 않는다.
     """
     initial = {"date": timezone.localdate()}
-    mine = scope_to_teacher(Enrollment.objects.active(), request.user, "student__teacher")
+    mine = scope_to_teacher(
+        Enrollment.objects.active().filter(student__is_active=True), request.user, "student__teacher"
+    )
     enrollment_id = request.GET.get("enrollment", "")
     student_id = request.GET.get("student", "")
     if enrollment_id.isdigit():
@@ -98,6 +101,43 @@ def _initial_from_query(request):
     elif student_id.isdigit():
         initial["enrollment"] = mine.filter(student_id=student_id).values_list("pk", flat=True).first()
     return initial
+
+
+# 회차 수정 때 폼이 바꾸는 필드만 저장한다. 객체 전체를 저장하면 화면을 연 뒤 다른 곳에서 바뀐
+# 상태·사유·보강 연결 등을 예전 값으로 되돌린다 (students 수정과 같은 원칙, ERD 동시 변경 규칙)
+SESSION_FORM_FIELDS = ["enrollment", "place", "start_at", "end_at", "updated_at"]
+
+
+class SaveRejected(Exception):
+    """잠금 안에서 다시 확인했더니 저장하면 안 되는 상태. 메시지는 화면에 그대로 보여 준다."""
+
+
+def _save_session_locked(form, original=None):
+    """회차를 수강생 행 잠금 안에서 저장한다 (ERD 동시 변경 규칙).
+
+    폼 검증 뒤 저장 전에 다른 탭·요청이 수강생을 보관하거나 레슨권을 종료하거나 회차를 완료할 수 있다.
+    보관(students.archive)·레슨권 등록·종료와 같은 수강생 행을 잠근 뒤 최신 상태로 다시 확인한다.
+    """
+    enrollment = form.cleaned_data["enrollment"]
+    with transaction.atomic():
+        student = services.lock_student(enrollment.student_id)
+        fresh = Enrollment.objects.get(pk=enrollment.pk)
+        if not student.is_active:
+            raise SaveRejected("보관된 수강생에게는 회차를 저장할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요.")
+        if original is None:
+            if not fresh.is_active:
+                raise SaveRejected("종료된 레슨권에는 회차를 추가할 수 없습니다. 레슨권을 다시 선택하세요.")
+            return form.save()
+        current = LessonSession.objects.select_for_update().filter(pk=original.pk).first()
+        if current is None or current.status != LessonSession.Status.SCHEDULED:
+            raise SaveRejected("그사이 회차 상태가 바뀌어 수정하지 않았습니다. 예정 상태인 회차만 수정할 수 있습니다.")
+        if fresh.student_id != current.enrollment.student_id:
+            raise SaveRejected("같은 수강생의 레슨권으로만 옮길 수 있습니다.")
+        if not fresh.is_active and fresh.pk != current.enrollment_id:
+            raise SaveRejected("종료된 레슨권으로는 옮길 수 없습니다. 레슨권을 다시 선택하세요.")
+        session = form.save(commit=False)
+        session.save(update_fields=SESSION_FORM_FIELDS)
+        return session
 
 
 def _after_save(request, session, verb):
@@ -112,8 +152,12 @@ def session_create(request):
     initial = _initial_from_query(request)
     form = SessionForm(request.POST or None, teacher=request.user, initial=initial)
     if request.method == "POST" and form.is_valid():
-        session = form.save()
-        return _after_save(request, session, "등록")
+        try:
+            session = _save_session_locked(form)
+        except SaveRejected as e:
+            form.add_error(None, str(e))
+        else:
+            return _after_save(request, session, "등록")
     preselected = Enrollment.objects.filter(pk=initial.get("enrollment")).select_related("student").first()
     if preselected:  # 수강생 상세에서 왔으면 그 수강생으로 돌아간다
         back = {
@@ -144,7 +188,13 @@ def session_edit(request, pk):
         return redirect("lessons:session_detail", pk=session.pk)
     form = SessionForm(request.POST or None, instance=session, teacher=request.user)
     if request.method == "POST" and form.is_valid():
-        session = form.save()
+        try:
+            session = _save_session_locked(form, original=session)
+        except SaveRejected as e:
+            messages.error(request, str(e))
+            if LessonSession.objects.filter(pk=session.pk).exists():
+                return redirect("lessons:session_detail", pk=session.pk)
+            return redirect("students:detail", pk=session.enrollment.student_id)  # 그사이 삭제됨
         return _after_save(request, session, "수정")
     back = {"back_url": reverse("lessons:session_detail", args=[session.pk]), "back_label": "회차"}
     return render(request, "lessons/session_form.html", {"form": form, "session": session, **back})
@@ -159,6 +209,14 @@ def session_delete(request, pk):
         return redirect("lessons:session_detail", pk=session.pk)
     student_id = session.enrollment.student_id
     when = timezone.localtime(session.start_at)
-    session.delete()
+    with transaction.atomic():
+        # 확인한 뒤 지우기 전에 회차가 완료될 수 있으므로, 잠금 안에서 '예정'일 때만 지운다
+        services.lock_student(student_id)
+        deleted, _ = LessonSession.objects.filter(pk=session.pk, status=LessonSession.Status.SCHEDULED).delete()
+    if not deleted:
+        messages.error(request, "그사이 회차 상태가 바뀌어 삭제하지 않았습니다. 예정 상태인 회차만 삭제할 수 있습니다.")
+        if LessonSession.objects.filter(pk=session.pk).exists():
+            return redirect("lessons:session_detail", pk=session.pk)
+        return redirect("students:detail", pk=student_id)
     messages.success(request, f"{when:%m/%d %H:%M} 회차를 삭제했습니다.")
     return redirect("students:detail", pk=student_id)

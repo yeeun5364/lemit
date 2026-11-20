@@ -71,9 +71,12 @@ class EnrollmentChoiceField(forms.ModelChoiceField):
 class SessionForm(forms.ModelForm):
     """S07 회차 등록·수정 (UC-04). 날짜·시작·종료 시간을 따로 받아 Asia/Seoul 기준 datetime으로 합친다.
 
-    - 레슨권 선택지: 로그인한 강사의 '진행 중' 레슨권(보관 수강생 제외). 수정이면 지금 레슨권도 포함.
-      조작된 POST로 다른 강사의 레슨권을 보내면 폼 오류 (ERD 2-5).
+    - 레슨권 선택지: 로그인한 강사의 '진행 중' 레슨권(보관 수강생 제외). 조작된 POST로 다른 강사의
+      레슨권을 보내면 폼 오류 (ERD 2-5).
+    - 수정이면 **같은 수강생**의 레슨권으로만 바꿀 수 있다(지금 레슨권은 종료됐어도 포함). 회차를 다른
+      수강생에게 옮기면 진행 기록이 엉뚱한 수강생에게 붙기 때문이다.
     - 상태는 받지 않는다. 새 회차는 항상 '예정'.
+    - 저장 직전 재확인(수강생 보관·레슨권 종료·회차 상태)은 뷰가 수강생 행 잠금 안에서 한다.
     """
 
     enrollment = EnrollmentChoiceField(label="수강생·레슨권", queryset=Enrollment.objects.none())
@@ -93,7 +96,9 @@ class SessionForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         choices = Enrollment.objects.active().filter(student__is_active=True)
         if self.instance.pk:
-            choices = choices | Enrollment.objects.filter(pk=self.instance.enrollment_id)
+            choices = choices.filter(student_id=self.instance.enrollment.student_id) | Enrollment.objects.filter(
+                pk=self.instance.enrollment_id
+            )
         self.fields["enrollment"].queryset = (
             scope_to_teacher(choices, teacher, "student__teacher")
             .select_related("student")
