@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{% if session %}회차 수정{% else %}일정 추가{% endif %}{% endblock %}
+{% block back %}<a class="back-link" href="{{ back_url }}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}{{ back_label }}</a>{% endblock %}
+{% block page_title %}{% if session %}회차 수정{% else %}일정 추가{% endif %}{% endblock %}
+{% block page_desc %}<p class="page-desc">시간이 겹치거나 잔여 회차를 넘어도 저장되고, 저장 후 알림으로 알려 드려요. <span class="req" aria-hidden="true">*</span> 표시는 필수 항목입니다.</p>{% endblock %}
+{% block content %}
+<div class="card form-card">
+  {% if not form.fields.enrollment.queryset.exists %}
+  <div class="empty-state">
+    <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span>
+    <p class="empty-title">진행 중인 레슨권이 없습니다</p>
+    <p class="empty-text">수강생 상세에서 레슨권을 먼저 추가하세요.</p>
+    <a class="btn btn-primary" href="{% url 'students:list' %}">수강생 목록</a>
+  </div>
+  {% else %}
+  <form method="post" class="form" novalidate data-once>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% include "ui/field.html" with field=form.enrollment %}
+    {% include "ui/field.html" with field=form.date %}
+    <div class="field-row">
+      {% include "ui/field.html" with field=form.start_time %}
+      {% include "ui/field.html" with field=form.end_time %}
+    </div>
+    {% include "ui/field.html" with field=form.place %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">저장</button>
+      <a class="btn btn-ghost" href="{{ back_url }}">취소</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+<script>
+  // 시작 시간을 고르면 종료 시간을 '시작 + 1시간'으로 채운다. 강사가 종료를 직접 바꾼 뒤에는 건드리지 않는다.
+  (function () {
+    var start = document.getElementById("id_start_time");
+    var end = document.getElementById("id_end_time");
+    if (!start || !end) return;
+    var touched = end.value !== "";
+    end.addEventListener("input", function () { touched = true; });
+    start.addEventListener("change", function () {
+      if (touched || !/^\d{2}:\d{2}/.test(start.value)) return;
+      var h = (parseInt(start.value.slice(0, 2), 10) + 1);
+      if (h > 23) return;  // 자정을 넘기는 회차는 받지 않으므로 직접 입력하게 둔다
+      end.value = (h < 10 ? "0" : "") + h + start.value.slice(2, 5);
+    });
+  })();
+</script>
+{% endblock %}

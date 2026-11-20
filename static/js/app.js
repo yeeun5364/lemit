@@ -68,7 +68,16 @@
     el.addEventListener("change", function () { if (el.form) el.form.submit(); });
   });
 
-  /* 3. 제출 전 확인 (보관 등) */
+  /* 3. 저장 버튼은 누르면 바로 비활성화 (중복 제출 방지, S07). 서버는 저장 후 항상 리다이렉트한다 */
+  document.querySelectorAll("form[data-once]").forEach(function (form) {
+    form.addEventListener("submit", function () {
+      form.querySelectorAll("button[type=submit]").forEach(function (b) {
+        setTimeout(function () { b.disabled = true; }, 0);  // 제출 이후에 막아야 버튼 값이 전송에서 빠지지 않는다
+      });
+    });
+  });
+
+  /* 4. 제출 전 확인 (보관 등) */
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {
       if (!window.confirm(form.getAttribute("data-confirm"))) e.preventDefault();

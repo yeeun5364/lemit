@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}회차 · {{ session.enrollment.student.name }}{% endblock %}
+{% block back %}<a class="back-link" href="{% url 'students:detail' session.enrollment.student_id %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}{{ session.enrollment.student.name }}</a>{% endblock %}
+{% block page_title %}{{ session.enrollment.student.name }} · {{ session.enrollment.title }}{% endblock %}
+{% block page_desc %}<p class="page-desc">{% include "lessons/_session_state.html" with s=session %}</p>{% endblock %}
+{% block page_actions %}
+{% if session.status == "scheduled" %}<a class="btn btn-primary" href="{% url 'lessons:session_edit' session.pk %}">{% include "ui/icon.html" with name="edit" size="sm" %}수정</a>{% endif %}
+{% endblock %}
+{% block content %}
+<div class="detail-grid">
+  <section class="card" aria-labelledby="when-title">
+    <h2 id="when-title" class="card-title">일정</h2>
+    <dl class="info">
+      <dt>날짜</dt><dd>{{ session.start_at|date:"Y년 n월 j일 (D)" }}</dd>
+      <dt>시간</dt><dd>{{ session.start_at|time:"H:i" }} – {{ session.end_at|time:"H:i" }}</dd>
+      <dt>장소</dt><dd>{{ session.place|default:"—" }}</dd>
+      <dt>상태</dt><dd>{% include "lessons/_session_state.html" with s=session %}</dd>
+    </dl>
+    {# 완료 처리·완료 취소 버튼은 UC-06에서 추가 #}
+  </section>
+  <section class="card" aria-labelledby="pass-title">
+    <h2 id="pass-title" class="card-title">레슨권</h2>
+    <ul class="passes">{% include "lessons/_enrollment_card.html" with e=enrollment hide_actions=True %}</ul>
+  </section>
+</div>
+{% if can_delete %}
+<section class="card section danger-zone" aria-labelledby="delete-title">
+  <div>
+    <h2 id="delete-title" class="card-title">회차 삭제</h2>
+    <p class="muted small">예정 상태인 회차만 삭제할 수 있습니다. 완료·휴강·결석 기록은 남깁니다.</p>
+  </div>
+  <form method="post" action="{% url 'lessons:session_delete' session.pk %}"
+        data-confirm="{{ session.start_at|date:'n/j' }} {{ session.start_at|time:'H:i' }} 회차를 삭제할까요?">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">삭제</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

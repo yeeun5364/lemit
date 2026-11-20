@@ -1,4 +1,4 @@
-"""UC-03 레슨권 등록·종료 (S11, 레슨권 종료 동작).
+"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07).
 
 모든 동작은 **로그인한 강사의 수강생·레슨권**에서만 객체를 찾는다 (ERD 2-5). 다른 강사의 번호면 404.
 """
@@ -6,13 +6,17 @@
 from django.contrib import messages
 from django.db import transaction
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from accounts.permissions import get_owned_or_404
-from lessons.forms import EnrollmentForm
-from lessons.models import Enrollment
+from accounts.permissions import get_owned_or_404, scope_to_teacher
+from lessons import services
+from lessons.forms import EnrollmentForm, SessionForm
+from lessons.models import Enrollment, LessonSession
 from students.models import Student
+
+SESSION_OWNER = "enrollment__student__teacher"
 
 
 def enrollment_create(request, student_pk):
@@ -73,3 +77,88 @@ def enrollment_end(request, pk):
     if changed:
         messages.success(request, f"'{enrollment.title}' 레슨권을 종료했습니다.")
     return redirect("students:detail", pk=enrollment.student_id)
+
+
+def _owned_session(request, pk):
+    qs = LessonSession.objects.select_related("enrollment__student")
+    return get_owned_or_404(qs, request.user, SESSION_OWNER, pk=pk)
+
+
+def _initial_from_query(request):
+    """수강생 상세의 '+ 일정'처럼 ?enrollment= 또는 ?student= 로 들어오면 레슨권을 미리 선택한다.
+
+    값은 선택지(내 진행 중 레슨권)에 있을 때만 쓰이므로 다른 강사의 번호를 넣어도 선택되지 않는다.
+    """
+    initial = {"date": timezone.localdate()}
+    mine = scope_to_teacher(Enrollment.objects.active(), request.user, "student__teacher")
+    enrollment_id = request.GET.get("enrollment", "")
+    student_id = request.GET.get("student", "")
+    if enrollment_id.isdigit():
+        initial["enrollment"] = mine.filter(pk=enrollment_id).values_list("pk", flat=True).first()
+    elif student_id.isdigit():
+        initial["enrollment"] = mine.filter(student_id=student_id).values_list("pk", flat=True).first()
+    return initial
+
+
+def _after_save(request, session, verb):
+    messages.success(request, f"회차를 {verb}했습니다.")
+    for text in services.save_warnings(session):
+        messages.warning(request, text)
+    return redirect("lessons:session_detail", pk=session.pk)
+
+
+def session_create(request):
+    """S07 회차 등록. 새 회차는 항상 '예정'. 겹침·잔여 초과는 저장 후 경고만 한다 (UC-04)."""
+    initial = _initial_from_query(request)
+    form = SessionForm(request.POST or None, teacher=request.user, initial=initial)
+    if request.method == "POST" and form.is_valid():
+        session = form.save()
+        return _after_save(request, session, "등록")
+    preselected = Enrollment.objects.filter(pk=initial.get("enrollment")).select_related("student").first()
+    if preselected:  # 수강생 상세에서 왔으면 그 수강생으로 돌아간다
+        back = {
+            "back_url": reverse("students:detail", args=[preselected.student_id]),
+            "back_label": preselected.student.name,
+        }
+    else:
+        back = {"back_url": reverse("students:list"), "back_label": "수강생"}
+    return render(request, "lessons/session_form.html", {"form": form, **back})
+
+
+def session_detail(request, pk):
+    """S06 회차 상세. 완료 처리 버튼은 UC-06에서 추가한다."""
+    session = _owned_session(request, pk)
+    enrollment = Enrollment.objects.with_usage().get(pk=session.enrollment_id)
+    return render(
+        request,
+        "lessons/session_detail.html",
+        {"session": session, "enrollment": enrollment, "can_delete": services.deletable(session)},
+    )
+
+
+def session_edit(request, pk):
+    """S07 회차 수정. '예정' 회차만 고친다 (완료·휴강·결석 회차의 일정 변경은 UC-11 확장)."""
+    session = _owned_session(request, pk)
+    if session.status != LessonSession.Status.SCHEDULED:
+        messages.error(request, "예정 상태인 회차만 수정할 수 있습니다.")
+        return redirect("lessons:session_detail", pk=session.pk)
+    form = SessionForm(request.POST or None, instance=session, teacher=request.user)
+    if request.method == "POST" and form.is_valid():
+        session = form.save()
+        return _after_save(request, session, "수정")
+    back = {"back_url": reverse("lessons:session_detail", args=[session.pk]), "back_label": "회차"}
+    return render(request, "lessons/session_form.html", {"form": form, "session": session, **back})
+
+
+@require_POST
+def session_delete(request, pk):
+    """회차 삭제. '예정'만 가능하고, 진행 이력(완료·휴강·결석)은 남긴다."""
+    session = _owned_session(request, pk)
+    if not services.deletable(session):
+        messages.error(request, "예정 상태인 회차만 삭제할 수 있습니다.")
+        return redirect("lessons:session_detail", pk=session.pk)
+    student_id = session.enrollment.student_id
+    when = timezone.localtime(session.start_at)
+    session.delete()
+    messages.success(request, f"{when:%m/%d %H:%M} 회차를 삭제했습니다.")
+    return redirect("students:detail", pk=student_id)

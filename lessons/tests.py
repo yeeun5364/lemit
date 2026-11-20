@@ -542,3 +542,248 @@ class Round2Tests(TestCase):
         self.student.refresh_from_db()
         self.assertEqual(self.student.name, "박서연2")
         self.assertFalse(self.student.is_active)
+
+
+# ---------------------------------------------------------------------------
+# UC-04 회차 등록·수정·삭제 (S06·S07)
+# ---------------------------------------------------------------------------
+
+
+def at(day, hour, minute=0):
+    return timezone.make_aware(datetime.datetime(2026, 11, day, hour, minute))
+
+
+def warnings_of(response):
+    return [str(m) for m in response.context["messages"] if m.level_tag == "warning"]
+
+
+class SessionCreateTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.enrollment = make_pass(self.student, total=8)
+        self.client.force_login(self.teacher)
+        self.url = reverse("lessons:session_create")
+
+    def post(self, follow=False, **overrides):
+        data = {
+            "enrollment": str(self.enrollment.pk),
+            "date": "2026-11-21",
+            "start_time": "16:00",
+            "end_time": "17:00",
+            "place": "A 레슨실",
+            **overrides,
+        }
+        return self.client.post(self.url, data, follow=follow)
+
+    def test_urls_match_screen_spec(self):
+        self.assertEqual(self.url, "/sessions/new/")
+        self.assertEqual(reverse("lessons:session_edit", args=[3]), "/sessions/3/edit/")
+
+    def test_create_scheduled_session_in_seoul_time_and_redirect(self):
+        response = self.post()
+        s = LessonSession.objects.get()
+        self.assertRedirects(response, reverse("lessons:session_detail", args=[s.pk]))
+        self.assertEqual(s.status, LessonSession.Status.SCHEDULED)
+        self.assertEqual((s.start_at, s.end_at), (at(21, 16), at(21, 17)))
+        self.assertEqual(str(timezone.localtime(s.start_at).tzinfo), "Asia/Seoul")
+        self.assertEqual(s.place, "A 레슨실")
+
+    def test_status_cannot_be_set_by_post(self):
+        self.post(status="completed")
+        self.assertEqual(LessonSession.objects.get().status, LessonSession.Status.SCHEDULED)
+
+    def test_end_must_be_after_start(self):
+        for end in ("16:00", "15:30"):
+            with self.subTest(end=end):
+                response = self.post(end_time=end)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("end_time", response.context["form"].errors)
+        self.assertFalse(LessonSession.objects.exists())
+
+    def test_preselect_from_student_detail(self):
+        response = self.client.get(self.url, {"student": self.student.pk})
+        self.assertEqual(response.context["form"]["enrollment"].value(), self.enrollment.pk)
+        self.assertEqual(response.context["back_url"], reverse("students:detail", args=[self.student.pk]))
+
+    def test_only_active_passes_of_active_students_are_choices(self):
+        ended = make_pass(self.student, title="종료", status=Enrollment.Status.ENDED)
+        archived = Student.objects.create(teacher=self.teacher, name="보관", is_active=False)
+        archived_pass = make_pass(archived)
+        choices = list(self.client.get(self.url).context["form"].fields["enrollment"].queryset)
+        self.assertEqual(choices, [self.enrollment])
+        for e in (ended, archived_pass):
+            self.assertIn("enrollment", self.post(enrollment=str(e.pk)).context["form"].errors)
+
+    def test_no_active_pass_shows_guidance(self):
+        self.enrollment.status = Enrollment.Status.ENDED
+        self.enrollment.save()
+        self.assertContains(self.client.get(self.url), "진행 중인 레슨권이 없습니다")
+
+    def test_success_message_without_warnings(self):
+        response = self.post(follow=True)
+        self.assertContains(response, "회차를 등록했습니다.")
+        self.assertEqual(warnings_of(response), [])
+
+
+class SessionWarningTests(TestCase):
+    """겹침·잔여 초과는 저장을 막지 않고 저장 후 경고만 한다."""
+
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.other_student = Student.objects.create(teacher=self.teacher, name="이도윤")
+        self.enrollment = make_pass(self.student, total=8)
+        self.other_pass = make_pass(self.other_student, title="바이올린")
+        self.client.force_login(self.teacher)
+
+    def create(self, enrollment=None, date="2026-11-21", start="16:00", end="17:00"):
+        data = {"enrollment": (enrollment or self.enrollment).pk, "date": date, "start_time": start, "end_time": end}
+        return self.client.post(reverse("lessons:session_create"), data, follow=True)
+
+    def existing(self, enrollment, start, end, status=LessonSession.Status.SCHEDULED):
+        return LessonSession.objects.create(enrollment=enrollment, start_at=start, end_at=end, status=status)
+
+    def test_overlap_with_my_other_session_warns_but_saves(self):
+        self.existing(self.other_pass, at(21, 16, 30), at(21, 17, 30))
+        response = self.create()
+        self.assertEqual(LessonSession.objects.count(), 2)
+        self.assertEqual(len(warnings_of(response)), 1)
+        self.assertIn("이도윤 회차가 있습니다", warnings_of(response)[0])
+
+    def test_adjacent_cancelled_and_other_teacher_sessions_do_not_warn(self):
+        self.existing(self.other_pass, at(21, 15), at(21, 16))  # 끝과 시작이 맞닿음
+        self.existing(self.other_pass, at(21, 16), at(21, 17), LessonSession.Status.CANCELLED)
+        b = make_teacher("b@example.com", "B강사")
+        b_pass = make_pass(Student.objects.create(teacher=b, name="B의 학생"))
+        self.existing(b_pass, at(21, 16), at(21, 17))
+        self.assertEqual(warnings_of(self.create()), [])
+
+    def test_over_remaining_warns_from_first_excess(self):
+        """잔여 3회: 예정 3회까지는 경고 없음, 4회째부터 경고 (UC-04 예)."""
+        small = make_pass(self.student, title="3회권", total=3)
+        for day in (22, 23, 24):
+            self.assertEqual(warnings_of(self.create(small, date=f"2026-11-{day}")), [])
+        response = self.create(small, date="2026-11-25")
+        self.assertEqual(len(warnings_of(response)), 1)
+        self.assertIn("잔여 3회, 예정 4회", warnings_of(response)[0])
+
+    def test_completed_sessions_reduce_remaining(self):
+        small = make_pass(self.student, title="2회권", total=2)
+        self.existing(small, at(1, 10), at(1, 11), LessonSession.Status.COMPLETED)
+        self.assertEqual(warnings_of(self.create(small, date="2026-11-22")), [])  # 잔여 1, 예정 1
+        self.assertIn("잔여 1회, 예정 2회", warnings_of(self.create(small, date="2026-11-23"))[0])
+
+    def test_edit_counts_the_session_once(self):
+        small = make_pass(self.student, title="1회권", total=1)
+        s = self.existing(small, at(22, 10), at(22, 11))
+        data = {"enrollment": small.pk, "date": "2026-11-22", "start_time": "11:00", "end_time": "12:00"}
+        response = self.client.post(reverse("lessons:session_edit", args=[s.pk]), data, follow=True)
+        self.assertEqual(warnings_of(response), [])
+        self.assertContains(response, "회차를 수정했습니다.")
+
+
+class SessionEditDeleteTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.enrollment = make_pass(self.student)
+        self.session = add_session(self.enrollment, day=21)
+        self.client.force_login(self.teacher)
+
+    def test_detail_shows_session_and_pass(self):
+        response = self.client.get(reverse("lessons:session_detail", args=[self.session.pk]))
+        self.assertContains(response, "박서연 · 피아노 개인 레슨")
+        self.assertContains(response, "2026년 11월 21일")
+        self.assertContains(response, "17:00 – 18:00")
+        self.assertTrue(response.context["can_delete"])
+
+    def test_edit_prefills_local_date_and_time(self):
+        form = self.client.get(reverse("lessons:session_edit", args=[self.session.pk])).context["form"]
+        self.assertEqual(str(form["date"].value()), "2026-11-21")
+        self.assertEqual(form["start_time"].value().strftime("%H:%M"), "17:00")
+
+    def test_edit_keeps_ended_pass_selectable_for_its_session(self):
+        self.enrollment.status = Enrollment.Status.ENDED
+        self.enrollment.save()
+        form = self.client.get(reverse("lessons:session_edit", args=[self.session.pk])).context["form"]
+        self.assertIn(self.enrollment, form.fields["enrollment"].queryset)
+
+    def test_only_scheduled_can_be_edited_or_deleted(self):
+        self.session.status = LessonSession.Status.COMPLETED
+        self.session.save()
+        detail = reverse("lessons:session_detail", args=[self.session.pk])
+        self.assertRedirects(self.client.get(reverse("lessons:session_edit", args=[self.session.pk])), detail)
+        self.assertRedirects(self.client.post(reverse("lessons:session_delete", args=[self.session.pk])), detail)
+        self.assertTrue(LessonSession.objects.filter(pk=self.session.pk).exists())
+
+    def test_delete_scheduled(self):
+        response = self.client.post(reverse("lessons:session_delete", args=[self.session.pk]))
+        self.assertRedirects(response, reverse("students:detail", args=[self.student.pk]))
+        self.assertFalse(LessonSession.objects.exists())
+
+    def test_delete_requires_post(self):
+        self.assertEqual(self.client.get(reverse("lessons:session_delete", args=[self.session.pk])).status_code, 405)
+
+    def test_student_detail_lists_sessions_grouped_by_pass(self):
+        add_session(self.enrollment, LessonSession.Status.COMPLETED, day=14)
+        response = self.client.get(reverse("students:detail", args=[self.student.pk]))
+        self.assertEqual([s.pk for s in response.context["sessions"]][0], self.session.pk)  # 최신순
+        self.assertContains(response, "회차 이력")
+        self.assertContains(response, f"{reverse('lessons:session_create')}?student={self.student.pk}")
+
+
+class ArchiveDeletesScheduledSessionsTests(TestCase):
+    def test_archive_deletes_only_scheduled_sessions(self):
+        teacher = make_teacher("a@example.com", "A강사")
+        student = Student.objects.create(teacher=teacher, name="박서연")
+        e = make_pass(student)
+        add_session(e, LessonSession.Status.SCHEDULED, day=21)
+        add_session(e, LessonSession.Status.SCHEDULED, day=22)
+        done = add_session(e, LessonSession.Status.COMPLETED, day=14)
+        self.client.force_login(teacher)
+        detail = self.client.get(reverse("students:detail", args=[student.pk]))
+        self.assertContains(detail, "예정 회차 2개가 삭제됩니다.")
+        response = self.client.post(reverse("students:archive", args=[student.pk]), follow=True)
+        self.assertContains(response, "남은 예정 회차 2개를 삭제했습니다.")
+        self.assertEqual(list(LessonSession.objects.all()), [done])
+
+
+class SessionIsolationTests(TestCase):
+    """강사 B는 A의 회차를 보거나 고치거나 지울 수 없고, A의 레슨권으로 회차를 만들 수 없다."""
+
+    def setUp(self):
+        a = make_teacher("a@example.com", "A강사")
+        self.b = make_teacher("b@example.com", "B강사")
+        self.a_pass = make_pass(Student.objects.create(teacher=a, name="A의 학생"))
+        self.a_session = add_session(self.a_pass, day=21)
+        self.b_pass = make_pass(Student.objects.create(teacher=self.b, name="B의 학생"))
+        self.client.force_login(self.b)
+
+    def test_cannot_see_edit_delete_other_teachers_session(self):
+        pk = self.a_session.pk
+        self.assertEqual(self.client.get(reverse("lessons:session_detail", args=[pk])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("lessons:session_edit", args=[pk])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("lessons:session_delete", args=[pk])).status_code, 404)
+        self.assertTrue(LessonSession.objects.filter(pk=pk).exists())
+
+    def test_cannot_create_with_other_teachers_pass(self):
+        data = {"enrollment": self.a_pass.pk, "date": "2026-11-21", "start_time": "16:00", "end_time": "17:00"}
+        response = self.client.post(reverse("lessons:session_create"), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("enrollment", response.context["form"].errors)
+        self.assertEqual(LessonSession.objects.count(), 1)
+
+    def test_cannot_move_own_session_to_other_teachers_pass(self):
+        mine = add_session(self.b_pass, day=22)
+        data = {"enrollment": self.a_pass.pk, "date": "2026-11-22", "start_time": "16:00", "end_time": "17:00"}
+        response = self.client.post(reverse("lessons:session_edit", args=[mine.pk]), data)
+        self.assertIn("enrollment", response.context["form"].errors)
+        mine.refresh_from_db()
+        self.assertEqual(mine.enrollment, self.b_pass)
+
+    def test_preselect_ignores_other_teachers_ids(self):
+        response = self.client.get(reverse("lessons:session_create"), {"enrollment": self.a_pass.pk})
+        self.assertIsNone(response.context["form"]["enrollment"].value())
+        response = self.client.get(reverse("lessons:session_create"), {"student": self.a_pass.student_id})
+        self.assertIsNone(response.context["form"]["enrollment"].value())
