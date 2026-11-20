@@ -1,18 +1,15 @@
 {% extends "base.html" %}
 {% block title %}로그인{% endblock %}
-{% block body_class %}auth{% endblock %}
-{% block content %}
-<section class="auth-card">
-  <h1 class="logo">LEMIT</h1>
-  <p class="tagline">수업의 모든 흐름을 하나로</p>
-
+{% block auth_content %}
+<section class="card auth-card" aria-labelledby="auth-title">
+  <h1 id="auth-title" class="auth-title">로그인</h1>
   <form method="post" class="form" novalidate>
     {% csrf_token %}
-    {{ form.as_div }}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% for field in form %}{% include "ui/field.html" %}{% endfor %}
     <input type="hidden" name="next" value="{{ next }}">
-    <button type="submit" class="button-primary">로그인</button>
+    <button type="submit" class="btn btn-primary btn-block">로그인</button>
   </form>
-
-  <p class="auth-links"><a href="{% url 'signup' %}">회원가입</a></p>
+  <p class="auth-links">처음이신가요? <a href="{% url 'signup' %}">회원가입</a></p>
 </section>
 {% endblock %}

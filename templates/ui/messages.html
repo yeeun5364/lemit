@@ -1,0 +1,8 @@
+{# Django messages 알림. 오류는 role=alert(즉시 읽음), 나머지는 role=status #}
+{% if messages %}
+<ul class="alerts">
+  {% for message in messages %}
+  <li class="alert alert-{{ message.tags }}" role="{% if message.level >= 40 %}alert{% else %}status{% endif %}">{% if message.level == 25 %}{% include "ui/icon.html" with name="check" size="sm" %}{% else %}{% include "ui/icon.html" with name="info" size="sm" %}{% endif %}<span>{{ message }}</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
