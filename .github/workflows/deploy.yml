@@ -133,16 +133,15 @@ jobs:
           echo "cidr=$ip/32" >> "$GITHUB_OUTPUT"
           echo "러너 IP: $ip"
 
+      # 방화벽 변경은 스크립트가 한다: 읽기 → 쓰기 직전 다시 읽어 그사이 변경이 있으면 덮어쓰지 않고 재시도 →
+      # 쓴 뒤 기대한 규칙과 정확히 같은지 검증. 로그에는 포트 번호만 남기고 IP 목록은 출력하지 않는다 (PR #43 리뷰 P1)
       - name: SSH 22번에 러너 IP 임시 추가
         id: open
         env:
           CIDR: ${{ steps.ip.outputs.cidr }}
         run: |
-          aws lightsail get-instance-port-states --instance-name "$INSTANCE" > before.json
-          python3 scripts/lightsail_firewall.py open --cidr "$CIDR" < before.json > open.json
-          echo "opened=true" >> "$GITHUB_OUTPUT"
-          aws lightsail put-instance-public-ports --instance-name "$INSTANCE" --port-infos file://open.json > /dev/null
-          echo "22번 규칙에 러너 IP를 추가했습니다 (기존 규칙은 그대로 유지, 내용은 로그에 출력하지 않음)"
+          echo "opened=true" >> "$GITHUB_OUTPUT"   # 실패하더라도 정리 단계가 확인·제거하도록 먼저 표시
+          python3 scripts/lightsail_firewall.py open --instance "$INSTANCE" --cidr "$CIDR"
 
       - name: SSH 준비 (배포 전용 키, 호스트 키 검증)
         env:
@@ -175,17 +174,12 @@ jobs:
         if: always() && steps.open.outputs.opened == 'true'
         env:
           CIDR: ${{ steps.ip.outputs.cidr }}
-        run: |
-          aws lightsail get-instance-port-states --instance-name "$INSTANCE" > now.json
-          python3 scripts/lightsail_firewall.py close --cidr "$CIDR" < now.json > close.json
-          aws lightsail put-instance-public-ports --instance-name "$INSTANCE" --port-infos file://close.json > /dev/null
-          aws lightsail get-instance-port-states --instance-name "$INSTANCE" > after.json
-          if grep -qF "\"$CIDR\"" after.json; then echo "::error::러너 IP가 방화벽에 남아 있습니다. Lightsail 콘솔에서 22번 규칙을 확인하세요"; exit 1; fi
-          echo "러너 IP를 22번 규칙에서 제거했습니다"
+        # 그 시점의 최신 상태에서 러너 IP만 빼고, "열린 TCP 22번 규칙의 cidrs에 러너 IP가 없다"를 구조적으로 확인 (P2)
+        run: python3 scripts/lightsail_firewall.py close --instance "$INSTANCE" --cidr "$CIDR"
 
       - name: 정리 (키·방화벽 상태 파일 삭제)
         if: always()
-        run: rm -f ~/.ssh/lemit_deploy before.json open.json now.json close.json after.json runs.txt
+        run: rm -f ~/.ssh/lemit_deploy runs.txt
 
       - name: 요약
         if: always()

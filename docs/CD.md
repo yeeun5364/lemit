@@ -26,7 +26,7 @@ main에 병합 → CI(린트·테스트·Docker)가 모두 성공
 
 | 어디에 | 무엇을 | 단계 |
 |---|---|---|
-| AWS IAM | OIDC 공급자, 역할 `lemit-github-deploy`(권한: Lightsail 방화벽 읽기·쓰기) | §1 |
+| Lightsail + AWS IAM | 서버 태그 `lemit-deploy=allowed`, OIDC 공급자, 역할 `lemit-github-deploy`(권한: 방화벽 읽기 + 태그 붙은 서버의 방화벽 쓰기) | §1 |
 | PC | 서버 호스트 키 지문 확인 | §2 |
 | PC + 서버 | 배포 전용 SSH 키 만들기, 서버 `authorized_keys`에 강제 명령으로 등록 | §3 |
 | GitHub | Environment `production` + Variables 6개 + Secret 1개 | §4 |
@@ -42,7 +42,11 @@ IAM → **자격 증명 공급자(Identity providers)** → **공급자 추가**
 - 공급자 URL: `https://token.actions.githubusercontent.com`
 - 대상(Audience): `sts.amazonaws.com`
 
-### 1-2. 권한 정책 만들기
+### 1-2. 서버에 태그 달기 (Lightsail 콘솔)
+Lightsail → `lemit-server` → **태그** → 키-값 태그 추가: 키 `lemit-deploy`, 값 `allowed`
+- 아래 정책은 **이 태그가 붙은 인스턴스의 방화벽만** 바꿀 수 있게 합니다(PR #43 리뷰 반영). AWS 문서상 `PutInstancePublicPorts`는 태그 기반 권한 제어를 지원합니다.
+
+### 1-3. 권한 정책 만들기
 IAM → **정책** → **정책 생성** → JSON 탭에 아래를 붙여넣고, 이름을 `lemit-lightsail-ssh-window`로 정합니다.
 
 ```json
@@ -50,21 +54,33 @@ IAM → **정책** → **정책 생성** → JSON 탭에 아래를 붙여넣고,
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "LightsailFirewallForDeploy",
+      "Sid": "ReadFirewall",
       "Effect": "Allow",
-      "Action": ["lightsail:GetInstancePortStates", "lightsail:PutInstancePublicPorts"],
+      "Action": "lightsail:GetInstancePortStates",
       "Resource": "*",
       "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-southeast-2"}}
+    },
+    {
+      "Sid": "WriteFirewallOnlyOnTaggedInstance",
+      "Effect": "Allow",
+      "Action": "lightsail:PutInstancePublicPorts",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-southeast-2",
+          "aws:ResourceTag/lemit-deploy": "allowed"
+        }
+      }
     }
   ]
 }
 ```
 
-- 권한은 **방화벽 상태 읽기·쓰기 두 가지뿐**이고, 시드니 리전에서만 쓸 수 있습니다.
-- 이 역할로는 인스턴스를 켜고 끄거나 지울 수 없습니다.
-- **주의:** 방화벽 쓰기 권한이 있으므로, 이 역할을 쓰는 워크플로가 악용되면 다른 포트도 열 수 있습니다. 그래서 아래 신뢰 정책과 §4 Environment 승인으로 **이 저장소의 production 배포만** 이 역할을 쓰게 묶습니다.
+- 권한은 **방화벽 읽기**(읽기 전용, 태그 조건은 문서에 지원이 명시되지 않아 리전으로만 제한)와 **태그 붙은 인스턴스의 방화벽 쓰기**뿐입니다. 이 역할로는 인스턴스를 켜고 끄거나 지울 수 없습니다.
+- 첫 시험에서 `AccessDenied ... PutInstancePublicPorts`가 나오면 1-2의 태그(키·값 철자)를 확인하세요. 그래도 안 되면 그 오류 내용을 알려주세요. 태그 조건 대신 리전 조건만 쓰는 방식으로 바꿀지 함께 정합니다.
+- **주의:** 방화벽 쓰기 권한이 있으므로, 이 역할을 쓰는 워크플로가 악용되면 그 인스턴스의 다른 포트도 열 수 있습니다. 그래서 아래 신뢰 정책과 §4 Environment 승인으로 **이 저장소의 production 배포만** 이 역할을 쓰게 묶습니다.
 
-### 1-3. 역할 만들기
+### 1-4. 역할 만들기
 IAM → **역할** → **역할 생성**
 1. 신뢰할 수 있는 엔터티: **웹 자격 증명(Web identity)** → 공급자 `token.actions.githubusercontent.com`, Audience `sts.amazonaws.com`.
    GitHub 조직·저장소를 묻는 칸이 나오면 `yeeun5364`, `lemit`을 입력합니다.
@@ -148,7 +164,7 @@ IAM → **역할** → **역할 생성**
 | 종류 | 이름 | 값 |
 |---|---|---|
 | Variable | `AWS_REGION` | `ap-southeast-2` |
-| Variable | `AWS_ROLE_ARN` | §1-3에서 복사한 역할 ARN |
+| Variable | `AWS_ROLE_ARN` | §1-4에서 복사한 역할 ARN |
 | Variable | `LIGHTSAIL_INSTANCE_NAME` | `lemit-server` |
 | Variable | `LIGHTSAIL_HOST` | `15.135.58.179` |
 | Variable | `LIGHTSAIL_USER` | `ec2-user` |
@@ -164,16 +180,31 @@ IAM → **역할** → **역할 생성**
 
 ## 5. 첫 시험 (직접, 순서대로)
 
-**준비:** Lightsail 방화벽의 SSH 22번이 **관리자 IP로만 제한**되어 있어야 이 방식의 의미가 있습니다([DEPLOY.md](DEPLOY.md) §1 3번). 바꾸기 전에 SSH 창 하나를 열어 둔 상태에서 진행합니다.
+**준비**
+- Lightsail 방화벽의 SSH 22번이 **관리자 IP로만 제한**되어 있어야 이 방식의 의미가 있습니다([DEPLOY.md](DEPLOY.md) §1 3번). 바꾸기 전에 SSH 창 하나를 열어 둔 상태에서 진행합니다.
+- **기준 방화벽 규칙을 적어 둡니다.** 시험 단계마다 이 표와 콘솔 화면을 비교합니다. 이 문서는 공개 저장소에 있으니 **관리자 IP는 이 문서가 아니라 개인 메모에** 적습니다.
+
+  | 규칙 | IPv4 | IPv6 | 비고 |
+  |---|---|---|---|
+  | SSH 22 | 관리자 IP만 (+ 브라우저 SSH 허용 체크 여부) | 제한 또는 삭제 | 배포 중에만 러너 IP 1개가 잠깐 추가됨 |
+  | HTTP 80 | 모든 IP | 모든 IP 또는 없음 | |
+  | HTTPS 443 | 도메인 연결 후 | 도메인 연결 후 | |
+
+- **시험하는 동안 콘솔에서 방화벽을 바꾸지 않습니다.** 스크립트는 그사이 변경을 감지하면 덮어쓰지 않고 다시 시도하거나 실패로 멈춥니다. 다만 Lightsail API에는 "내가 읽은 뒤 아무도 안 바꿨을 때만 쓰기" 기능이 없어 아주 짧은 틈은 남습니다.
 
 1. **check** (연결만 확인, 배포 안 함): Actions → **Deploy** → **Run workflow** → action `check`
    - 로그 확인 순서: 설정값 확인 → AWS 인증 → 러너 IP 추가 → 서버 `status` 출력(현재 태그·기록·컨테이너·공개 경로) → **러너 IP 제거**
-   - 끝난 뒤 Lightsail 콘솔에서 22번 규칙이 **원래대로**(관리자 IP만)인지 확인합니다.
+   - 끝난 뒤 Lightsail 콘솔에서 22번 규칙이 **원래대로**(관리자 IP만)인지 기준 표와 비교합니다. 80·IPv6 규칙도 그대로인지 봅니다.
 2. **deploy:** action `deploy`, sha는 비워 둠(main 최신)
    - "CI 3개 작업 모두 성공" 확인 → 서버 `deploy.sh` 출력 → `배포 완료` → 러너 IP 제거
    - 브라우저로 `http://15.135.58.179`에서 분류 동선을 확인합니다.
+   - 콘솔에서 방화벽 규칙이 기준 표와 같은지 다시 확인합니다(이후 3·4단계 뒤에도 매번).
 3. **같은 버전 다시 deploy:** 안전하게 `OK`로 끝나는지 확인합니다. 빌드 캐시를 쓰고, 마이그레이션이 없고, 컨테이너도 그대로입니다.
 4. **rollback:** `check` 결과의 이미지 목록에서 이전 태그를 골라 action `rollback`, rollback_tag에 입력합니다.
+4-1. **실패·취소해도 정리되는지:** `deploy`를 실행한 뒤 "서버에서 실행" 단계가 진행 중일 때 Actions 화면에서 **Cancel workflow**를 누릅니다.
+   - 로그에서 "SSH 22번에서 러너 IP 제거" 단계가 실행되어 성공했는지 확인합니다.
+   - 콘솔의 22번 규칙에 러너 IP가 남지 않았는지 확인합니다.
+   - 서버에서는 진행 중이던 배포가 끝까지 돌 수 있습니다. 끝난 뒤 `check`로 상태를 봅니다.
 5. 모두 성공하면 §4-3 `CD_AUTO_DEPLOY=true`를 켭니다. 이후에는 main에 병합하고 CI가 성공하면 자동으로 배포됩니다(production 승인을 켰다면 승인 후).
 
 **확인할 것과 실패 시 볼 곳**
@@ -181,11 +212,12 @@ IAM → **역할** → **역할 생성**
 | 증상 | 원인 후보 |
 |---|---|
 | "production Environment 설정이 빠졌습니다" | §4-2 이름 오타, Environment가 아닌 곳에 등록 |
-| AWS 인증 실패 (`Not authorized to perform sts:AssumeRoleWithWebIdentity`) | §1-3 신뢰 정책의 `sub`(저장소·환경 이름), OIDC 공급자 Audience |
-| `AccessDenied ... PutInstancePublicPorts` | §1-2 정책 미연결, 리전 조건 |
+| AWS 인증 실패 (`Not authorized to perform sts:AssumeRoleWithWebIdentity`) | §1-4 신뢰 정책의 `sub`(저장소·환경 이름), OIDC 공급자 Audience |
+| `AccessDenied ... PutInstancePublicPorts` | §1-3 정책 미연결, §1-2 태그(`lemit-deploy=allowed`) 누락·오타, 리전 조건 |
 | "SSH 연결 실패" | §2 호스트 키 줄, §3 authorized_keys 등록(한 줄, 따옴표), 배포 키 Secret 내용 |
 | `Host key verification failed` | 서버 호스트 키가 바뀌었거나 `LIGHTSAIL_KNOWN_HOSTS`가 틀림 → §2 다시 확인. **바로 맞추지 말고 원인부터 확인** |
-| "러너 IP가 방화벽에 남아 있습니다" | Lightsail 콘솔에서 22번 규칙의 낯선 IP를 직접 삭제 |
+| "러너 IP가 방화벽에 남아 있습니다" | §7 수동 복구 |
+| "읽는 사이 규칙이 바뀌었습니다" / "방화벽이 기대와 다릅니다" | 배포 중 콘솔에서 방화벽을 바꿨거나 다른 작업이 동시에 바꿈 → §7에서 기준 표와 비교 후 다시 실행 |
 | "다른 배포·롤백이 진행 중" | 서버에서 수동 배포가 돌고 있음 (서버 잠금) |
 
 ## 6. 안전장치 요약
@@ -202,5 +234,27 @@ IAM → **역할** → **역할 생성**
 | fork PR 악용 | 배포는 이 저장소 main의 push에 대한 CI 성공일 때만(fork·PR 이벤트 제외). 스크립트는 항상 main에서 가져옴 |
 
 **남는 한계**
-- 러너가 갑자기 죽으면(`always()`도 못 도는 경우) 러너 IP가 22번에 남을 수 있습니다. 다음 배포의 `check`나 콘솔에서 확인합니다.
+- 러너가 갑자기 죽으면(`always()`도 못 도는 경우) 러너 IP가 22번에 남을 수 있습니다. §7로 확인·복구합니다.
+- 방화벽은 "전체 다시 쓰기" API로 바꿉니다. 쓰기 직전 다시 읽어 비교하고 쓴 뒤 검증하지만, API에 조건부 쓰기가 없어 아주 짧은 틈은 남습니다. 배포 중 콘솔 변경을 피합니다.
 - 배포 중 약 20~30초 동안 실패한 새 버전이 응답할 수 있습니다(DEPLOY.md §3, 자동 롤백 전).
+
+## 7. 방화벽 수동 확인·복구 (러너가 비정상 종료됐거나 실패했을 때)
+
+언제 하나요?
+- 워크플로가 "러너 IP가 남아 있습니다", "방화벽이 기대와 다릅니다", "계속 바뀌어 중단" 오류로 끝났을 때
+- 러너가 갑자기 죽거나 오래 멈춰 정리 단계가 실행되지 않았을 때(로그에 "SSH 22번에서 러너 IP 제거"가 없음)
+
+순서
+1. **Actions 로그에서 러너 IP를 확인합니다.** "러너 공인 IP 확인" 단계에 `러너 IP: x.x.x.x`로 나옵니다.
+2. **Lightsail 콘솔** → `lemit-server` → **네트워킹** → IPv4 방화벽의 SSH 22 규칙을 엽니다.
+   - 허용 IP 목록에서 그 러너 IP만 지웁니다. **관리자 IP는 지우지 않습니다.**
+   - 22번 규칙이 러너 IP만 허용하고 있었다면(원래 22번 규칙이 없던 경우) 규칙 자체를 삭제합니다.
+3. **§5 기준 표와 비교합니다.** 80·443·IPv6 규칙이 바뀌었으면 기준 표대로 되돌립니다.
+4. **PC에서 관리자 SSH 접속을 확인합니다.** 지금 열린 창은 닫지 말고, 새 창에서 접속합니다.
+5. 원인이 정리되면 Actions에서 `check`를 다시 실행합니다. 정상이면 22번 규칙이 기준 표와 같은 상태로 끝납니다.
+
+콘솔 대신 AWS CLI를 쓸 수 있다면, 같은 스크립트로 그 IP만 정확히 뺄 수 있습니다. 관리자 PC에 AWS CLI가 설정되어 있을 때만 해당합니다.
+```bash
+python3 scripts/lightsail_firewall.py close --instance lemit-server --cidr <러너IP>/32
+```
+

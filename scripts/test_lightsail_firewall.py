@@ -94,17 +94,145 @@ class OpenCloseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             open_ssh({"instance": {}}, RUNNER)
 
-    def test_cli(self):
-        script = Path(__file__).resolve().parent / "lightsail_firewall.py"
-        out = subprocess.run(
-            [sys.executable, str(script), "open", "--cidr", RUNNER],
-            input=json.dumps(STATE),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        self.assertIn(RUNNER, rule(json.loads(out), 22)[0]["cidrs"])
-
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------- 가짜 aws CLI로 실제 적용 흐름 시험 (PR #43 리뷰 P1·P2) ----------
+
+import os  # noqa: E402
+import tempfile  # noqa: E402
+
+from lightsail_firewall import FirewallError, apply, main, ssh_allows  # noqa: E402
+
+FAKE = Path(__file__).resolve().parent / "fake_aws_lightsail.py"
+HTTPS_RULE = {"fromPort": 443, "toPort": 443, "protocol": "tcp", "cidrs": ["0.0.0.0/0"]}
+
+
+class ApplyWithFakeAwsTests(unittest.TestCase):
+    def setUp(self):
+        fd, self.path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        self.addCleanup(os.unlink, self.path)
+        self.env = mock_env = {
+            "FAKE_AWS_STATE": self.path,
+            "LIGHTSAIL_AWS_CLI": f'"{sys.executable}" "{FAKE}"',
+            "LIGHTSAIL_FIREWALL_WAIT": "0",
+        }
+        self._old = {k: os.environ.get(k) for k in mock_env}
+        os.environ.update(mock_env)
+        self.addCleanup(self._restore)
+        self.write(copy.deepcopy(STATE))
+
+    def _restore(self):
+        for k, v in self._old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def write(self, db):
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(db, f)
+
+    def read(self):
+        with open(self.path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def apply(self, action):
+        return apply("lemit-server", RUNNER, action, log=lambda *_: None)
+
+    def test_open_then_close_restores_original_rules(self):
+        self.apply("open")
+        self.assertTrue(ssh_allows(self.read(), RUNNER))
+        self.apply("close")
+        db = self.read()
+        self.assertFalse(ssh_allows(db, RUNNER))
+        self.assertEqual(normalize_states(db), normalize_states(STATE))  # 관리자 IP·별칭·80·IPv6 모두 원래대로
+
+    def test_admin_change_between_read_and_write_is_not_overwritten(self):
+        """P1: 처음 읽은 뒤 쓰기 직전에 관리자가 443을 추가 → 덮어쓰지 않고 다시 시도해 443을 보존."""
+        db = copy.deepcopy(STATE)
+        db["mutate_on_get"] = {"2": HTTPS_RULE}  # 2번째 get(쓰기 직전 다시 읽기) 때 변경 발생
+        self.write(db)
+        self.apply("open")
+        db = self.read()
+        self.assertTrue(rule([i for i in db["portStates"]], 443), "관리자가 추가한 443이 사라짐")
+        self.assertTrue(ssh_allows(db, RUNNER))
+        self.assertEqual(db["puts"], 1)
+
+    def test_change_after_write_is_detected_as_failure(self):
+        """P1: 쓴 직후 누군가 규칙을 바꾸면 기대와 달라 실패로 알린다 (조용히 성공 처리하지 않음)."""
+        db = copy.deepcopy(STATE)
+        db["mutate_after_put"] = HTTPS_RULE
+        self.write(db)
+        with self.assertRaises(FirewallError) as ctx:
+            self.apply("open")
+        self.assertIn("tcp/443-443", str(ctx.exception))
+        self.assertNotIn(ADMIN.split("/")[0], str(ctx.exception))  # 공개 로그에 관리자 IP 미출력
+
+    def test_propagation_lag_is_tolerated(self):
+        db = copy.deepcopy(STATE)
+        db["lag_gets"] = 2  # 쓴 뒤 두 번은 예전 상태가 보임
+        self.write(db)
+        self.apply("open")
+        self.assertTrue(ssh_allows(self.read(), RUNNER))
+
+    def test_keeps_retrying_then_gives_up_without_writing(self):
+        db = copy.deepcopy(STATE)
+        db["mutate_on_get"] = {str(n): dict(HTTPS_RULE, fromPort=9000 + n, toPort=9000 + n) for n in (2, 4, 6)}
+        self.write(db)
+        with self.assertRaises(FirewallError):
+            self.apply("open")
+        self.assertEqual(self.read().get("puts", 0), 0)  # 한 번도 덮어쓰지 않음
+
+    def test_no_write_when_already_in_desired_state(self):
+        self.apply("close")  # 러너 IP가 없는데 close → 쓰기 없음
+        self.assertEqual(self.read().get("puts", 0), 0)
+
+    def test_close_check_is_structural_not_string_search(self):
+        """P2: 다른 포트(8080)에 같은 IP가 있어도 22번에서 빠졌으면 성공."""
+        db = copy.deepcopy(STATE)
+        db["portStates"].append(
+            {"fromPort": 8080, "toPort": 8080, "protocol": "tcp", "state": "open", "cidrs": [RUNNER]}
+        )
+        self.write(db)
+        self.assertEqual(main(["open", "--instance", "lemit-server", "--cidr", RUNNER]), 0)
+        self.assertEqual(main(["close", "--instance", "lemit-server", "--cidr", RUNNER]), 0)
+        db = self.read()
+        self.assertFalse(ssh_allows(db, RUNNER))
+        self.assertEqual(rule(db["portStates"], 8080)[0]["cidrs"], [RUNNER])  # 다른 포트 규칙은 그대로
+
+    def test_ssh_allows_ignores_closed_and_other_ports(self):
+        state = {
+            "portStates": [
+                {"fromPort": 22, "toPort": 22, "protocol": "tcp", "state": "closed", "cidrs": [RUNNER]},
+                {"fromPort": 2222, "toPort": 2222, "protocol": "tcp", "state": "open", "cidrs": [RUNNER]},
+                {"fromPort": 22, "toPort": 22, "protocol": "udp", "state": "open", "cidrs": [RUNNER]},
+            ]
+        }
+        self.assertFalse(ssh_allows(state, RUNNER))
+
+    def test_cli_process(self):
+        """명령줄 실행(워크플로와 같은 방식): open 후 22번에 러너 IP, 종료 코드 0, 출력에 관리자 IP 없음."""
+        script = Path(__file__).resolve().parent / "lightsail_firewall.py"
+        done = subprocess.run(
+            [sys.executable, str(script), "open", "--instance", "lemit-server", "--cidr", RUNNER],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(ssh_allows(self.read(), RUNNER))
+        self.assertNotIn(ADMIN.split("/")[0], done.stdout + done.stderr)
+
+    def test_main_reports_aws_failure(self):
+        os.environ["LIGHTSAIL_AWS_CLI"] = f'"{sys.executable}" -c "import sys; sys.exit(3)"'
+        self.assertEqual(main(["open", "--instance", "lemit-server", "--cidr", RUNNER]), 1)
+
+
+def normalize_states(db):
+    from lightsail_firewall import normalize, port_infos
+
+    return normalize(port_infos(db))
