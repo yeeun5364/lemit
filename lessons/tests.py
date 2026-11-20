@@ -1353,3 +1353,99 @@ class DashboardTodayTests(TestCase):
         self.assertEqual(res.context["today_scheduled"], 1)
         self.assertContains(res, "남은 예정 1회")
         self.assertContains(res, "김하늘 · 피아노 개인 레슨")
+
+
+# ---------------------------------------------------------------------------
+# UC-07 진행·잔여 회차 확인 (수강생 목록 S08, 레슨권 카드 S10)
+# ---------------------------------------------------------------------------
+
+
+class RemainingStateTests(TestCase):
+    """잔여 = 총 − 차감. 2회 이하 'low', 0 이하 'exhausted'(자동 종료 없음)."""
+
+    def setUp(self):
+        teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=teacher, name="박서연")
+
+    def state_after(self, total, completed):
+        e = make_pass(self.student, title=f"{total}회권-{completed}", total=total)
+        for day in range(1, completed + 1):
+            add_session(e, LessonSession.Status.COMPLETED, day=day)
+        return usage(e)
+
+    def test_boundaries(self):
+        cases = [(8, 5, 3, ""), (8, 6, 2, "low"), (8, 7, 1, "low"), (8, 8, 0, "exhausted"), (2, 3, -1, "exhausted")]
+        for total, completed, remaining, state in cases:
+            with self.subTest(total=total, completed=completed):
+                e = self.state_after(total, completed)
+                self.assertEqual(e.remaining_count, remaining)
+                self.assertEqual(e.remaining_state, state)
+                self.assertEqual(e.status, Enrollment.Status.ACTIVE)  # 소진돼도 자동 종료하지 않음
+
+    def test_overflow_count(self):
+        self.assertEqual(self.state_after(2, 3).overflow_count, 1)
+        self.assertEqual(self.state_after(8, 1).overflow_count, 0)
+
+
+class StudentListRemainingTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.client.force_login(self.teacher)
+
+    def student_with(self, name, total, completed, title="피아노"):
+        s = Student.objects.create(teacher=self.teacher, name=name)
+        e = make_pass(s, title=title, total=total)
+        for day in range(1, completed + 1):
+            add_session(e, LessonSession.Status.COMPLETED, day=day)
+        return s, e
+
+    def test_list_shows_remaining_per_active_pass_with_emphasis(self):
+        self.student_with("김하늘", 8, 1)
+        low, _ = self.student_with("박서연", 8, 6)
+        self.student_with("최준호", 4, 4, title="기타")
+        Student.objects.create(teacher=self.teacher, name="정민아")
+        response = self.client.get(reverse("students:list"))
+        self.assertContains(response, "잔여 7/8")
+        self.assertContains(response, 'class="remaining is-low"')
+        self.assertContains(response, "잔여 2/8")
+        self.assertContains(response, "얼마 남지 않음")  # 색만이 아니라 글자로도
+        self.assertContains(response, "소진</span>")
+        self.assertContains(response, "0/4")
+        self.assertContains(response, "레슨권 없음")
+
+    def test_multiple_active_passes_each_on_a_line_and_ended_hidden(self):
+        s, _ = self.student_with("김하늘", 8, 0)
+        make_pass(s, title="작곡", total=4)
+        make_pass(s, title="예전 레슨", total=4, status=Enrollment.Status.ENDED)
+        page = self.client.get(reverse("students:list"))
+        self.assertContains(page, '<li class="pass-line">', count=2)
+        self.assertContains(page, "작곡")
+        self.assertNotContains(page, "예전 레슨")
+
+    def test_overflow_shown_on_list(self):
+        self.student_with("최준호", 2, 3)
+        self.assertContains(self.client.get(reverse("students:list")), "초과 1회")
+
+    def test_query_count_does_not_grow_with_students(self):
+        self.student_with("가", 8, 1)
+        with CaptureQueriesContext(connection) as few:
+            self.client.get(reverse("students:list"))
+        for i in range(5):
+            s, e = self.student_with(f"학생{i}", 8, 2)
+            make_pass(s, title="두 번째", total=4)
+        with CaptureQueriesContext(connection) as many:
+            self.client.get(reverse("students:list"))
+        self.assertEqual(len(many), len(few))
+
+    def test_other_teachers_passes_are_not_shown(self):
+        b = make_teacher("b@example.com", "B강사")
+        other = Student.objects.create(teacher=b, name="B의 학생")
+        make_pass(other, title="남의 레슨권")
+        self.student_with("김하늘", 8, 0)
+        self.assertNotContains(self.client.get(reverse("students:list")), "남의 레슨권")
+
+    def test_detail_card_marks_low_remaining(self):
+        s, _ = self.student_with("박서연", 8, 6)
+        page = self.client.get(reverse("students:detail", args=[s.pk]))
+        self.assertContains(page, "잔여 적음")
+        self.assertContains(page, 'class="is-low"')

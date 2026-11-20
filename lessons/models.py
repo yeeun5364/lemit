@@ -45,6 +45,9 @@ class Label(models.Model):
         return self.name
 
 
+# 잔여 회차가 이 값 이하면 목록·카드에서 강조한다 (UC-07 "예: 2회 이하")
+LOW_REMAINING = 2
+
 # 차감 회차 = 완료(보강 포함) + 차감한 결석 (ERD 2-2, README 회차 규칙)
 DEDUCTED = Q(status="completed") | Q(status="absent", absence_deducted=True)
 
@@ -132,6 +135,23 @@ class Enrollment(models.Model):
     @property
     def is_active(self):
         return self.status == self.Status.ACTIVE
+
+    @property
+    def remaining_state(self):
+        """잔여 회차 표시 상태 (UC-07). with_usage()로 remaining_count를 붙인 객체에서만 쓴다.
+
+        "exhausted": 잔여 0 이하('소진', 자동 종료하지 않음), "low": LOW_REMAINING 이하(강조), "": 보통
+        """
+        if self.remaining_count <= 0:
+            return "exhausted"
+        if self.remaining_count <= LOW_REMAINING:
+            return "low"
+        return ""
+
+    @property
+    def overflow_count(self):
+        """총 회차를 넘어 진행한 회차 수 (잔여가 음수일 때). 없으면 0."""
+        return max(-self.remaining_count, 0)
 
 
 class LessonSession(models.Model):

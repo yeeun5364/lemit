@@ -4,12 +4,13 @@
   <div class="pass-head">
     <h3 class="pass-title">{{ e.title }}</h3>
     {% if e.is_active %}<span class="badge badge-mint badge-dot">진행 중</span>{% else %}<span class="badge badge-neutral">종료</span>{% endif %}
-    {% if e.is_active and e.remaining_count <= 0 %}<span class="badge badge-amber">{% include "ui/icon.html" with name="info" size="sm" %}소진</span>{% endif %}
+    {% if e.is_active and e.remaining_state == "exhausted" %}<span class="badge badge-amber">{% include "ui/icon.html" with name="info" size="sm" %}소진</span>
+    {% elif e.is_active and e.remaining_state == "low" %}<span class="badge badge-outline">{% include "ui/icon.html" with name="info" size="sm" %}잔여 적음</span>{% endif %}
   </div>
   <dl class="pass-counts">
     <div><dt>총</dt><dd>{{ e.total_count }}회</dd></div>
     <div><dt>진행</dt><dd>{{ e.used_count }}회</dd></div>
-    <div><dt>잔여</dt><dd class="{% if e.remaining_count <= 0 %}is-zero{% endif %}">{{ e.remaining_count }}회</dd></div>
+    <div><dt>잔여</dt><dd class="{% if e.remaining_state == "exhausted" %}is-zero{% elif e.remaining_state == "low" %}is-low{% endif %}">{{ e.remaining_count }}회</dd></div>
   </dl>
   <div class="pass-foot">
     <span class="muted small">시작 {{ e.start_date|date:"Y.n.j" }}</span>
