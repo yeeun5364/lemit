@@ -159,6 +159,21 @@ class InboxTwoPaneTests(UiTestBase):
         self.assertContains(res, 'class="errorlist"', status_code=400)  # 오류가 답장 칸에 표시됨
         self.assertEqual(len(res.context["conversations"]), 3)
 
+    def test_reply_keeps_label_filter(self):
+        """Codex 리뷰: 분류 탭에서 답장해도 필터가 풀리지 않는다 (성공·검증 오류 모두)."""
+        conv = self.conv("수요일 수업")
+        detail = self.client.get(reverse("inbox:detail", args=[conv.pk]), {"label": "MAKEUP"})
+        self.assertContains(detail, f'action="{reverse("inbox:reply", args=[conv.pk])}?label=MAKEUP"')
+        reply_url = reverse("inbox:reply", args=[conv.pk]) + "?label=MAKEUP"
+        res = self.client.post(reply_url, {"body": "토요일에 봬요"})
+        self.assertRedirects(res, reverse("inbox:detail", args=[conv.pk]) + "?label=MAKEUP")
+        bad = self.client.post(reply_url, {"body": ""})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.context["current_label"], "MAKEUP")
+        self.assertEqual([c.pk for c in bad.context["conversations"]], [conv.pk])
+        hacked = self.client.post(reverse("inbox:reply", args=[conv.pk]) + "?label=evil", {"body": "확인"})
+        self.assertRedirects(hacked, reverse("inbox:detail", args=[conv.pk]))  # 허용되지 않은 값은 버림
+
     def test_other_teachers_conversation_is_404(self):
         other_conv = Conversation.objects.get(teacher=self.b)
         self.assertEqual(self.client.get(reverse("inbox:detail", args=[other_conv.pk])).status_code, 404)

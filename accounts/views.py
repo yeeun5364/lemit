@@ -1,3 +1,5 @@
+from collections import Counter
+
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_not_required
@@ -53,22 +55,21 @@ def home(request):
     from students.models import Student
 
     teacher = request.user
-    attention = with_display(conversations_for(teacher).filter(unread__gt=0))  # 확인할 대화 (안 읽은 메시지 있음)
+    attention = conversations_for(teacher).filter(unread__gt=0)  # 확인할 대화 (안 읽은 메시지 있음)
+    # 건수·분류별 개수는 분류 값 한 열만 가져와 센다 (대화 본문 전체를 불러오지 않음, Codex 리뷰)
+    labels = list(attention.values_list("latest_label", flat=True))
+    label_counts = Counter(label for label in labels if label)
     unread_messages = Message.objects.filter(
         conversation__teacher=teacher, sender=Message.Sender.STUDENT, read_at__isnull=True
     ).count()
-    label_counts = {}
-    for c in attention:
-        if c.latest_label:
-            label_counts[c.latest_label] = label_counts.get(c.latest_label, 0) + 1
     return render(
         request,
         "home.html",
         {
             "active_students": Student.objects.for_teacher(teacher).active().count(),
             "unread_messages": unread_messages,
-            "attention_total": len(attention),
-            "attention": attention[:DASHBOARD_MESSAGES],
+            "attention_total": len(labels),
+            "attention": with_display(attention[:DASHBOARD_MESSAGES]),
             "label_summary": [
                 (value, label, label_counts[value]) for value, label in Message.Label.choices if value in label_counts
             ],

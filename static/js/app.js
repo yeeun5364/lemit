@@ -9,9 +9,20 @@
   var backdrop = document.querySelector(".nav-backdrop");
   var mq = window.matchMedia("(max-width: 1023px)");
 
+  var mainCol = document.querySelector(".main-col");
+
   function setOpen(open, restoreFocus) {
     if (!toggle || !sidebar) return;
     root.classList.toggle("nav-open", open);
+    /* 열린 동안 배경(헤더·본문)은 키보드·화면낭독기에서 제외하고, 메뉴를 모달 대화상자로 알린다 */
+    if (mainCol) mainCol.inert = open;
+    if (open) {
+      sidebar.setAttribute("role", "dialog");
+      sidebar.setAttribute("aria-modal", "true");
+    } else {
+      sidebar.removeAttribute("role");
+      sidebar.removeAttribute("aria-modal");
+    }
     toggle.setAttribute("aria-expanded", open ? "true" : "false");
     toggle.setAttribute("aria-label", open ? "메뉴 닫기" : "메뉴 열기");
     if (backdrop) backdrop.hidden = !open;
@@ -46,6 +57,8 @@
     });
     /* 화면이 넓어지면 열린 상태를 정리 */
     mq.addEventListener("change", function (e) { if (!e.matches) setOpen(false, false); });
+    /* 동작 연결이 끝난 뒤에만 접이식 메뉴 스타일을 켠다. 이 파일을 못 불러오면 메뉴가 위쪽에 펼쳐진 채로 남는다 */
+    root.classList.replace("no-js", "js");
   }
 
   /* 2. 값이 바뀌면 폼 제출 (수강생 '보관 포함' 체크) */

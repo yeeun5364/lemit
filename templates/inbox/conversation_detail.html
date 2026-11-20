@@ -43,7 +43,7 @@
     </ol>
 
     <div class="reply">
-      <form method="post" action="{% url 'inbox:reply' conversation.pk %}" class="form" novalidate>
+      <form method="post" action="{% url 'inbox:reply' conversation.pk %}{% if current_label %}?label={{ current_label }}{% endif %}" class="form" novalidate>
         {% csrf_token %}
         {% include "ui/field.html" with field=form.body %}
         <div class="reply-actions"><button type="submit" class="btn btn-primary">{% include "ui/icon.html" with name="message" size="sm" %}보내기</button></div>

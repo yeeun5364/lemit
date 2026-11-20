@@ -5,6 +5,7 @@
 
 from django.contrib import messages
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import get_owned_or_404
@@ -63,7 +64,9 @@ def reply(request, pk):
         )
     services.add_teacher_reply(conversation=conversation, body=form.cleaned_data["body"])
     messages.success(request, "답장을 보냈습니다.")
-    return redirect("inbox:detail", pk=conversation.pk)
+    label = _current_label(request)  # 메시지함 분류 필터를 답장 후에도 유지 (검증된 값만)
+    url = reverse("inbox:detail", args=[conversation.pk])
+    return redirect(f"{url}?label={label}" if label else url)
 
 
 def new_student_message(request):
