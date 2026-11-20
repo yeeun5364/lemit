@@ -53,10 +53,21 @@ def timed(fn) -> float:
     return time.perf_counter() - start
 
 
+def positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        sys.exit(f"{name}은(는) 1 이상의 정수여야 합니다 (현재 {raw!r})")
+    return value
+
+
 def main() -> None:
     path = Path(settings.MESSAGE_CLASSIFIER_PATH)
-    n_nocache = int(os.environ.get("N_NOCACHE", 50))
-    n_cached = int(os.environ.get("N_CACHED", 500))
+    n_nocache = positive_int("N_NOCACHE", 50)
+    n_cached = positive_int("N_CACHED", 500)
 
     classifier.clear_cache()
     first = timed(lambda: classifier.classify(MESSAGES[0]))
@@ -67,6 +78,7 @@ def main() -> None:
         no_cache.append(timed(lambda i=i: classifier.classify(MESSAGES[i % 4])))
     classifier.clear_cache()
     load_only = [timed(lambda: artifact.load(path)) for _ in range(20)]
+    classifier.get_model()  # 타이머 밖에서 캐시를 채워, 캐시 있음 표본은 모두 캐시 적중만 잰다 (PR #52 리뷰)
     cached = [timed(lambda i=i: classifier.classify(MESSAGES[i % 4])) for i in range(n_cached)]
 
     print(f"모델 파일 {path.stat().st_size / 1024:.0f}KB, 버전 {classifier.get_model().version}")
