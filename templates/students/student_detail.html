@@ -7,7 +7,7 @@
   {% if student.is_minor %}<span class="badge badge-amber">미성년자</span>{% endif %}
 </p>{% endblock %}
 {% block page_actions %}
-<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ student.pk }}">{% include "ui/icon.html" with name="message" size="sm" %}수강생 메시지 추가</a>
+{% if student.is_active %}<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ student.pk }}">{% include "ui/icon.html" with name="message" size="sm" %}수강생 메시지 추가</a>{% endif %}
 <a class="btn btn-primary" href="{% url 'students:edit' student.pk %}">{% include "ui/icon.html" with name="edit" size="sm" %}수정</a>
 {% endblock %}
 {% block content %}

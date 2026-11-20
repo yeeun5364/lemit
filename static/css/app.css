@@ -83,6 +83,7 @@ svg.icon { width: 20px; height: 20px; flex: 0 0 auto; }
 .icon-sm { width: 16px !important; height: 16px !important; }
 
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.conv:focus-visible, a.row:focus-visible, .card-flush a:focus-visible { outline-offset: -2px; }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
@@ -172,7 +173,7 @@ a.nav-item:hover { background: var(--neutral-soft); color: var(--text); text-dec
 /* 페이지 머리 */
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; margin-bottom: var(--space-6); }
 .page-heading { min-width: 0; }
-.page-title { font-size: var(--fs-2xl); font-weight: 800; letter-spacing: -0.02em; }
+.page-title { font-size: var(--fs-2xl); font-weight: 800; letter-spacing: -0.02em; overflow-wrap: anywhere; }
 .page-desc { margin-top: var(--space-1); color: var(--text-muted); }
 .page-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .back-link {
@@ -387,8 +388,8 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 
 .inbox { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
 .inbox-pane { min-width: 0; }
-.inbox-list-pane { position: sticky; top: 80px; max-height: calc(100vh - 96px); display: flex; flex-direction: column; }
-.inbox-list-pane .rows { overflow-y: auto; }
+.card.inbox-list-pane { position: sticky; top: 80px; max-height: calc(100vh - 96px); overflow-y: auto; }
+@media (max-height: 560px) { .card.inbox-list-pane { position: static; max-height: none; } }  /* 낮은 화면: 고정·높이 제한 해제 */
 .conv {
   display: flex; gap: var(--space-3); align-items: flex-start;
   padding: var(--space-4); color: inherit; border-left: 3px solid transparent;

@@ -189,6 +189,15 @@ class InboxTwoPaneTests(UiTestBase):
 
 
 class StudentDetailTests(UiTestBase):
+    def test_new_message_shortcut_only_for_active_student(self):
+        """Codex 리뷰: 보관된 수강생 상세에는 메시지 추가 바로가기를 두지 않는다."""
+        url = reverse("students:detail", args=[self.sky.pk])
+        shortcut = f'href="{reverse("inbox:new")}?student={self.sky.pk}"'
+        self.assertContains(self.client.get(url), shortcut)
+        self.sky.is_active = False
+        self.sky.save()
+        self.assertNotContains(self.client.get(url), shortcut)
+
     def test_archive_confirm_message_is_html_escaped(self):
         """보관 확인 문구는 data 속성에 들어가므로 자동 이스케이프되어야 한다 (이전: escapejs 인라인 스크립트)."""
         student = Student.objects.create(teacher=self.a, name='<b>"x"</b>')
