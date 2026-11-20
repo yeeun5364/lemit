@@ -157,7 +157,7 @@ jobs:
     steps:
       # 러너가 개인 개발 환경과 분리됐는지 매번 확인한다. 하나라도 아니면 배포 키를 쓰기 전에 멈춘다 (docs/CD.md §2, §4).
       # 이 확인은 배포 작업에만 있다. 승인된 포크 PR 작업은 이 단계를 거치지 않으므로 격리 자체가 방어선이다.
-      # LEMIT_CHECK_MOUNTINFO·LEMIT_CHECK_BINFMT는 테스트용 (scripts/test_runner_isolation_check.py)
+      # LEMIT_CHECK_MOUNTINFO·LEMIT_CHECK_BINFMT·LEMIT_CHECK_WSLCONF·LEMIT_CHECK_PEEXEC는 테스트용 (scripts/test_runner_isolation_check.py)
       - name: 러너 격리 확인
         run: |
           problems=""
@@ -173,9 +173,36 @@ jobs:
                         if (!s) next
                         if ($(s+1) == "drvfs" || $(s+3) ~ /(^|[,;])aname=drvfs/ || $(s+2) ~ /^[A-Za-z]:/) printf "%s ", $5 }' "$mountinfo")"
           [ -z "$win" ] || add "Windows 드라이브가 연결됨(${win% })"
+          # Windows 프로그램 실행(interop). WSL2의 binfmt_misc 등록(WSLInterop)은 같은 VM의 모든 배포판이 함께 쓰므로,
+          # 개인 배포판이 interop을 쓰면 이 배포판에서도 'enabled'로 보인다. 그래서 등록 상태만으로 판단하지 않고
+          # (1) 이 배포판의 /etc/wsl.conf가 interop을 끄는지, (2) PE 머리(MZ) 파일 실행이 실제로 막히는지를 둘 다 본다.
+          # 막혔을 때 WSL은 Windows 쪽 연결을 기다리다 'UtilAcceptVsock ... accept4 failed 110'으로 끝난다(약 10초).
+          # interop이 켜진 배포판에서는 Windows가 요청을 받아 즉시 'Invalid argument'를 돌려준다 (2026-11-20 WSL 3.0.5 실측).
+          # 알려진 차단 결과가 아니면 모두 실패로 본다 (WSL 버전이 바뀌어 문구가 달라져도 배포는 멈춘다)
+          interop_on=""
           for f in "${LEMIT_CHECK_BINFMT:-/proc/sys/fs/binfmt_misc}"/WSLInterop*; do
-            if [ -f "$f" ] && head -n 1 "$f" | grep -qx enabled; then add "Windows 프로그램 실행(interop)이 켜져 있음"; break; fi
+            if [ -f "$f" ] && head -n 1 "$f" | grep -qx enabled; then interop_on=1; break; fi
           done
+          if [ -n "$interop_on" ]; then
+            wslconf="${LEMIT_CHECK_WSLCONF:-/etc/wsl.conf}"
+            if ! awk '{ sub(/[#;].*/, ""); gsub(/[ \t\r]/, ""); line = tolower($0) }
+                      line ~ /^\[/ { sec = line; next }
+                      sec == "[interop]" && line ~ /^enabled=/ { v = substr(line, 9) }
+                      END { exit !(v == "false") }' "$wslconf" 2> /dev/null; then
+              add "$wslconf에 [interop] enabled=false가 없음"
+            fi
+            probe_dir="$(mktemp -d)"
+            printf 'MZ lemit interop probe\n' > "$probe_dir/probe.exe"
+            chmod 700 "$probe_dir/probe.exe"
+            # LEMIT_CHECK_PEEXEC는 테스트용 (실행 결과를 흉내 내는 스크립트). 평소에는 env가 파일을 그대로 실행한다
+            if out="$(timeout 30 "${LEMIT_CHECK_PEEXEC:-env}" "$probe_dir/probe.exe" < /dev/null 2>&1)"; then rc=0; else rc=$?; fi
+            rm -rf "$probe_dir"
+            if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qE 'UtilAcceptVsock:[0-9]+: accept4 failed 110'; then
+              echo "interop: binfmt 등록은 켜져 있으나(VM 공유) 이 배포판에서 Windows 실행은 막혀 있음"
+            else
+              add "Windows 프로그램 실행(interop)이 막혔는지 확인하지 못함(종료 코드 $rc: $(printf '%s' "$out" | head -n 1 | tr -d ':' | cut -c1-100))"
+            fi
+          fi
           for exe in powershell.exe cmd.exe wsl.exe; do
             if command -v "$exe" > /dev/null 2>&1; then add "Windows 프로그램($exe)이 PATH에 있음"; fi
           done

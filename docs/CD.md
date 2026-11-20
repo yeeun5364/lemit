@@ -34,7 +34,7 @@ GitHub는 공개 저장소에 Self-hosted Runner를 권장하지 않습니다. �
 |---|---|---|
 | 포크 PR이 내 러너에서 코드 실행 | 외부 기여자의 모든 PR은 승인해야 실행(§1-1). 승인 전 `.github/` 변경 확인 | **승인을 잘못 누르면 실행됨** |
 | 저장소 안에서 실수로 PR·push 작업이 러너를 씀 | `scripts/check_workflow_policy.py`(CI): self-hosted는 `deploy.yml`의 작업 하나만, 다른 워크플로는 GitHub-hosted 라벨 문자열만, 트리거는 `workflow_run`(CI·completed·main)·`workflow_dispatch`만, 검증 작업의 저장소·이벤트·ref 조건, production·작업 단위 concurrency·액션 미사용 | 조건의 **존재**를 보며 논리 전체를 증명하지는 않음. 포크 PR에는 효과 없음 |
-| 러너 작업이 개인 PC에 접근 | 러너 전용 WSL 배포판 + sudo 없는 전용 사용자 + Windows 드라이브·프로그램 실행 끄기(§2). 배포 작업이 매번 실제 마운트(`/proc/self/mountinfo`의 drvfs, `/mnt` 밖·fstab 포함)·sudo 권한·그룹·interop을 확인하고 아니면 중단 | 확인 단계는 배포 작업에만 있음. 승인된 악성 PR 작업은 이 확인을 거치지 않으므로 **격리 자체**가 방어선 |
+| 러너 작업이 개인 PC에 접근 | 러너 전용 WSL 배포판 + sudo 없는 전용 사용자 + Windows 드라이브·프로그램 실행 끄기(§2). 배포 작업이 매번 실제 마운트(`/proc/self/mountinfo`의 drvfs, `/mnt` 밖·fstab 포함)·sudo 권한·그룹·interop(설정 + Windows 실행 시험)을 확인하고 아니면 중단 | 확인 단계는 배포 작업에만 있음. 승인된 악성 PR 작업은 이 확인을 거치지 않으므로 **격리 자체**가 방어선 |
 | 배포 키 유출 | production Environment Secret(main 브랜치만), 키는 한 단계 안에서만 파일로 만들고 삭제, 강제 명령, 서버에서 main 포함 재확인 | 키를 쓰는 동안 같은 러너에 숨어 있던 프로그램은 읽을 수 있음 |
 | 예전 커밋 배포로 강제 명령이 약해짐 | 강제 명령을 저장소 밖 root 소유 고정 경로에 설치(§3-2), 저장소 안에서 실행되면 거부 | 갱신은 관리자가 직접(자동 아님) |
 | 테스트 안 된 코드 배포 | 실제 CI 실행 ID와 그 작업 결과 확인 + main 포함(plan), 서버도 main 포함 확인 | main에 들어간 커밋은 배포될 수 있음(main 보호 규칙에 의존) |
@@ -73,6 +73,7 @@ GitHub는 공개 저장소에 Self-hosted Runner를 권장하지 않습니다. �
    appendWindowsPath=false
    ```
    PowerShell에서 `wsl --terminate lemit-runner` 후 다시 엽니다. 이 설정을 바꿀 때만 잠깐 관리자 사용자를 쓰고, 러너는 `ghrunner`로만 돌립니다.
+   - **`/proc/sys/fs/binfmt_misc/WSLInterop`이 `enabled`로 보여도 정상일 수 있습니다.** WSL2의 배포판들은 한 VM의 커널을 함께 쓰고, 이 등록(`.exe` 파일을 WSL의 `/init`으로 넘기는 규칙)도 배포판끼리 공유합니다. 개인 배포판이 interop을 쓰면 러너 배포판에서도 `enabled`로 보입니다. 실제로 Windows 프로그램이 실행되는지는 Windows 쪽이 배포판별 설정으로 정하므로, 등록 상태가 아니라 **실행 시험**(§4)으로 확인합니다. 배포 작업도 매번 같은 시험을 합니다(약 10초).
 4. **라벨 `lemit-deploy`**: 등록할 때 `./config.sh --url https://github.com/yeeun5364/lemit --token <등록 토큰> --labels lemit-deploy`, 또는 Settings → Actions → Runners에서 라벨 추가.
 5. **서비스 실행:** 러너 폴더에서 `sudo ./svc.sh install ghrunner && sudo ./svc.sh start`
    - **WSL은 systemd 서비스만으로 계속 켜져 있지 않습니다.** Windows를 재부팅하면 배포판이 시작되어야 러너가 온라인이 되고, 배포판 안에 실행 중인 세션이 없으면 WSL이 배포판을 멈출 수 있습니다. 터미널을 한 번 열었다 닫는 것만으로는 부족할 수 있습니다.
@@ -120,8 +121,12 @@ GitHub는 공개 저장소에 Self-hosted Runner를 권장하지 않습니다. �
 | 관리자 사용자로 `sudo -l -U ghrunner` | "not allowed to run sudo" (sudo 규칙 없음) |
 | `grep -E 'aname=drvfs\| - drvfs ' /proc/self/mountinfo` | 아무것도 안 나옴 (Windows 드라이브 마운트 없음. `/mnt` 밖·`/etc/fstab`·Docker Desktop 연동 마운트 포함) |
 | `powershell.exe` 또는 `cmd.exe` | 실행 안 됨(명령 없음) |
-| `cat /proc/sys/fs/binfmt_misc/WSLInterop` | 파일 없음 또는 `enabled`가 아님 |
+| `cat /etc/wsl.conf` | `[interop]` 아래 `enabled=false` (§2-3) |
+| Windows 실행 시험: `p=$(mktemp --suffix=.exe); printf 'MZ' > $p; chmod 700 $p; $p < /dev/null; echo "종료 $?"; rm -f $p` | 약 10초 뒤 `UtilAcceptVsock:…: accept4 failed 110`, `종료 1` (Windows가 요청을 받지 않음). 바로 `Invalid argument`가 나오거나 `종료 0`이면 interop이 켜진 것 |
+| `cat /proc/sys/fs/binfmt_misc/WSLInterop` | 참고용. 개인 배포판이 interop을 쓰면 `enabled`로 보이는 것이 정상(§2-3). 판단은 위 실행 시험으로 |
 | 개발 배포판에서 `wsl -l -v` | 러너가 개발 배포판이 아닌 `lemit-runner`에 있음 |
+
+> 2026-11-20 실측(WSL 3.0.5, 커널 6.18): 러너 배포판(interop 끔)은 `WSLInterop`이 `enabled`였지만 실제 `whoami.exe` 실행이 위 오류로 막혔고, `WSL_INTEROP=/run/WSL/1_interop`처럼 소켓을 직접 지정해도 막혔습니다. 같은 파일을 개인 배포판(interop 켬)에서 실행하면 바로 실행됐습니다.
 
 **SSH 최소 권한** (배포 키로, 러너 배포판 또는 PC에서. `KEY=lemit-github-deploy 키 경로`)
 
@@ -171,6 +176,8 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 | 증상 | 원인 후보 |
 |---|---|
 | "러너가 격리되지 않았습니다: …" | §2의 해당 항목. 고친 뒤 §4를 다시 확인 |
+| "… `[interop] enabled=false`가 없음" | 러너 배포판 `/etc/wsl.conf` (§2-3) |
+| "Windows 프로그램 실행(interop)이 막혔는지 확인하지 못함(종료 코드 …)" | `Invalid argument`·종료 0: interop이 켜져 있음 → wsl.conf 확인 후 `wsl --terminate`로 다시 시작. 종료 124: 30초 안에 끝나지 않음. 그 밖의 문구: WSL 업데이트로 오류 문구가 바뀌었을 수 있음 → §4 실행 시험으로 직접 확인한 뒤 deploy.yml의 판정 문구를 PR로 고침(확인 전에는 배포하지 않음) |
 | "production Environment 설정이 빠졌습니다" | §5-2 이름 오타, Environment가 아닌 곳에 등록 |
 | deploy 작업이 계속 "Waiting for a runner" | 러너 오프라인(배포판 미시작 포함), 라벨 `lemit-deploy` 누락 |
 | "성공한 CI 실행을 찾지 못했습니다" | 그 커밋의 main push CI가 없거나 실패 |
@@ -197,7 +204,7 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 - **계정 탈취:** 저장소 쓰기 권한이 있으면 워크플로를 바꿔 러너를 쓸 수 있습니다(2단계 인증).
 - **러너가 작업마다 새로 만들어지지 않습니다(ephemeral 아님).** 악성 작업이 남긴 프로그램이 다음 배포 때 키를 읽을 수 있습니다. 의심되면 러너 배포판을 지우고 다시 만든 뒤 배포 키를 교체합니다(§3-2).
 - **최신 확인과 서버 배포 사이의 짧은 틈:** 러너가 "main 최신"을 확인한 직후 새 커밋이 병합되면, 이전 커밋이 먼저 배포되고 이어서 새 커밋 배포가 실행됩니다.
-- **격리 확인의 범위:** `/usr/lib/wsl/drivers`(WSL2가 항상 붙이는 읽기 전용 Windows 드라이버 저장소)는 허용합니다. 비밀번호가 필요한 sudo 규칙은 확인 단계가 잡지 못하므로, 전용 사용자는 비밀번호 없이(`--disabled-password`) 만들고 §4에서 `sudo -l -U ghrunner`로 확인합니다.
+- **격리 확인의 범위:** `/usr/lib/wsl/drivers`(WSL2가 항상 붙이는 읽기 전용 Windows 드라이버 저장소)는 허용합니다. interop은 공유되는 binfmt 등록 대신 설정 파일과 실제 실행 시험으로 판단하며, 실행 시험은 WSL이 내는 오류 문구에 기대므로 WSL 버전이 바뀌면 다시 확인해야 합니다(문구가 다르면 배포를 멈추는 쪽으로 실패). 비밀번호가 필요한 sudo 규칙은 확인 단계가 잡지 못하므로, 전용 사용자는 비밀번호 없이(`--disabled-password`) 만들고 §4에서 `sudo -l -U ghrunner`로 확인합니다.
 - **정책 검사의 범위:** 조건 문자열이 있는지 확인하며, 조건식 전체의 논리를 증명하지는 않습니다. 워크플로 변경 PR은 사람이 함께 봅니다.
 - **강제 명령 갱신은 수동:** 갱신을 잊으면 서버는 예전(이미 검토한) 강제 명령을 계속 씁니다.
 - 관리자 IP(집 인터넷)가 바뀌면 배포가 실패합니다(안전한 쪽 실패).
