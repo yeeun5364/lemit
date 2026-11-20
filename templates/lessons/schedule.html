@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}수업 일정{% endblock %}
+{% block page_title %}수업 일정{% endblock %}
+{% block page_desc %}<p class="page-desc">{% if view == "month" %}{{ selected|date:"Y년 n월" }}{% else %}{{ week_first|date:"n월 j일" }} – {{ week_last|date:"n월 j일" }}{% endif %}{% if student %} · {{ student.name }}{% endif %}</p>{% endblock %}
+{% block page_actions %}<a class="btn btn-primary" href="{{ add_url }}">{% include "ui/icon.html" with name="plus" size="sm" %}일정 추가</a>{% endblock %}
+{% block content %}
+<div class="sched-toolbar">
+  <nav class="sched-nav" aria-label="{% if view == 'month' %}달{% else %}주{% endif %} 이동">
+    <a class="btn btn-secondary btn-icon" href="{{ prev_url }}" aria-label="이전 {% if view == 'month' %}달{% else %}주{% endif %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}</a>
+    <a class="btn btn-secondary" href="{{ today_url }}">오늘</a>
+    <a class="btn btn-secondary btn-icon" href="{{ next_url }}" aria-label="다음 {% if view == 'month' %}달{% else %}주{% endif %}">{% include "ui/icon.html" with name="chevron-right" size="sm" %}</a>
+  </nav>
+  <div class="segmented" role="group" aria-label="보기">
+    <a href="{{ month_url }}" class="{% if view == 'month' %}is-active{% endif %}"{% if view == 'month' %} aria-current="page"{% endif %}>월</a>
+    <a href="{{ week_url }}" class="{% if view == 'week' %}is-active{% endif %}"{% if view == 'week' %} aria-current="page"{% endif %}>주</a>
+  </div>
+  <form method="get" class="sched-filter">
+    <input type="hidden" name="view" value="{{ view }}"><input type="hidden" name="date" value="{{ selected|date:'Y-m-d' }}">
+    <label for="sched-student" class="small muted">수강생</label>
+    <select id="sched-student" name="student" class="input" data-autosubmit>
+      <option value="">전체</option>
+      {% for st in students %}<option value="{{ st.pk }}"{% if student and st.pk == student.pk %} selected{% endif %}>{{ st.name }}</option>{% endfor %}
+    </select>
+    <noscript><button type="submit" class="btn btn-secondary">보기</button></noscript>
+  </form>
+</div>
+
+{% if view == "month" %}
+<div class="sched-grid-wrap card card-flush">
+  <table class="month">
+    <caption class="sr-only">{{ selected|date:"Y년 n월" }} 달력. 회차가 있는 날은 점과 개수로 표시합니다.</caption>
+    <thead><tr>{% for w in weekdays %}<th scope="col"{% if forloop.first %} class="is-sun"{% endif %}>{{ w }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for week in grid %}<tr>
+        {% for c in week %}<td>
+          <a href="{{ c.url }}" class="day{% if not c.in_month %} is-out{% endif %}{% if c.is_today %} is-today{% endif %}{% if c.is_selected %} is-selected{% endif %}{% if forloop.first %} is-sun{% endif %}"
+             {% if c.is_selected %}aria-current="date"{% endif %}
+             aria-label="{{ c.date|date:'n월 j일' }}{% if c.is_today %} 오늘{% endif %}{% if c.count %}, 회차 {{ c.count }}개{% else %}, 일정 없음{% endif %}">
+            <span class="day-num">{{ c.date.day }}</span>
+            <span class="day-dots" aria-hidden="true">{% if c.count %}<span class="dot"></span>{% endif %}</span>
+          </a>
+        </td>{% endfor %}
+      </tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<section class="card section" aria-labelledby="day-title">
+  <div class="card-head">
+    <h2 id="day-title" class="card-title">{{ selected|date:"n월 j일 l" }}{% if selected == today %} <span class="badge badge-blue">오늘</span>{% endif %}</h2>
+    {% if day_sessions %}<span class="muted small">{{ day_sessions|length }}개</span>{% endif %}
+  </div>
+  {% if day_sessions %}
+  <ul class="rows sessions">{% for s in day_sessions %}{% include "lessons/_session_line.html" %}{% endfor %}</ul>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span>
+    <p class="empty-title">일정 없음</p>
+    <a class="btn btn-secondary btn-sm" href="{{ add_url }}">{% include "ui/icon.html" with name="plus" size="sm" %}이날 일정 추가</a>
+  </div>
+  {% endif %}
+</section>
+
+{% else %}
+<div class="week-list">
+  {% for d in week %}
+  <section class="card week-day{% if d.is_today %} is-today{% endif %}" aria-label="{{ d.date|date:'n월 j일 l' }}">
+    <h2 class="week-day-title">{{ d.date|date:"n/j" }} ({{ d.date|date:"D"|slice:":1" }}){% if d.is_today %} <span class="badge badge-blue">오늘</span>{% endif %}
+      {% if not d.sessions %}<span class="muted small">일정 없음</span>{% endif %}</h2>
+    {% if d.sessions %}<ul class="rows sessions">{% for s in d.sessions %}{% include "lessons/_session_line.html" %}{% endfor %}</ul>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

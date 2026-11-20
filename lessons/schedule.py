@@ -1,0 +1,70 @@
+"""수업 일정 화면(S05·S05-W, UC-05)의 날짜 계산과 회차 조회.
+
+- 한 주는 일요일부터 토요일까지 (월간 달력과 같은 기준, SCREENS S05-W).
+- 날짜 경계는 Asia/Seoul. 회차는 시작 시각이 그날(현지 0시~다음 날 0시)에 있으면 그날 회차다.
+- 보관된 수강생의 회차는 일정에 보이지 않는다 (기록은 수강생 상세에서 확인, SCREENS S05-W).
+"""
+
+import calendar
+import datetime
+from collections import defaultdict
+
+from django.utils import timezone
+
+from lessons.models import LessonSession
+
+WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"]
+
+
+def parse_date(value, default):
+    """'YYYY-MM-DD'를 date로. 잘못된 값이나 너무 먼 날짜는 default (주소를 직접 고쳐도 오류 없이)."""
+    try:
+        d = datetime.date.fromisoformat(value or "")
+    except ValueError:
+        return default
+    return d if 1900 <= d.year <= 2999 else default
+
+
+def week_start(d):
+    """d가 속한 주의 일요일."""
+    return d - datetime.timedelta(days=(d.weekday() + 1) % 7)
+
+
+def month_weeks(d):
+    """d가 속한 달의 달력: 일요일부터 시작하는 주들의 날짜 목록 (앞뒤 달의 날짜도 채움)."""
+    first = d.replace(day=1)
+    last = d.replace(day=calendar.monthrange(d.year, d.month)[1])
+    start, end = week_start(first), week_start(last) + datetime.timedelta(days=6)
+    days = [start + datetime.timedelta(days=i) for i in range((end - start).days + 1)]
+    return [days[i : i + 7] for i in range(0, len(days), 7)]
+
+
+def add_months(d, n):
+    """n개월 앞뒤의 같은 날 (그 달에 없는 날이면 말일로, 예: 1/31 + 1개월 = 2/28)."""
+    m = d.month - 1 + n
+    year, month = d.year + m // 12, m % 12 + 1
+    return d.replace(year=year, month=month, day=min(d.day, calendar.monthrange(year, month)[1]))
+
+
+def _local_midnight(d):
+    return timezone.make_aware(datetime.datetime.combine(d, datetime.time.min), timezone.get_current_timezone())
+
+
+def sessions_by_day(teacher, first_day, last_day, student_id=None):
+    """first_day~last_day(포함) 사이의 내 회차를 {날짜: [회차, ...]}로. 각 날 안은 시작 시각 순."""
+    qs = (
+        LessonSession.objects.filter(
+            enrollment__student__teacher=teacher,
+            enrollment__student__is_active=True,
+            start_at__gte=_local_midnight(first_day),
+            start_at__lt=_local_midnight(last_day + datetime.timedelta(days=1)),
+        )
+        .select_related("enrollment__student", "enrollment__label")
+        .order_by("start_at", "id")
+    )
+    if student_id:
+        qs = qs.filter(enrollment__student_id=student_id)
+    days = defaultdict(list)
+    for s in qs:
+        days[timezone.localtime(s.start_at).date()].append(s)
+    return days

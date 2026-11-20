@@ -23,8 +23,8 @@
       <nav aria-label="주 메뉴">
         <ul class="nav">
           <li><a href="{% url 'home' %}" class="nav-item{% if url_name == 'home' %} is-active{% endif %}"{% if url_name == 'home' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="dashboard" %}대시보드</a></li>
-          {# 일정 기능(UC-04·05, #11·#12)은 아직 없어 링크 없이 '준비 중'으로만 표시한다 #}
-          <li><span class="nav-item is-disabled" aria-disabled="true">{% include "ui/icon.html" with name="calendar" %}수업 일정<span class="nav-meta badge badge-neutral">준비 중</span></span></li>
+          {# 수업 일정(UC-05): 일정 화면과 회차 화면(상세·추가·수정)에서 활성. 레슨권 추가는 수강생 메뉴 쪽 #}
+          {% if app_name == 'lessons' and url_name != 'enrollment_create' %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item is-active" aria-current="page">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% else %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% endif %}
           <li><a href="{% url 'students:list' %}" class="nav-item{% if app_name == 'students' %} is-active{% endif %}"{% if app_name == 'students' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="users" %}수강생</a></li>
           {% with unread=inbox_unread %}
           <li><a href="{% url 'inbox:list' %}" class="nav-item{% if app_name == 'inbox' %} is-active{% endif %}"{% if app_name == 'inbox' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="inbox" %}메시지함{% if unread %}<span class="nav-count" aria-label="안 읽은 메시지 {{ unread }}개">{{ unread }}</span>{% endif %}</a></li>

@@ -48,13 +48,18 @@ def home(request):
 
     - 전체 수강생: 수강 중(보관 제외)인 내 수강생 수
     - 확인할 메시지: 안 읽은 수강생 메시지 수, 그 메시지가 있는 대화(최근순)와 대화별 최근 AI 분류
-    - 오늘 수업·오늘의 일정: 회차·일정 기능(UC-04·05, #11·#12)이 없어 '준비 중'으로 표시한다. 숫자를 지어내지 않는다.
+    - 오늘 수업·오늘의 일정: 오늘(Asia/Seoul) 시작하는 내 회차 (보관 수강생 제외, 일정 화면과 같은 기준, UC-05)
     """
+    from django.utils import timezone
+
     from inbox.models import Message
     from inbox.selectors import conversations_for, with_display
+    from lessons.schedule import sessions_by_day
     from students.models import Student
 
     teacher = request.user
+    today = timezone.localdate()
+    today_sessions = sessions_by_day(teacher, today, today).get(today, [])
     attention = conversations_for(teacher).filter(unread__gt=0)  # 확인할 대화 (안 읽은 메시지 있음)
     # 건수·분류별 개수는 분류 값 한 열만 가져와 센다 (대화 본문 전체를 불러오지 않음, Codex 리뷰)
     labels = list(attention.values_list("latest_label", flat=True))
@@ -67,6 +72,9 @@ def home(request):
         "home.html",
         {
             "active_students": Student.objects.for_teacher(teacher).active().count(),
+            "today": today,
+            "today_sessions": today_sessions,
+            "today_scheduled": sum(s.status == "scheduled" for s in today_sessions),
             "unread_messages": unread_messages,
             "attention_total": len(labels),
             "attention": with_display(attention[:DASHBOARD_MESSAGES]),

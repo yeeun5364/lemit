@@ -5,8 +5,9 @@ import datetime
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -606,7 +607,7 @@ class SessionCreateTests(TestCase):
         self.student.save()
         response = self.client.get(self.url, {"student": self.student.pk})
         self.assertIsNone(response.context["form"]["enrollment"].value())
-        self.assertEqual(response.context["back_url"], reverse("students:list"))
+        self.assertTrue(response.context["back_url"].startswith(reverse("lessons:schedule")))
 
     def test_preselect_from_student_detail(self):
         response = self.client.get(self.url, {"student": self.student.pk})
@@ -1172,3 +1173,183 @@ class SessionCompleteConcurrencyTests(TransactionTestCase):
         worker.join(5)
         self.assertContains(response, "예정 상태인 회차만 완료 처리할 수 있습니다")
         self.assertEqual(Enrollment.objects.with_usage().get(pk=e.pk).used_count, 1)
+
+
+# UC-05 일정 조회 (S05 월간·S05-W 주간, 대시보드 오늘 수업)
+# ---------------------------------------------------------------------------
+
+
+class ScheduleDateTests(TestCase):
+    def test_week_starts_on_sunday(self):
+        from lessons.schedule import week_start
+
+        self.assertEqual(week_start(datetime.date(2026, 11, 19)), datetime.date(2026, 11, 15))  # 목 → 일
+        self.assertEqual(week_start(datetime.date(2026, 11, 15)), datetime.date(2026, 11, 15))  # 일 그대로
+
+    def test_month_grid_covers_whole_weeks(self):
+        from lessons.schedule import month_weeks
+
+        weeks = month_weeks(datetime.date(2026, 11, 19))
+        self.assertEqual(weeks[0][0], datetime.date(2026, 11, 1))  # 2026-11-01은 일요일
+        self.assertEqual(weeks[-1][-1], datetime.date(2026, 12, 5))
+        self.assertTrue(all(len(w) == 7 for w in weeks))
+        feb = month_weeks(datetime.date(2026, 2, 10))
+        self.assertEqual(feb[0][0], datetime.date(2026, 2, 1))
+
+    def test_add_months_clamps_to_month_end(self):
+        from lessons.schedule import add_months
+
+        self.assertEqual(add_months(datetime.date(2026, 1, 31), 1), datetime.date(2026, 2, 28))
+        self.assertEqual(add_months(datetime.date(2026, 12, 15), 1), datetime.date(2027, 1, 15))
+        self.assertEqual(add_months(datetime.date(2026, 1, 15), -1), datetime.date(2025, 12, 15))
+
+    def test_parse_date_falls_back(self):
+        from lessons.schedule import parse_date
+
+        default = datetime.date(2026, 11, 20)
+        for bad in ("", "2026-13-01", "abc", "0001-01-01", None):
+            self.assertEqual(parse_date(bad, default), default)
+        self.assertEqual(parse_date("2026-11-21", default), datetime.date(2026, 11, 21))
+
+
+class ScheduleViewTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.sky = Student.objects.create(teacher=self.teacher, name="김하늘")
+        self.yun = Student.objects.create(teacher=self.teacher, name="이도윤")
+        self.sky_pass = make_pass(self.sky, title="피아노")
+        self.yun_pass = make_pass(self.yun, title="바이올린")
+        self.client.force_login(self.teacher)
+        self.url = reverse("lessons:schedule")
+
+    def at_session(self, enrollment, day, hour, minute=0, status=LessonSession.Status.SCHEDULED, **kw):
+        start = timezone.make_aware(datetime.datetime(2026, 11, day, hour, minute))
+        return LessonSession.objects.create(
+            enrollment=enrollment, start_at=start, end_at=start + datetime.timedelta(hours=1), status=status, **kw
+        )
+
+    def get(self, **params):
+        return self.client.get(self.url, params)
+
+    def test_url(self):
+        self.assertEqual(self.url, "/schedule/")
+
+    def test_month_marks_days_and_lists_selected_day_in_time_order(self):
+        late = self.at_session(self.sky_pass, 19, 17, 30)
+        early = self.at_session(self.yun_pass, 19, 15)
+        self.at_session(self.sky_pass, 12, 17)
+        res = self.get(date="2026-11-19")
+        counts = {c["date"].day: c["count"] for w in res.context["grid"] for c in w if c["in_month"]}
+        self.assertEqual((counts[19], counts[12], counts[13]), (2, 1, 0))
+        self.assertEqual(res.context["day_sessions"], [early, late])
+        self.assertContains(res, "이도윤 · 바이올린")
+        self.assertContains(res, reverse("lessons:session_detail", args=[early.pk]))  # 누르면 상세
+
+    def test_default_is_this_month_with_today_selected(self):
+        res = self.get()
+        self.assertEqual(res.context["view"], "month")
+        self.assertEqual(res.context["selected"], timezone.localdate())
+
+    def test_local_day_boundary_is_seoul(self):
+        """서울 23:30 회차(UTC로는 같은 날 14:30)·00:30 회차(UTC로는 전날)가 서울 날짜에 붙는다."""
+        night = self.at_session(self.sky_pass, 21, 23, 30)
+        dawn = self.at_session(self.sky_pass, 22, 0, 30)
+        self.assertEqual(self.get(date="2026-11-21").context["day_sessions"], [night])
+        self.assertEqual(self.get(date="2026-11-22").context["day_sessions"], [dawn])
+
+    def test_empty_day_shows_no_schedule_and_add_link_with_date(self):
+        res = self.get(date="2026-11-20")
+        self.assertContains(res, "일정 없음")
+        self.assertIn("date=2026-11-20", res.context["add_url"])
+        add = self.client.get(res.context["add_url"])
+        self.assertEqual(add.context["form"]["date"].value(), datetime.date(2026, 11, 20))
+        self.assertEqual(add.context["back_url"], reverse("lessons:schedule") + "?date=2026-11-20")
+
+    def test_status_shapes_and_makeup_badge(self):
+        cancelled = self.at_session(self.sky_pass, 19, 10, status=LessonSession.Status.CANCELLED)
+        self.at_session(self.sky_pass, 19, 11, status=LessonSession.Status.COMPLETED)
+        self.at_session(self.sky_pass, 19, 12, status=LessonSession.Status.ABSENT, absence_deducted=True)
+        self.at_session(self.sky_pass, 19, 13, makeup_for=cancelled)
+        res = self.get(date="2026-11-19")
+        for text in ("is-cancelled", "휴강", "is-completed", "완료", "결석·차감", ">보강<"):
+            self.assertContains(res, text)
+
+    def test_week_view_sunday_to_saturday_with_empty_days(self):
+        s = self.at_session(self.sky_pass, 19, 16)
+        res = self.get(view="week", date="2026-11-19")
+        week = res.context["week"]
+        self.assertEqual([d["date"].day for d in week], [15, 16, 17, 18, 19, 20, 21])
+        self.assertEqual(week[4]["sessions"], [s])
+        self.assertContains(res, "일정 없음", count=6)
+
+    def test_prev_next_links(self):
+        res = self.get(date="2026-01-31")
+        self.assertIn("date=2025-12-31", res.context["prev_url"])
+        self.assertIn("date=2026-02-28", res.context["next_url"])
+        res = self.get(view="week", date="2026-11-19")
+        self.assertIn("date=2026-11-12", res.context["prev_url"])
+        self.assertIn("date=2026-11-26", res.context["next_url"])
+        self.assertIn("view=week", res.context["next_url"])
+
+    def test_student_filter_and_bad_values(self):
+        self.at_session(self.sky_pass, 19, 15)
+        self.at_session(self.yun_pass, 19, 16)
+        only_sky = self.get(date="2026-11-19", student=self.sky.pk)
+        self.assertEqual([s.enrollment.student for s in only_sky.context["day_sessions"]], [self.sky])
+        self.assertIn(f"student={self.sky.pk}", only_sky.context["next_url"])  # 이동해도 필터 유지
+        for bad in ("abc", "999999"):
+            self.assertEqual(len(self.get(date="2026-11-19", student=bad).context["day_sessions"]), 2)
+        res = self.get(view="nonsense", date="nonsense")
+        self.assertEqual((res.status_code, res.context["view"]), (200, "month"))
+
+    def test_archived_students_and_other_teachers_are_hidden(self):
+        self.at_session(self.sky_pass, 19, 15, status=LessonSession.Status.COMPLETED)
+        self.sky.is_active = False
+        self.sky.save()
+        b = make_teacher("b@example.com", "B강사")
+        b_student = Student.objects.create(teacher=b, name="B의 학생")
+        self.at_session(make_pass(b_student, title="남의 레슨"), 19, 16)
+        res = self.get(date="2026-11-19")
+        self.assertEqual(res.context["day_sessions"], [])
+        self.assertNotContains(res, "남의 레슨")
+        filtered = self.get(date="2026-11-19", student=b_student.pk)  # 남의 수강생 필터는 무시
+        self.assertIsNone(filtered.context["student"])
+        self.assertNotIn(b_student, list(res.context["students"]))
+
+    def test_query_count_does_not_grow_with_sessions(self):
+        self.at_session(self.sky_pass, 19, 9)
+        with CaptureQueriesContext(connection) as few:
+            self.get(date="2026-11-19")
+        for h in range(10, 18):
+            self.at_session(self.yun_pass if h % 2 else self.sky_pass, 19, h)
+        with CaptureQueriesContext(connection) as many:
+            self.get(date="2026-11-19")
+        self.assertEqual(len(many), len(few))
+
+    def test_login_required(self):
+        self.client.logout()
+        res = self.get()
+        self.assertEqual(res.status_code, 302)
+
+
+class DashboardTodayTests(TestCase):
+    def test_today_count_and_list(self):
+        teacher = make_teacher("a@example.com", "A강사")
+        student = Student.objects.create(teacher=teacher, name="김하늘")
+        e = make_pass(student)
+        today = timezone.localdate()
+        tz = timezone.get_current_timezone()
+        start = timezone.make_aware(datetime.datetime.combine(today, datetime.time(15)), tz)
+        LessonSession.objects.create(enrollment=e, start_at=start, end_at=start + datetime.timedelta(hours=1))
+        done = start - datetime.timedelta(hours=3)
+        LessonSession.objects.create(
+            enrollment=e, start_at=done, end_at=done + datetime.timedelta(hours=1), status="completed"
+        )
+        tomorrow = start + datetime.timedelta(days=1)
+        LessonSession.objects.create(enrollment=e, start_at=tomorrow, end_at=tomorrow + datetime.timedelta(hours=1))
+        self.client.force_login(teacher)
+        res = self.client.get(reverse("home"))
+        self.assertEqual(len(res.context["today_sessions"]), 2)
+        self.assertEqual(res.context["today_scheduled"], 1)
+        self.assertContains(res, "남은 예정 1회")
+        self.assertContains(res, "김하늘 · 피아노 개인 레슨")
