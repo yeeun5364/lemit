@@ -98,6 +98,8 @@ bash scripts/server_check.sh   # 운영 .env 사전 점검까지 다시 확인
 
 ## 3. 배포
 
+> 서버에서 직접 실행하는 방법입니다. GitHub Actions로 배포하려면 [CD.md](CD.md)를 봅니다(같은 `deploy.sh`를 실행). 서버의 `flock` 잠금 때문에 수동 배포와 자동 배포는 동시에 실행되지 않습니다.
+
 ```bash
 scripts/deploy.sh            # 기본: origin/main의 최신 커밋
 scripts/deploy.sh <커밋SHA>   # 특정 커밋
