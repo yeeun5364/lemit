@@ -212,20 +212,25 @@ docker compose logs --tail 50 db              # PostgreSQL
 
 ### DB 백업
 ```bash
-bash scripts/backup_db.sh        # ~/lemit-backups/lemit-날짜-시간.dump (권한 600), 무결성 확인, 최근 14개 보관
-bash scripts/restore_check.sh    # 가장 최근 백업을 임시 DB에 복원해 주요 테이블 건수를 운영 DB와 비교 (운영 DB는 읽기만)
+bash scripts/backup_db.sh        # ~/lemit-backups/lemit-날짜-시간.dump (권한 600), 목차 확인, 최근 14개 보관
+bash scripts/restore_check.sh    # 가장 최근 백업을 실행별 임시 DB에 복원해 주요 테이블 건수를 운영 DB와 비교 (운영 DB는 읽기만)
 ```
-- **복원 점검이 통과해야 "백업이 있다"고 봅니다.** 첫 배포 후 한 번, 이후 정기적으로 실행합니다.
+- **백업 직후의 확인은 '목차 확인'뿐입니다.** `pg_restore --list`로 파일 형식과 목차가 읽히는지만 보고, 데이터 블록 전체를 검증하지는 않습니다.
+- **복원 점검이 통과해야 "백업이 있다"고 봅니다.** 자동 백업이 매일 백업 직후 복원 점검까지 실행합니다(아래). 첫 배포 후에는 직접 한 번 실행해 봅니다.
+- 복원 점검은 실행할 때마다 새 임시 DB(`lemit_rc_시각_PID_난수`)를 만들고, **자기가 만든 DB만** 지웁니다. 같은 이름이 이미 있으면 아무것도 지우지 않고 실패합니다. 동시에 여러 번 실행해도 서로의 DB를 건드리지 않습니다.
+- 서버 재부팅 등으로 강제 종료되어 남은 `lemit_rc_` 임시 DB는 다음 실행 때 이름을 알려 줍니다. 진행 중인 점검이 없는지 확인한 뒤 직접 지웁니다: `docker compose exec -T db psql -U lemit -d postgres -c 'DROP DATABASE 이름'`
 - DB 비밀번호는 쓰지 않습니다. db 컨테이너 안에서 실행하고, `.env`에서는 사용자·DB 이름만 읽습니다.
 
-**자동 백업 (매일 한국 시간 03:30, systemd 타이머).** Amazon Linux 2023에는 cron이 기본으로 없어서 systemd 타이머를 씁니다.
+**자동 백업 + 복원 점검 (매일 한국 시간 03:30, systemd 타이머).** Amazon Linux 2023에는 cron이 기본으로 없어서 systemd 타이머를 씁니다.
+- 서비스는 `backup_db.sh` → `restore_check.sh`를 차례로 실행합니다. 둘 중 하나라도 실패하면 서비스가 실패로 기록됩니다(`journalctl`).
+- 복원 점검은 운영 DB와 건수를 비교하므로, 백업과 점검 사이(수 초)에 데이터가 바뀌면 '건수가 다릅니다'로 실패할 수 있습니다. 이때는 수동으로 다시 실행해 확인합니다.
 ```bash
 sudo install -m 644 deploy/systemd/lemit-backup.service deploy/systemd/lemit-backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now lemit-backup.timer
 systemctl list-timers lemit-backup.timer          # 다음 실행 시각 확인
 sudo systemctl start lemit-backup.service         # 지금 한 번 실행해 보기
-journalctl -u lemit-backup.service -n 20          # 실행 결과 (실패하면 여기 남음)
+journalctl -u lemit-backup.service -n 40          # 실행 결과: 백업·목차 확인·복원 점검 (실패하면 여기 남음)
 ```
 
 **Lightsail 자동 스냅샷도 켭니다(권장).** 콘솔 → `lemit-server` → 스냅샷 → 자동 스냅샷 활성화
