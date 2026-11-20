@@ -493,6 +493,9 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .session-row.is-cancelled .row-title, .session-row.is-absent .row-title { text-decoration: line-through; color: var(--text-muted); font-weight: 500; }
 .session-row .row-side { flex-direction: row; align-items: center; }
 .card-title + .info, .card-title + .passes { margin-top: var(--space-4); }
+.status-action { margin: var(--space-5) 0 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.status-action p { margin: 0; }
+.warn-text { color: var(--warning-text); }
 @media (max-width: 767px) {
   /* 회차 행은 아바타가 없으므로 상태를 같은 줄 오른쪽에 둔다 */
   .rows .row.session-row { flex-wrap: nowrap; align-items: center; }

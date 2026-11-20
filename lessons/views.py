@@ -170,13 +170,18 @@ def session_create(request):
 
 
 def session_detail(request, pk):
-    """S06 회차 상세. 완료 처리 버튼은 UC-06에서 추가한다."""
+    """S06 회차 상세. 예정이면 '완료 처리', 완료면 '완료 취소' (UC-06)."""
     session = _owned_session(request, pk)
     enrollment = Enrollment.objects.with_usage().get(pk=session.enrollment_id)
     return render(
         request,
         "lessons/session_detail.html",
-        {"session": session, "enrollment": enrollment, "can_delete": services.deletable(session)},
+        {
+            "session": session,
+            "enrollment": enrollment,
+            "can_delete": services.deletable(session),
+            "not_started": session.start_at > timezone.now(),  # 시작 전 회차는 완료 전에 확인창
+        },
     )
 
 
@@ -220,3 +225,89 @@ def session_delete(request, pk):
         return redirect("students:detail", pk=student_id)
     messages.success(request, f"{when:%m/%d %H:%M} 회차를 삭제했습니다.")
     return redirect("students:detail", pk=student_id)
+
+
+class StudentArchived(Exception):
+    pass
+
+
+def _change_status_locked(request, pk, *, from_status, to_status, completed_at, require_active_student=False):
+    """회차 상태를 수강생 행 잠금 안에서 바꾼다 (UC-06, ERD 동시 변경 규칙).
+
+    확인 뒤 바꾸기 전에 다른 탭·요청이 같은 회차를 완료·삭제할 수 있으므로, 잠금 안에서 최신 상태가
+    from_status일 때만 바꾼다. 바뀐 행이 없으면 False (두 번 눌러도 한 번만 차감).
+    """
+    session = _owned_session(request, pk)
+    with transaction.atomic():
+        student = services.lock_student(session.enrollment.student_id)
+        if require_active_student and not student.is_active:
+            raise StudentArchived
+        changed = LessonSession.objects.filter(pk=session.pk, status=from_status).update(
+            status=to_status, completed_at=completed_at, updated_at=timezone.now()
+        )
+    return session, bool(changed)
+
+
+@require_POST
+def session_complete(request, pk):
+    """완료 처리 (UC-06): 예정 → 완료, 1회 차감. 잔여를 넘으면 '회차 초과' 경고(완료는 허용).
+
+    시작 전 회차의 확인은 화면(확인창)에서 받는다.
+    """
+    session, changed = _change_status_locked(
+        request,
+        pk,
+        from_status=LessonSession.Status.SCHEDULED,
+        to_status=LessonSession.Status.COMPLETED,
+        completed_at=timezone.now(),
+    )
+    if not changed:
+        messages.error(request, "예정 상태인 회차만 완료 처리할 수 있습니다. 화면을 다시 확인하세요.")
+        return _back_to_session(session)
+    e = Enrollment.objects.with_usage().get(pk=session.enrollment_id)
+    messages.success(
+        request, f"완료 처리했습니다. '{e.title}' 진행 {e.used_count}회 / 잔여 {max(e.remaining_count, 0)}회"
+    )
+    if e.remaining_count < 0:
+        messages.warning(
+            request,
+            f"회차 초과: 총 {e.total_count}회를 넘어 {-e.remaining_count}회 더 진행했습니다. "
+            "새 레슨권 등록을 확인하세요.",
+        )
+    return redirect("lessons:session_detail", pk=session.pk)
+
+
+@require_POST
+def session_uncomplete(request, pk):
+    """완료 취소 (UC-06): 완료 → 예정, 차감 복구. 잘못 누른 완료를 되돌린다.
+
+    보관된 수강생은 되돌리지 않는다. 되돌리면 보관된 수강생에게 '예정' 회차가 다시 생겨, 보관 때 예정 회차를
+    지우는 규칙(ERD §3)과 어긋난다. '수업일지가 있으면 불가' 조건은 수업일지(LessonRecord, UC-14 확장)를
+    만들 때 이 잠금 안에 추가한다.
+    """
+    try:
+        session, changed = _change_status_locked(
+            request,
+            pk,
+            from_status=LessonSession.Status.COMPLETED,
+            to_status=LessonSession.Status.SCHEDULED,
+            completed_at=None,
+            require_active_student=True,
+        )
+    except StudentArchived:
+        messages.error(request, "보관된 수강생의 회차는 완료 취소할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요.")
+        return redirect("lessons:session_detail", pk=pk)
+    if not changed:
+        messages.error(request, "완료 상태인 회차만 완료 취소할 수 있습니다. 화면을 다시 확인하세요.")
+        return _back_to_session(session)
+    e = Enrollment.objects.with_usage().get(pk=session.enrollment_id)
+    messages.success(
+        request, f"완료를 취소했습니다. '{e.title}' 진행 {e.used_count}회 / 잔여 {max(e.remaining_count, 0)}회"
+    )
+    return redirect("lessons:session_detail", pk=session.pk)
+
+
+def _back_to_session(session):
+    if LessonSession.objects.filter(pk=session.pk).exists():
+        return redirect("lessons:session_detail", pk=session.pk)
+    return redirect("students:detail", pk=session.enrollment.student_id)  # 그사이 삭제됨

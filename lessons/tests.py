@@ -989,3 +989,186 @@ class SessionArchiveConcurrencyTests(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("보관된 수강생", str(response.context["form"].non_field_errors()))
         self.assertFalse(LessonSession.objects.exists())
+
+
+# ---------------------------------------------------------------------------
+# UC-06 수업 완료 처리·완료 취소
+# ---------------------------------------------------------------------------
+
+
+class SessionCompleteTests(TestCase):
+    def setUp(self):
+        self.teacher = make_teacher("a@example.com", "A강사")
+        self.student = Student.objects.create(teacher=self.teacher, name="박서연")
+        self.enrollment = make_pass(self.student, total=8)
+        self.session = add_session(self.enrollment, day=19)
+        self.client.force_login(self.teacher)
+
+    def complete(self, session=None, follow=True):
+        return self.client.post(reverse("lessons:session_complete", args=[(session or self.session).pk]), follow=follow)
+
+    def uncomplete(self, session=None, follow=True):
+        return self.client.post(
+            reverse("lessons:session_uncomplete", args=[(session or self.session).pk]), follow=follow
+        )
+
+    def test_urls_match_screen_spec(self):
+        self.assertEqual(reverse("lessons:session_complete", args=[5]), "/sessions/5/complete/")
+        self.assertEqual(reverse("lessons:session_uncomplete", args=[5]), "/sessions/5/uncomplete/")
+
+    def test_complete_deducts_one_and_shows_counts(self):
+        """시연 흐름: 8회권에서 완료 1회 → 진행 1 / 잔여 7."""
+        response = self.complete()
+        self.assertRedirects(response, reverse("lessons:session_detail", args=[self.session.pk]))
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, LessonSession.Status.COMPLETED)
+        self.assertIsNotNone(self.session.completed_at)
+        self.assertContains(response, "진행 1회 / 잔여 7회")
+        e = usage(self.enrollment)
+        self.assertEqual((e.used_count, e.remaining_count), (1, 7))
+        detail = self.client.get(reverse("students:detail", args=[self.student.pk]))
+        self.assertEqual(detail.context["active_enrollments"][0].remaining_count, 7)
+
+    def test_uncomplete_restores_remaining(self):
+        self.complete()
+        response = self.uncomplete()
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, LessonSession.Status.SCHEDULED)
+        self.assertIsNone(self.session.completed_at)
+        self.assertContains(response, "진행 0회 / 잔여 8회")
+        self.assertEqual(usage(self.enrollment).remaining_count, 8)
+
+    def test_archived_student_cannot_uncomplete(self):
+        self.complete()
+        Student.objects.filter(pk=self.student.pk).update(is_active=False)
+        page = self.client.get(reverse("lessons:session_detail", args=[self.session.pk]))
+        self.assertNotContains(page, reverse("lessons:session_uncomplete", args=[self.session.pk]))
+        response = self.uncomplete()
+        self.assertContains(response, "보관된 수강생의 회차는 완료 취소할 수 없습니다")
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, LessonSession.Status.COMPLETED)
+
+    def test_double_complete_deducts_once(self):
+        self.complete()
+        response = self.complete()
+        self.assertContains(response, "예정 상태인 회차만 완료 처리할 수 있습니다")
+        self.assertEqual(usage(self.enrollment).used_count, 1)
+
+    def test_only_completed_can_be_uncompleted(self):
+        response = self.uncomplete()
+        self.assertContains(response, "완료 상태인 회차만 완료 취소할 수 있습니다")
+        for status in (LessonSession.Status.CANCELLED, LessonSession.Status.ABSENT):
+            s = add_session(self.enrollment, status, day=20)
+            self.uncomplete(s)
+            self.complete(s)
+            s.refresh_from_db()
+            self.assertEqual(s.status, status)
+
+    def test_complete_over_remaining_is_allowed_with_warning(self):
+        one = make_pass(self.student, title="1회권", total=1)
+        first, second = add_session(one, day=10), add_session(one, day=11)
+        self.assertEqual(warnings_of(self.complete(first)), [])
+        response = self.complete(second)
+        second.refresh_from_db()
+        self.assertEqual(second.status, LessonSession.Status.COMPLETED)
+        self.assertIn("회차 초과", warnings_of(response)[0])
+        self.assertEqual(usage(one).remaining_count, -1)
+
+    def test_detail_buttons_follow_status(self):
+        url = reverse("lessons:session_detail", args=[self.session.pk])
+        self.assertContains(self.client.get(url), reverse("lessons:session_complete", args=[self.session.pk]))
+        self.complete()
+        page = self.client.get(url)
+        self.assertContains(page, reverse("lessons:session_uncomplete", args=[self.session.pk]))
+        self.assertNotContains(page, reverse("lessons:session_complete", args=[self.session.pk]))
+        self.assertNotContains(page, reverse("lessons:session_edit", args=[self.session.pk]))  # 완료 회차는 수정 불가
+
+    def test_future_session_asks_confirmation(self):
+        future = add_session(self.enrollment, day=19)
+        future.start_at = timezone.now() + datetime.timedelta(days=1)
+        future.end_at = future.start_at + datetime.timedelta(hours=1)
+        future.save()
+        page = self.client.get(reverse("lessons:session_detail", args=[future.pk]))
+        self.assertContains(page, "아직 시작 전인 수업입니다")
+        past = self.client.get(reverse("lessons:session_detail", args=[self.session.pk]))  # 2026-11-19 (과거)
+        self.assertNotContains(past, "아직 시작 전인 수업입니다")
+        self.complete(future)  # 서버는 허용 (확인은 화면에서)
+        future.refresh_from_db()
+        self.assertEqual(future.status, LessonSession.Status.COMPLETED)
+
+    def test_requires_post(self):
+        for name in ("lessons:session_complete", "lessons:session_uncomplete"):
+            self.assertEqual(self.client.get(reverse(name, args=[self.session.pk])).status_code, 405)
+
+    def test_completed_session_shows_check_in_history(self):
+        self.complete()
+        page = self.client.get(reverse("students:detail", args=[self.student.pk]))
+        self.assertContains(page, "session-row is-completed")
+
+    def test_session_deleted_meanwhile_redirects_to_student(self):
+        from unittest import mock
+
+        from lessons import views
+
+        original = views._owned_session
+
+        def fetch_then_delete(request, pk):
+            obj = original(request, pk)
+            LessonSession.objects.filter(pk=pk).delete()  # 다른 탭에서 삭제
+            return obj
+
+        with mock.patch.object(views, "_owned_session", fetch_then_delete):
+            response = self.client.post(reverse("lessons:session_complete", args=[self.session.pk]))
+        self.assertRedirects(response, reverse("students:detail", args=[self.student.pk]))
+        self.assertEqual(usage(self.enrollment).used_count, 0)
+
+
+class SessionCompleteIsolationTests(TestCase):
+    def test_other_teacher_cannot_complete_or_uncomplete(self):
+        a = make_teacher("a@example.com", "A강사")
+        b = make_teacher("b@example.com", "B강사")
+        e = make_pass(Student.objects.create(teacher=a, name="A의 학생"))
+        planned = add_session(e, day=1)
+        done = add_session(e, LessonSession.Status.COMPLETED, day=2)
+        self.client.force_login(b)
+        self.assertEqual(self.client.post(reverse("lessons:session_complete", args=[planned.pk])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("lessons:session_uncomplete", args=[done.pk])).status_code, 404)
+        planned.refresh_from_db()
+        done.refresh_from_db()
+        self.assertEqual((planned.status, done.status), ("scheduled", "completed"))
+
+
+class SessionCompleteConcurrencyTests(TransactionTestCase):
+    """실제 두 DB 연결: 다른 연결이 수강생 행을 잡고 같은 회차를 완료한 뒤 커밋하면,
+    기다리던 완료 요청은 다시 차감하지 않는다."""
+
+    def test_concurrent_complete_deducts_once(self):
+        import threading
+
+        from django.db import connection
+
+        teacher = make_teacher("a@example.com", "A강사")
+        student = Student.objects.create(teacher=teacher, name="박서연")
+        e = make_pass(student, total=8)
+        s = add_session(e, day=19)
+        self.client.force_login(teacher)
+        locked, release = threading.Event(), threading.Event()
+
+        def complete_in_other_connection():
+            try:
+                with transaction.atomic():
+                    Student.objects.select_for_update().get(pk=student.pk)
+                    LessonSession.objects.filter(pk=s.pk).update(status="completed", completed_at=timezone.now())
+                    locked.set()
+                    release.wait(5)
+            finally:
+                connection.close()
+
+        worker = threading.Thread(target=complete_in_other_connection)
+        worker.start()
+        self.assertTrue(locked.wait(5))
+        threading.Timer(0.5, release.set).start()
+        response = self.client.post(reverse("lessons:session_complete", args=[s.pk]), follow=True)
+        worker.join(5)
+        self.assertContains(response, "예정 상태인 회차만 완료 처리할 수 있습니다")
+        self.assertEqual(Enrollment.objects.with_usage().get(pk=e.pk).used_count, 1)
