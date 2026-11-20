@@ -127,6 +127,23 @@ jobs:
           fi
           test "$(cat deploy/state/current_tag)" = "$BEFORE"
           tail -1 deploy/state/history.log | grep -q FAILED_PUBLIC_CHECK
+      - name: DB 백업 → 임시 DB 복원 점검 (#44)
+        env:
+          BACKUP_DIR: ${{ runner.temp }}/backups
+        run: |
+          docker compose exec -T web python manage.py shell -c "
+          from accounts.models import User
+          User.objects.create_user(email='ci-backup@example.com', password='ci-only-pass-2026!', name='백업점검')"
+          bash scripts/backup_db.sh
+          bash scripts/restore_check.sh
+          latest="$(find "$BACKUP_DIR" -maxdepth 1 -name 'lemit-*.dump' | sort | tail -n 1)"
+          head -c 4000 "$latest" > "$RUNNER_TEMP/broken.dump"
+          if bash scripts/restore_check.sh "$RUNNER_TEMP/broken.dump"; then echo "깨진 백업인데 점검이 통과했습니다"; exit 1; fi
+          docker compose exec -T db psql -U lemit -d postgres -qAt -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'lemit\_rc\_%'" | grep -qx 0
+      - name: 복원 점검 안전성 - 기존 DB 보존·동시 실행 (#46 리뷰)
+        env:
+          BACKUP_DIR: ${{ runner.temp }}/backups
+        run: bash scripts/test_restore_check.sh
       - name: 프록시 중단 시나리오 (공개 경로 확인이 실패해야 함)
         run: |
           docker compose --profile proxy stop proxy

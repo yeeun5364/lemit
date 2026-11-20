@@ -1,0 +1,17 @@
+# LEMIT DB 백업 + 복원 검증 (#44). 설치·확인 방법은 docs/DEPLOY.md §9.
+# 1단계 backup_db.sh: 백업 파일 생성 + 목차 확인
+# 2단계 restore_check.sh: 방금 만든 백업을 실행별 임시 DB에 전체 복원해 건수 비교 (실패하면 서비스 실패로 기록)
+[Unit]
+Description=LEMIT PostgreSQL backup and restore check (scripts/backup_db.sh, scripts/restore_check.sh)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/lemit
+Environment=BACKUP_DIR=/home/ec2-user/lemit-backups
+Environment=BACKUP_KEEP=14
+ExecStart=/usr/bin/bash scripts/backup_db.sh
+# 앞 단계가 실패하면 실행되지 않는다 (oneshot의 ExecStart는 순서대로, 하나라도 실패하면 중단)
+ExecStart=/usr/bin/bash scripts/restore_check.sh

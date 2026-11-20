@@ -1,0 +1,11 @@
+# 매일 한국 시간 03:30 백업 (#44). 서버가 꺼져 있어 놓친 백업은 켜진 뒤 실행(Persistent).
+[Unit]
+Description=LEMIT daily DB backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Seoul
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
