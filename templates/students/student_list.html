@@ -47,7 +47,7 @@
   <div class="empty-state">
     <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="search" %}</span>
     <p class="empty-title">"{{ q }}"(으)로 찾은 수강생이 없습니다.</p>
-    <p class="empty-text">이름을 다시 확인하거나{% if not include_archived %} '보관 포함'을 켜서{% endif %} 찾아보세요.</p>
+    <p class="empty-text">이름을 다시 확인해 보세요.{% if not include_archived %} 보관한 수강생은 '보관 포함'을 켜야 보입니다.{% endif %}</p>
   </div>
   {% else %}
   <div class="empty-state">

@@ -174,6 +174,15 @@ class InboxTwoPaneTests(UiTestBase):
         hacked = self.client.post(reverse("inbox:reply", args=[conv.pk]) + "?label=evil", {"body": "확인"})
         self.assertRedirects(hacked, reverse("inbox:detail", args=[conv.pk]))  # 허용되지 않은 값은 버림
 
+    def test_new_message_shortcut_only_for_active_student(self):
+        """Codex 리뷰: 보관된 수강생은 메시지 등록 폼에서 고를 수 없으므로 바로가기를 숨긴다."""
+        conv = self.conv("수요일 수업")
+        shortcut = f'href="{reverse("inbox:new")}?student={self.sky.pk}"'
+        self.assertContains(self.client.get(reverse("inbox:detail", args=[conv.pk])), shortcut)
+        self.sky.is_active = False
+        self.sky.save()
+        self.assertNotContains(self.client.get(reverse("inbox:detail", args=[conv.pk])), shortcut)
+
     def test_other_teachers_conversation_is_404(self):
         other_conv = Conversation.objects.get(teacher=self.b)
         self.assertEqual(self.client.get(reverse("inbox:detail", args=[other_conv.pk])).status_code, 404)

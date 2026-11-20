@@ -10,12 +10,14 @@
   var mq = window.matchMedia("(max-width: 1023px)");
 
   var mainCol = document.querySelector(".main-col");
+  var skipLink = document.querySelector(".skip-link");
 
   function setOpen(open, restoreFocus) {
     if (!toggle || !sidebar) return;
     root.classList.toggle("nav-open", open);
     /* 열린 동안 배경(헤더·본문)은 키보드·화면낭독기에서 제외하고, 메뉴를 모달 대화상자로 알린다 */
     if (mainCol) mainCol.inert = open;
+    if (skipLink) skipLink.inert = open;
     if (open) {
       sidebar.setAttribute("role", "dialog");
       sidebar.setAttribute("aria-modal", "true");

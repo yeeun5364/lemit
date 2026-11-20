@@ -3,7 +3,7 @@
 {% block content_class %} content-wide{% endblock %}
 {% block back %}<a class="back-link" href="{% url 'inbox:list' %}{% if current_label %}?label={{ current_label }}{% endif %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}메시지함</a>{% endblock %}
 {% block page_title %}메시지함{% endblock %}
-{% block page_actions %}<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ conversation.student_id }}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 메시지</a>{% endblock %}
+{% block page_actions %}{% if conversation.student.is_active %}<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ conversation.student_id }}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 메시지</a>{% endif %}{% endblock %}
 {% block content %}
 <div class="inbox has-selection">
   {% include "inbox/_list_pane.html" %}
