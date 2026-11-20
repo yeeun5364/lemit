@@ -1,36 +1,59 @@
 {% extends "base.html" %}
 {% block title %}수강생{% endblock %}
+{% block page_title %}수강생{% endblock %}
+{% block page_desc %}<p class="page-desc">내가 가르치는 수강생을 관리해요. 보관한 수강생은 기본으로 숨겨집니다.</p>{% endblock %}
+{% block page_actions %}<a class="btn btn-primary" href="{% url 'students:create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 추가</a>{% endblock %}
 {% block content %}
-<div class="page-head">
-  <h1 class="page-title">수강생</h1>
-  <a class="head-action" href="{% url 'students:create' %}">+ 추가</a>
+<div class="toolbar">
+  <form method="get" class="form" role="search">
+    <div class="search">
+      {% include "ui/icon.html" with name="search" size="sm" %}
+      <input type="search" name="q" value="{{ q }}" placeholder="이름 검색" aria-label="이름 검색" maxlength="50">
+    </div>
+    <label class="check"><input type="checkbox" name="archived" value="1" {% if include_archived %}checked{% endif %} data-autosubmit> 보관 포함</label>
+    <button type="submit" class="btn btn-secondary">검색</button>
+  </form>
+  <span class="count-text" role="status">{{ students|length }}명{% if q %} 검색됨{% endif %}</span>
 </div>
 
-<form method="get" class="filter-bar" role="search">
-  <input type="search" name="q" value="{{ q }}" placeholder="이름 검색" aria-label="이름 검색" maxlength="50">
-  <label class="check"><input type="checkbox" name="archived" value="1" {% if include_archived %}checked{% endif %} onchange="this.form.submit()"> 보관 포함</label>
-  <button type="submit" class="button-small">검색</button>
-</form>
-
-{% if students %}
-<ul class="list">
-  {% for student in students %}
-  <li>
-    <a class="list-row" href="{% url 'students:detail' student.pk %}">
-      <span class="row-main">
-        {{ student.name }}
-        {% if student.is_minor %}<span class="badge">미성년자</span>{% endif %}
-        {% if not student.is_active %}<span class="badge badge-muted">보관</span>{% endif %}
-      </span>
-      {# 레슨권·잔여 회차(UC-07)는 UC-03에서 추가 #}
-      <span class="row-sub">레슨권 없음</span>
-    </a>
-  </li>
-  {% endfor %}
-</ul>
-{% elif q %}
-<p class="empty">"{{ q }}"(으)로 찾은 수강생이 없습니다.</p>
-{% else %}
-<p class="empty">아직 등록한 수강생이 없습니다. <a href="{% url 'students:create' %}">수강생 추가</a></p>
-{% endif %}
+<div class="card card-flush">
+  {% if students %}
+  <table class="table">
+    <caption class="sr-only">수강생 목록</caption>
+    <thead>
+      <tr><th scope="col">이름</th><th scope="col">연락처</th><th scope="col">보호자</th><th scope="col">메모</th><th scope="col">상태</th></tr>
+    </thead>
+    <tbody>
+      {% for student in students %}
+      <tr{% if not student.is_active %} class="is-archived"{% endif %}>
+        <td class="cell-person">
+          <div class="person">
+            <span class="avatar{% if student.is_active %} avatar-mint{% endif %}" aria-hidden="true">{{ student.name|slice:":1" }}</span>
+            <a class="person-name" href="{% url 'students:detail' student.pk %}">{{ student.name }}</a>
+            <span class="person-badges">{% if student.is_minor %}<span class="badge badge-amber">미성년자</span>{% endif %}</span>
+          </div>
+        </td>
+        <td data-label="연락처" class="nowrap">{{ student.phone }}</td>
+        <td data-label="보호자">{% if student.is_minor %}{% if student.guardian_name %}{{ student.guardian_name }} · {% endif %}{{ student.guardian_phone }}{% endif %}</td>
+        <td data-label="메모" class="cell-memo">{{ student.memo|truncatechars:60 }}</td>
+        <td data-label="상태">{% if student.is_active %}<span class="badge badge-mint badge-dot">수강 중</span>{% else %}<span class="badge badge-neutral">보관</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif q %}
+  <div class="empty-state">
+    <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="search" %}</span>
+    <p class="empty-title">"{{ q }}"(으)로 찾은 수강생이 없습니다.</p>
+    <p class="empty-text">이름을 다시 확인하거나{% if not include_archived %} '보관 포함'을 켜서{% endif %} 찾아보세요.</p>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon is-mint">{% include "ui/icon.html" with name="users" %}</span>
+    <p class="empty-title">아직 등록한 수강생이 없습니다.</p>
+    <p class="empty-text">첫 수강생을 추가하면 메시지와 (준비 중인) 수업 일정을 함께 관리할 수 있어요.</p>
+    <a class="btn btn-primary btn-sm" href="{% url 'students:create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 추가</a>
+  </div>
+  {% endif %}
+</div>
 {% endblock %}

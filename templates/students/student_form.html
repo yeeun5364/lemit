@@ -1,31 +1,28 @@
 {% extends "base.html" %}
 {% block title %}{% if object %}수강생 수정{% else %}수강생 추가{% endif %}{% endblock %}
+{% block back %}{% if object %}<a class="back-link" href="{% url 'students:detail' object.pk %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}{{ object.name }}</a>{% else %}<a class="back-link" href="{% url 'students:list' %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}수강생</a>{% endif %}{% endblock %}
+{% block page_title %}{% if object %}수강생 수정{% else %}수강생 추가{% endif %}{% endblock %}
+{% block page_desc %}<p class="page-desc"><span class="req" aria-hidden="true">*</span> 표시는 필수 항목입니다. 개인정보는 수업에 필요한 만큼만 받아요.</p>{% endblock %}
 {% block content %}
-<div class="page-head">
-  {% if object %}
-  <a class="back" href="{% url 'students:detail' object.pk %}">&lt; {{ object.name }}</a>
-  {% else %}
-  <a class="back" href="{% url 'students:list' %}">&lt; 수강생</a>
-  {% endif %}
-</div>
-<h1 class="page-title">{% if object %}수강생 수정{% else %}수강생 추가{% endif %}</h1>
-
-<form method="post" class="form" novalidate>
-  {% csrf_token %}
-  {{ form.non_field_errors }}
-  {% for field in form %}
-  <div class="field{% if field.name == 'guardian_phone' or field.name == 'guardian_name' %} guardian-field{% endif %}{% if field.field.widget.input_type == 'checkbox' %} field-check{% endif %}">
-    {% if field.field.widget.input_type == 'checkbox' %}
-    <label>{{ field }} {{ field.label }}</label>
+<div class="card form-card">
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% for field in form %}
+    {% if field.name == 'guardian_phone' %}
+    {% include "ui/field.html" with extra_class="guardian-field" note="미성년자 필수" %}
+    {% elif field.name == 'guardian_name' %}
+    {% include "ui/field.html" with extra_class="guardian-field" %}
     {% else %}
-    <label for="{{ field.id_for_label }}">{{ field.label }}{% if field.name == 'name' %} *{% elif field.name == 'guardian_phone' %} * (미성년자){% endif %}</label>
-    {{ field }}
+    {% include "ui/field.html" %}
     {% endif %}
-    {{ field.errors }}
-  </div>
-  {% endfor %}
-  <button type="submit" class="button-primary">저장</button>
-</form>
+    {% endfor %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">저장</button>
+      <a class="btn btn-ghost" href="{% if object %}{% url 'students:detail' object.pk %}{% else %}{% url 'students:list' %}{% endif %}">취소</a>
+    </div>
+  </form>
+</div>
 
 <script>
   // 미성년자를 체크했을 때만 보호자 입력란을 보여준다. JS가 꺼져 있으면 항상 보이고, 서버 검증은 그대로 동작한다.

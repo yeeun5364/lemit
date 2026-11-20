@@ -1,42 +1,60 @@
 {% extends "base.html" %}
 {% block title %}{{ student.name }}{% endblock %}
+{% block back %}<a class="back-link" href="{% url 'students:list' %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}수강생</a>{% endblock %}
+{% block page_title %}{{ student.name }}{% endblock %}
+{% block page_desc %}<p class="page-desc">
+  {% if student.is_active %}<span class="badge badge-mint badge-dot">수강 중</span>{% else %}<span class="badge badge-neutral">보관</span>{% endif %}
+  {% if student.is_minor %}<span class="badge badge-amber">미성년자</span>{% endif %}
+</p>{% endblock %}
+{% block page_actions %}
+<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ student.pk }}">{% include "ui/icon.html" with name="message" size="sm" %}수강생 메시지 추가</a>
+<a class="btn btn-primary" href="{% url 'students:edit' student.pk %}">{% include "ui/icon.html" with name="edit" size="sm" %}수정</a>
+{% endblock %}
 {% block content %}
-<div class="page-head">
-  <a class="back" href="{% url 'students:list' %}">&lt; 수강생</a>
-  <a class="head-action" href="{% url 'students:edit' student.pk %}">수정</a>
+<div class="detail-grid">
+  <section class="card" aria-labelledby="info-title">
+    <div class="profile">
+      <span class="avatar{% if student.is_active %} avatar-mint{% endif %}" aria-hidden="true">{{ student.name|slice:":1" }}</span>
+      <div>
+        <h2 id="info-title" class="card-title">기본 정보</h2>
+        <p class="muted small">등록 {{ student.created_at|date:"Y.n.j" }}</p>
+      </div>
+    </div>
+    <dl class="info">
+      <dt>연락처</dt><dd>{{ student.phone|default:"—" }}</dd>
+      {% if student.is_minor %}
+      <dt>보호자</dt><dd>{% if student.guardian_name %}{{ student.guardian_name }} · {% endif %}{{ student.guardian_phone }}</dd>
+      {% endif %}
+      <dt>메모</dt><dd class="pre">{{ student.memo|default:"—" }}</dd>
+    </dl>
+  </section>
+
+  <section class="card" aria-labelledby="pass-title">
+    <h2 id="pass-title" class="card-title">레슨권</h2>
+    {# 레슨권 카드·잔여 회차(UC-03·UC-07), 회차 이력(UC-04)은 다음 작업에서 추가 #}
+    <div class="empty-state">
+      <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span>
+      <p class="empty-title">레슨권 없음</p>
+      <p class="empty-text">레슨권 등록과 잔여 회차 확인 기능은 준비 중입니다.</p>
+    </div>
+  </section>
 </div>
 
-<h1 class="page-title">
-  {{ student.name }}
-  {% if student.is_minor %}<span class="badge">미성년자</span>{% endif %}
-  {% if not student.is_active %}<span class="badge badge-muted">보관</span>{% endif %}
-</h1>
-
-<dl class="info">
-  {% if student.phone %}<dt>연락처</dt><dd>{{ student.phone }}</dd>{% endif %}
-  {% if student.is_minor %}
-  <dt>보호자</dt><dd>{% if student.guardian_name %}{{ student.guardian_name }} · {% endif %}{{ student.guardian_phone }}</dd>
-  {% endif %}
-  {% if student.memo %}<dt>메모</dt><dd class="pre">{{ student.memo }}</dd>{% endif %}
-</dl>
-
-<section class="group">
-  <h2 class="group-title">레슨권</h2>
-  {# 레슨권 카드·잔여 회차(UC-03·UC-07), 회차 이력(UC-04)은 다음 작업에서 추가 #}
-  <p class="empty">레슨권 없음</p>
-</section>
-
-<section class="group">
+<section class="card section danger-zone" aria-labelledby="archive-title">
+  <div>
+    <h2 id="archive-title" class="card-title">{% if student.is_active %}수강 종료{% else %}보관된 수강생{% endif %}</h2>
+    <p class="muted small">{% if student.is_active %}보관하면 목록에서 기본으로 숨겨지고, 기록은 그대로 남습니다.{% else %}보관을 해제하면 다시 수강 중으로 표시됩니다.{% endif %}</p>
+  </div>
   {% if student.is_active %}
   <form method="post" action="{% url 'students:archive' student.pk %}"
-        onsubmit="return confirm('{{ student.name|escapejs }} 수강생을 보관할까요? 목록에서 기본으로 숨겨집니다.');">
+        data-confirm="{{ student.name }} 수강생을 보관할까요? 목록에서 기본으로 숨겨집니다.">
     {% csrf_token %}
-    <button type="submit" class="button-danger">수강 종료(보관)</button>
+    <button type="submit" class="btn btn-danger">{% include "ui/icon.html" with name="archive" size="sm" %}수강 종료(보관)</button>
   </form>
   {% else %}
   <form method="post" action="{% url 'students:restore' student.pk %}">
     {% csrf_token %}
-    <button type="submit" class="button-secondary">보관 해제</button>
+    <button type="submit" class="btn btn-secondary">{% include "ui/icon.html" with name="restore" size="sm" %}보관 해제</button>
   </form>
   {% endif %}
 </section>
