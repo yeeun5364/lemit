@@ -52,6 +52,7 @@
 | 인프라 | GitHub Actions (테스트) | 🟡 | 린트·PostgreSQL 18 테스트 워크플로 작성 (#6). 이미지 검증은 #5 이후 |
 | 인프라 | AWS Lightsail 배포 | 🟡 | 배포 준비 완료: Caddy TLS 프록시, 운영 보안 설정, 배포·자동 롤백 스크립트, 절차서([docs/DEPLOY.md](docs/DEPLOY.md)). PC 연습 배포·롤백 검증. Lightsail 서버(Amazon Linux 2023, 2GB) 생성됨, 서버 준비 절차(dnf·Compose/Buildx 플러그인·스왑·고정 IP)와 `scripts/server_check.sh` 추가. **실제 서버 배포는 아직** (#7) |
 | 인프라 | GitHub Actions 자동 배포(CD) | 🟡 | `deploy.yml`: CI 성공한 main 커밋만, OIDC(장기 AWS 키 없음), 배포 중에만 SSH 22번에 러너 IP 임시 추가, 배포 전용 키(강제 명령), 호스트 키 검증, 동시 배포 잠금. 스크립트 테스트 통과, **AWS·GitHub 설정과 실제 배포 시험은 아직** ([docs/CD.md](docs/CD.md), #42) |
+| 인프라 | 운영 로그·DB 백업 | 🟡 | 500 오류 traceback·AI 모델 경고를 표준 출력으로(`docker compose logs web`), `scripts/backup_db.sh`(무결성 확인·보관 개수), `scripts/restore_check.sh`(임시 DB 복원 후 건수 비교), systemd 매일 백업 타이머. 테스트·PC 연습·CI 시나리오 통과, PR 검토 중 (#44) |
 
 ## 회차 상태와 차감 규칙
 
@@ -277,7 +278,7 @@ lemit/
 ├── compose.yaml           # web + db 컨테이너 (공통·운영 기준)
 ├── compose.dev.yaml       # 개발 PC 전용 설정 (-f로 직접 지정할 때만)
 ├── scripts/               # 헬스체크·스모크 테스트, 배포(deploy.sh)·롤백(rollback.sh)
-├── deploy/                # Caddyfile (TLS 리버스 프록시). deploy/state/는 서버 배포 기록(커밋 안 함)
+├── deploy/                # Caddyfile (TLS 리버스 프록시), systemd 백업 타이머. deploy/state/는 서버 배포 기록(커밋 안 함)
 ├── .env.example           # 환경변수 예시 (.env는 커밋 안 함)
 ├── config/                # Django 프로젝트 설정 (settings, urls)
 ├── accounts/              # 강사 계정: 이메일 로그인 커스텀 User

@@ -195,6 +195,64 @@ scripts/rollback.sh <이미지 태그>  # 해당 태그로 web 교체 + 스모�
 | 분류 배지가 "분류 불가" | `/healthz/`의 `message_classifier` | 이미지에 모델 파일이 없거나 손상됨 → 직전 이미지로 롤백 (서비스의 다른 기능은 정상) |
 | 디스크 부족 | `df -h`, `docker system df` | 사용하지 않는 **이미지**만 정리합니다. 최근 두 개 태그는 롤백용으로 남깁니다. 볼륨은 지우지 않습니다 |
 
+## 9. 운영: 로그·백업·재부팅 확인 (#44)
+
+### 로그 보기
+Django·gunicorn·Caddy 로그는 모두 표준 출력으로 나가고 Docker가 컨테이너별로 보관합니다. 각 컨테이너당 10MB × 3개로 제한해 디스크가 넘치지 않습니다.
+```bash
+docker compose logs --tail 100 web            # 앱: 500 오류의 traceback, AI 모델 로드·불가 경고, gunicorn 접속 기록
+docker compose logs -f web                    # 실시간으로 계속 보기 (Ctrl+C로 종료)
+docker compose logs --since 30m web | grep -E "ERROR|Traceback|WARNING"   # 최근 30분 오류만
+docker compose --profile proxy logs --tail 50 proxy   # Caddy: 인증서 발급, 프록시 오류
+docker compose logs --tail 50 db              # PostgreSQL
+```
+- 500 오류는 `ERROR django.request: Internal Server Error: /경로`와 traceback으로 남습니다.
+- 요청 본문·쿠키·비밀번호는 남기지 않습니다(테스트로 확인).
+- AI 모델 상태는 `inbox.classifier` 로그와 `/healthz/`의 `message_classifier`에서 확인합니다.
+
+### DB 백업
+```bash
+bash scripts/backup_db.sh        # ~/lemit-backups/lemit-날짜-시간.dump (권한 600), 무결성 확인, 최근 14개 보관
+bash scripts/restore_check.sh    # 가장 최근 백업을 임시 DB에 복원해 주요 테이블 건수를 운영 DB와 비교 (운영 DB는 읽기만)
+```
+- **복원 점검이 통과해야 "백업이 있다"고 봅니다.** 첫 배포 후 한 번, 이후 정기적으로 실행합니다.
+- DB 비밀번호는 쓰지 않습니다. db 컨테이너 안에서 실행하고, `.env`에서는 사용자·DB 이름만 읽습니다.
+
+**자동 백업 (매일 한국 시간 03:30, systemd 타이머).** Amazon Linux 2023에는 cron이 기본으로 없어서 systemd 타이머를 씁니다.
+```bash
+sudo install -m 644 deploy/systemd/lemit-backup.service deploy/systemd/lemit-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lemit-backup.timer
+systemctl list-timers lemit-backup.timer          # 다음 실행 시각 확인
+sudo systemctl start lemit-backup.service         # 지금 한 번 실행해 보기
+journalctl -u lemit-backup.service -n 20          # 실행 결과 (실패하면 여기 남음)
+```
+
+**Lightsail 자동 스냅샷도 켭니다(권장).** 콘솔 → `lemit-server` → 스냅샷 → 자동 스냅샷 활성화
+- 위 백업 파일은 같은 서버 디스크에 있어서, 서버 자체가 망가지면 함께 사라집니다.
+- 스냅샷은 서버 전체를 따로 보관합니다. 작은 비용이 듭니다.
+
+**운영 DB를 백업으로 되돌리기(실제 복구)는 스크립트로 자동화하지 않았습니다.** 백업 이후의 데이터가 사라지기 때문입니다. 필요하면 아래 순서로 진행합니다.
+1. web을 멈춥니다: `docker compose stop web`
+2. 현재 상태도 백업합니다: `bash scripts/backup_db.sh`
+3. 되돌립니다: `docker compose exec -T db pg_restore -U lemit -d lemit --clean --if-exists --no-owner < 백업파일`
+4. 다시 켭니다: `scripts/deploy.sh <현재 SHA>`
+5. 상태를 확인합니다: `bash scripts/check_public.sh`
+
+### 재부팅 후 복구 확인
+- **원리:** Docker 서비스가 부팅 때 자동으로 켜지고(`systemctl enable docker`), 컨테이너는 `restart: unless-stopped` 설정 때문에 다시 올라옵니다.
+- **확인:**
+  ```bash
+  sudo reboot
+  ```
+  재접속한 뒤 실행합니다.
+  ```bash
+  docker compose --profile proxy ps         # db·web·proxy가 healthy인지
+  bash scripts/check_public.sh             # 공개 경로 + AI 모델 상태 ok
+  bash scripts/server_check.sh             # 스왑·포트 등
+  ```
+- 직접 `docker compose stop`으로 멈춘 컨테이너는 재부팅 후에도 꺼진 상태로 남습니다. `unless-stopped`이기 때문입니다.
+
 ## 8. PC 연습 배포 기록 (2026-11-19)
 
 PC 연습 조건은 다음과 같습니다.

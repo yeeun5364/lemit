@@ -149,6 +149,33 @@ if env("DJANGO_SECURE_HTTPS"):
     SECURE_HSTS_PRELOAD = False
 
 
+# 로그 (#44, OPERATIONS §7). 모든 로그를 표준 출력으로 보내 `docker compose logs web`에서 본다.
+# Django 기본 설정은 DEBUG=False일 때 500 오류 상세를 콘솔에 남기지 않고 관리자 메일로만 보낸다
+# (메일 미설정 → 아무 데도 안 남음).
+# 요청 본문·헤더·쿠키는 남기지 않는다: django.request는 "Internal Server Error: <경로>"와 traceback만 기록한다.
+# 로그 파일 크기는 Docker json-file 로그 설정(10MB × 3)으로 제한한다 (compose.yaml).
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "stdout": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "plain"},
+    },
+    "root": {"handlers": ["stdout"], "level": "WARNING"},
+    "loggers": {
+        # 500 오류(traceback 포함)·404 등. propagate=False로 root와 중복 출력하지 않음
+        "django.request": {"handlers": ["stdout"], "level": "ERROR", "propagate": False},
+        # 허용되지 않은 Host 등 보안 경고
+        "django.security": {"handlers": ["stdout"], "level": "WARNING", "propagate": False},
+        # 메시지 분류 모델 로드·불가·예측 오류 (모델 로드 성공도 INFO로 남겨 배포 후 확인)
+        "inbox": {"handlers": ["stdout"], "level": "INFO", "propagate": False},
+    },
+}
+
+
 # 수강생 메시지 분류 모델 (ml/). 학습은 개발 PC에서 하고, 검증된 모델 파일을 저장소·이미지에 포함한다.
 # 경로를 바꿀 때만 MESSAGE_CLASSIFIER_PATH를 지정한다.
 
