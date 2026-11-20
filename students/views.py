@@ -81,9 +81,12 @@ class StudentUpdateView(TeacherScopedQuerysetMixin, UpdateView):
     template_name = "students/student_form.html"
 
     def form_valid(self, form):
-        response = super().form_valid(form)
+        # 폼이 다루는 필드만 저장한다. 객체 전체를 저장하면 화면을 연 뒤 다른 탭에서 한 보관(is_active)을
+        # 예전 값으로 되돌려, 보관된 수강생이 다시 '수강 중'이 된다 (PR #55 리뷰 2차)
+        self.object = form.save(commit=False)
+        self.object.save(update_fields=[*form.Meta.fields, "updated_at"])
         messages.success(self.request, "수강생 정보를 수정했습니다.")
-        return response
+        return redirect(self.get_success_url())
 
     def get_success_url(self):
         return reverse("students:detail", args=[self.object.pk])
