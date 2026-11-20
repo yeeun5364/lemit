@@ -37,11 +37,22 @@ class StudentListView(TeacherScopedQuerysetMixin, ListView):
 
 
 class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
-    """S10 수강생 상세. 레슨권·회차 이력은 UC-03·UC-04에서 추가한다."""
+    """S10 수강생 상세. 레슨권 카드(UC-03), 회차 이력은 UC-04에서 추가한다."""
 
     model = Student
     template_name = "students/student_detail.html"
     context_object_name = "student"
+
+    def get_context_data(self, **kwargs):
+        from lessons.models import Enrollment
+
+        # 수강생은 이미 로그인한 강사 것으로 좁혀 찾았으므로 그 수강생의 레슨권만 가져온다
+        enrollments = list(Enrollment.objects.filter(student=self.object).with_usage())
+        return super().get_context_data(
+            active_enrollments=[e for e in enrollments if e.is_active],
+            ended_enrollments=[e for e in enrollments if not e.is_active],
+            **kwargs,
+        )
 
 
 class StudentCreateView(CreateView):

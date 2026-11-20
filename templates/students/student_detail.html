@@ -30,13 +30,32 @@
   </section>
 
   <section class="card" aria-labelledby="pass-title">
-    <h2 id="pass-title" class="card-title">레슨권</h2>
-    {# 레슨권 카드·잔여 회차(UC-03·UC-07), 회차 이력(UC-04)은 다음 작업에서 추가 #}
+    <div class="card-head">
+      <h2 id="pass-title" class="card-title">레슨권</h2>
+      {% if student.is_active %}<a class="btn btn-secondary btn-sm" href="{% url 'lessons:enrollment_create' student.pk %}">{% include "ui/icon.html" with name="plus" size="sm" %}레슨권 추가</a>{% endif %}
+    </div>
+    {# 회차 이력(UC-04)은 다음 작업에서 추가 #}
+    {% if active_enrollments %}
+    <ul class="passes">
+      {% for e in active_enrollments %}{% include "lessons/_enrollment_card.html" %}{% endfor %}
+    </ul>
+    {% elif not ended_enrollments %}
     <div class="empty-state">
       <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span>
       <p class="empty-title">레슨권 없음</p>
-      <p class="empty-text">레슨권 등록과 잔여 회차 확인 기능은 준비 중입니다.</p>
+      <p class="empty-text">{% if student.is_active %}'레슨권 추가'로 등록한 레슨 횟수를 기록하세요.{% else %}보관된 수강생입니다.{% endif %}</p>
     </div>
+    {% else %}
+    <p class="muted small">진행 중인 레슨권이 없습니다.</p>
+    {% endif %}
+    {% if ended_enrollments %}
+    <details class="ended-passes">
+      <summary>종료된 레슨권 {{ ended_enrollments|length }}개</summary>
+      <ul class="passes">
+        {% for e in ended_enrollments %}{% include "lessons/_enrollment_card.html" %}{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
   </section>
 </div>
 

@@ -143,6 +143,7 @@ erDiagram
 - `remaining_count` 같은 컬럼을 두면 상태를 바꿀 때마다 같이 고쳐야 해서 **값이 어긋날 위험**이 있습니다.
 - 대신 Django ORM 집계(`annotate` + `Count(filter=...)`)로 매번 계산합니다. 강사 1명의 데이터 규모에서는 성능 문제가 없습니다.
 - 이 계산은 `Enrollment`의 메서드·쿼리셋 한 곳에만 두고 단위 테스트합니다. (UC-06, UC-07)
+  - 구현: `EnrollmentQuerySet.with_usage()`가 `used_count`(차감 회차)·`remaining_count`(잔여)를 붙이고, `exhausted()`는 잔여 0 이하만 고릅니다 (`lessons/models.py`, 2026-11-20). 잔여는 초과 진행 시 음수가 될 수 있습니다.
 
 ### 2-3. 기획서의 `Lesson` 모델은 MVP에서 `Enrollment`에 합침
 
@@ -211,6 +212,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `Student.phone`, `guardian_phone` | 숫자 9~15자리. 숫자·공백·`-`·`()`만, `+`는 맨 앞(국제번호 허용). 성인이면 보호자 정보는 저장하지 않음 | 모델 검증 `validate_phone` + 폼 (UC-02, PR #37 리뷰, 2026-11-19) |
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
+| `LessonSession.absence_deducted` | `absent`일 때만 true일 수 있음 (다른 상태에서 true로 남으면 잔여 계산이 어긋남) | DB `CheckConstraint` (UC-03 구현 때 추가, 2026-11-20) |
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
 | `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함 | 앱 검증 (모델 `clean`) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
@@ -237,6 +239,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 |---|---|---|
 | User → Student | `PROTECT` | 강사 계정을 지워도 수강생·수업 기록이 함께 지워지지 않게 (UC-02) |
 | Student → Enrollment | `PROTECT` | 수강생은 삭제 대신 `is_active=false`로 보관 |
+| User → Label | `CASCADE` | 라벨은 강사 개인 설정이라 계정과 함께 정리 (수강생이 있으면 User→Student `PROTECT`로 계정 삭제 자체가 막힘) |
 | Label → Enrollment | `SET_NULL` | 라벨을 지우면 레슨권은 "라벨 없음"(회색), 기록은 유지 |
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
 | LessonSession → LessonRecord | `CASCADE` | 회차와 일지는 운명을 같이함 |
