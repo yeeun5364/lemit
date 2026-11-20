@@ -9,7 +9,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, IntegerField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 
 
 class Label(models.Model):
@@ -45,7 +46,7 @@ class Label(models.Model):
 
 
 # 차감 회차 = 완료(보강 포함) + 차감한 결석 (ERD 2-2, README 회차 규칙)
-DEDUCTED = Q(sessions__status="completed") | Q(sessions__status="absent", sessions__absence_deducted=True)
+DEDUCTED = Q(status="completed") | Q(status="absent", absence_deducted=True)
 
 
 class EnrollmentQuerySet(models.QuerySet):
@@ -58,12 +59,19 @@ class EnrollmentQuerySet(models.QuerySet):
     def with_usage(self):
         """used_count(차감 회차)와 remaining_count(잔여 회차)를 붙인다. 잔여는 0 미만이 될 수 있다(초과 진행).
 
-        distinct=True: 뒤에서 회차 조건으로 다시 조인하면(예: .filter(sessions__status=...)) 행이 곱해져
-        차감 회차가 부풀 수 있으므로 회차 id 기준으로 한 번만 센다 (PR #55 리뷰).
+        회차 조인 위에서 Count를 하면, 앞이나 뒤에 붙은 회차 조건(.filter(sessions__status=...))과 조인을
+        공유해 차감 회차가 빠지거나 곱해진다. 그래서 레슨권마다 따로 세는 서브쿼리로 계산한다 (PR #55 리뷰 1·2차).
         """
-        return self.annotate(used_count=Count("sessions", filter=DEDUCTED, distinct=True)).annotate(
-            remaining_count=F("total_count") - F("used_count")
+        deducted = (
+            LessonSession.objects.filter(DEDUCTED, enrollment=OuterRef("pk"))
+            .order_by()
+            .values("enrollment")
+            .annotate(n=Count("pk"))
+            .values("n")
         )
+        return self.annotate(
+            used_count=Coalesce(Subquery(deducted, output_field=IntegerField()), Value(0)),
+        ).annotate(remaining_count=F("total_count") - F("used_count"))
 
     def exhausted(self):
         """잔여 0 이하인 레슨권. 자동 종료하지 않고 '소진'으로 표시만 한다 (UC-03, #2)."""
@@ -199,6 +207,8 @@ class LessonSession(models.Model):
             return
         if original.pk and original.pk == self.pk:
             raise ValidationError({"makeup_for": "자기 자신을 보강 대상으로 지정할 수 없습니다."})
+        if self.pk and original.makeup_for_id == self.pk:  # A↔B 순환 (PR #55 리뷰 2차)
+            raise ValidationError({"makeup_for": "이 회차의 보강 회차를 다시 보강 대상으로 지정할 수 없습니다."})
         if self.enrollment_id and original.enrollment.student.teacher_id != self.enrollment.student.teacher_id:
             raise ValidationError({"makeup_for": "내 회차만 보강 대상으로 지정할 수 있습니다."})
         if not original.can_have_makeup():
