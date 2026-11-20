@@ -1,6 +1,86 @@
 {% extends "base.html" %}
-{% block title %}홈{% endblock %}
+{% block title %}대시보드{% endblock %}
+{% block page_title %}안녕하세요, {{ user.name }}님{% endblock %}
+{% block page_desc %}<p class="page-desc">{% now "n월 j일 l" %} · 오늘 확인할 내용을 모았어요.</p>{% endblock %}
+{% block page_actions %}
+<a class="btn btn-secondary" href="{% url 'inbox:new' %}">{% include "ui/icon.html" with name="message" size="sm" %}수강생 메시지 추가</a>
+<a class="btn btn-primary" href="{% url 'students:create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 추가</a>
+{% endblock %}
 {% block content %}
-<h1 class="page-title">안녕하세요, {{ user.name }}님</h1>
-<p class="muted">일정·수강생·메시지함 화면은 순서대로 추가됩니다.</p>
+<section aria-labelledby="summary-title">
+  <h2 id="summary-title" class="sr-only">요약</h2>
+  <div class="stats">
+    {# 오늘 수업: 회차·일정 기능(UC-04·05)이 없어 숫자 대신 '준비 중'. 이동할 일정 화면도 아직 없다 #}
+    <div class="card stat">
+      <div class="stat-head"><span class="stat-label">오늘 수업</span><span class="stat-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span></div>
+      <p class="stat-pending">준비 중</p>
+      <div class="stat-foot"><span>일정 기능이 생기면 오늘 수업 수가 표시돼요</span></div>
+    </div>
+    <a class="card card-link stat" href="{% url 'students:list' %}">
+      <div class="stat-head"><span class="stat-label">전체 수강생</span><span class="stat-icon is-mint">{% include "ui/icon.html" with name="users" %}</span></div>
+      <p class="stat-value">{{ active_students }}<span class="stat-unit">명</span></p>
+      <div class="stat-foot"><span>수강 중 (보관 제외)</span><span class="stat-go">수강생 보기{% include "ui/icon.html" with name="chevron-right" size="sm" %}</span></div>
+    </a>
+    <a class="card card-link stat" href="{% url 'inbox:list' %}">
+      <div class="stat-head"><span class="stat-label">확인할 메시지</span><span class="stat-icon">{% include "ui/icon.html" with name="inbox" %}</span></div>
+      <p class="stat-value">{{ unread_messages }}<span class="stat-unit">개</span></p>
+      <div class="stat-foot"><span>안 읽은 수강생 메시지</span><span class="stat-go">메시지함{% include "ui/icon.html" with name="chevron-right" size="sm" %}</span></div>
+    </a>
+  </div>
+</section>
+
+<div class="dash-grid section">
+  <section class="section" aria-labelledby="today-title">
+    <div class="section-head"><h2 id="today-title" class="section-title">오늘의 일정</h2></div>
+    <div class="card">
+      <div class="empty-state">
+        <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span>
+        <p class="empty-title">수업 일정 기능을 준비하고 있어요</p>
+        <p class="empty-text">레슨 회차 등록과 일정 조회가 구현되면 오늘의 수업 시간·수강생·상태가 여기에 표시됩니다.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="msg-title">
+    <div class="section-head">
+      <h2 id="msg-title" class="section-title">확인할 메시지{% if attention_total %} <span class="badge badge-blue">{{ attention_total }}건</span>{% endif %}</h2>
+      <a class="section-link" href="{% url 'inbox:list' %}">전체 보기{% include "ui/icon.html" with name="chevron-right" size="sm" %}</a>
+    </div>
+    <div class="card card-flush">
+      {% if attention %}
+      {% if label_summary %}
+      <div class="summary-bar">
+        <div class="label-summary" aria-label="확인할 대화의 AI 분류">
+          {% for value, label, n in label_summary %}<a class="badge ai-badge ai-{{ value|lower }}" href="{% url 'inbox:list' %}?label={{ value }}"><span class="ai-mark">AI</span>{{ label }} {{ n }}</a>{% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      <ul class="rows">
+        {% for c in attention %}
+        <li>
+          <a class="row" href="{% url 'inbox:detail' c.pk %}">
+            <span class="avatar" aria-hidden="true">{{ c.student.name|slice:":1" }}</span>
+            <span class="row-main">
+              <span class="row-title">{{ c.student.name }} · {{ c.subject }}</span>
+              {% if c.latest_body %}<span class="row-sub">{{ c.latest_body|truncatechars:60 }}</span>{% endif %}
+            </span>
+            <span class="row-side">
+              {% if c.latest_body %}{% include "inbox/_badge.html" with label=c.latest_label confidence=c.latest_confidence display=c.latest_display %}{% endif %}
+              <span class="badge badge-dot badge-blue">안 읽음 {{ c.unread }}</span>
+            </span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="row ai-note">{% include "ui/icon.html" with name="sparkle" size="sm" %}분류는 직접 학습시킨 AI 모델의 예측이며 참고용입니다. 일정은 자동으로 바뀌지 않습니다.</p>
+      {% else %}
+      <div class="empty-state">
+        <span class="empty-icon is-mint">{% include "ui/icon.html" with name="check" %}</span>
+        <p class="empty-title">확인할 메시지가 없어요</p>
+        <p class="empty-text">수강생 메시지를 모두 읽었습니다. 새 메시지가 오면 AI 분류와 함께 여기에 표시됩니다.</p>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+</div>
 {% endblock %}
