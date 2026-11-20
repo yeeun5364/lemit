@@ -34,7 +34,6 @@
       <h2 id="pass-title" class="card-title">레슨권</h2>
       {% if student.is_active %}<a class="btn btn-secondary btn-sm" href="{% url 'lessons:enrollment_create' student.pk %}">{% include "ui/icon.html" with name="plus" size="sm" %}레슨권 추가</a>{% endif %}
     </div>
-    {# 회차 이력(UC-04)은 다음 작업에서 추가 #}
     {% if active_enrollments %}
     <ul class="passes">
       {% for e in active_enrollments %}{% include "lessons/_enrollment_card.html" %}{% endfor %}
@@ -59,6 +58,32 @@
   </section>
 </div>
 
+<section class="card section" aria-labelledby="history-title">
+  <div class="card-head">
+    <h2 id="history-title" class="card-title">회차 이력</h2>
+    {% if student.is_active and active_enrollments %}<a class="btn btn-primary btn-sm" href="{% url 'lessons:session_create' %}?student={{ student.pk }}">{% include "ui/icon.html" with name="plus" size="sm" %}일정 추가</a>{% endif %}
+  </div>
+  {% if sessions %}
+  {% regroup sessions by enrollment as groups %}
+  {% for group in groups %}
+  <h3 class="group-title">{{ group.grouper.title }}{% if not group.grouper.is_active %} <span class="badge badge-neutral">종료</span>{% endif %}</h3>
+  <ul class="rows sessions">
+    {% for s in group.list %}
+    <li><a class="row session-row is-{{ s.status }}" href="{% url 'lessons:session_detail' s.pk %}">
+      <span class="row-main">
+        <span class="row-title">{{ s.start_at|date:"n/j" }} ({{ s.start_at|date:"D"|slice:":1" }}) {{ s.start_at|time:"H:i" }}–{{ s.end_at|time:"H:i" }}</span>
+        {% if s.place %}<span class="row-sub">{{ s.place }}</span>{% endif %}
+      </span>
+      <span class="row-side">{% include "lessons/_session_state.html" %}</span>
+    </a></li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+  {% else %}
+  <p class="muted small">{% if active_enrollments %}아직 등록한 회차가 없습니다. '일정 추가'로 수업 날짜를 등록하세요.{% else %}레슨권을 추가하면 일정을 등록할 수 있습니다.{% endif %}</p>
+  {% endif %}
+</section>
+
 <section class="card section danger-zone" aria-labelledby="archive-title">
   <div>
     <h2 id="archive-title" class="card-title">{% if student.is_active %}수강 종료{% else %}보관된 수강생{% endif %}</h2>
@@ -66,7 +91,7 @@
   </div>
   {% if student.is_active %}
   <form method="post" action="{% url 'students:archive' student.pk %}"
-        data-confirm="{{ student.name }} 수강생을 보관할까요? 목록에서 기본으로 숨겨집니다.">
+        data-confirm="{% if scheduled_count %}예정 회차 {{ scheduled_count }}개가 삭제됩니다. {% endif %}{{ student.name }} 수강생을 보관할까요? 목록에서 기본으로 숨겨집니다.">
     {% csrf_token %}
     <button type="submit" class="btn btn-danger">{% include "ui/icon.html" with name="archive" size="sm" %}수강 종료(보관)</button>
   </form>

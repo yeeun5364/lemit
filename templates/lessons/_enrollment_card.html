@@ -13,7 +13,7 @@
   </dl>
   <div class="pass-foot">
     <span class="muted small">시작 {{ e.start_date|date:"Y.n.j" }}</span>
-    {% if e.is_active %}
+    {% if e.is_active and not hide_actions %}
     <form method="post" action="{% url 'lessons:enrollment_end' e.pk %}"
           data-confirm="'{{ e.title }}' 레슨권을 종료할까요?{% if e.remaining_count > 0 %} 잔여 {{ e.remaining_count }}회가 남아 있습니다.{% endif %}">
       {% csrf_token %}

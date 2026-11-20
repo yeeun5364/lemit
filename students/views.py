@@ -5,6 +5,7 @@
 """
 
 from django.contrib import messages
+from django.db import transaction
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -44,13 +45,22 @@ class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
     context_object_name = "student"
 
     def get_context_data(self, **kwargs):
-        from lessons.models import Enrollment
+        from lessons.models import Enrollment, LessonSession
+        from lessons.services import scheduled_sessions_of
 
-        # 수강생은 이미 로그인한 강사 것으로 좁혀 찾았으므로 그 수강생의 레슨권만 가져온다
+        # 수강생은 이미 로그인한 강사 것으로 좁혀 찾았으므로 그 수강생의 레슨권·회차만 가져온다
         enrollments = list(Enrollment.objects.filter(student=self.object).with_usage())
+        # 회차 이력: 레슨권별(최근 레슨권 먼저)로 묶고, 묶음 안은 최신순 (SCREENS S10)
+        sessions = (
+            LessonSession.objects.filter(enrollment__student=self.object)
+            .select_related("enrollment")
+            .order_by("-enrollment__start_date", "-enrollment_id", "-start_at", "-id")
+        )
         return super().get_context_data(
             active_enrollments=[e for e in enrollments if e.is_active],
             ended_enrollments=[e for e in enrollments if not e.is_active],
+            sessions=sessions,
+            scheduled_count=scheduled_sessions_of(self.object).count(),
             **kwargs,
         )
 
@@ -80,9 +90,12 @@ class StudentUpdateView(TeacherScopedQuerysetMixin, UpdateView):
     template_name = "students/student_form.html"
 
     def form_valid(self, form):
-        response = super().form_valid(form)
+        # 폼이 다루는 필드만 저장한다. 객체 전체를 저장하면 화면을 연 뒤 다른 탭에서 한 보관(is_active)을
+        # 예전 값으로 되돌려, 보관된 수강생이 다시 '수강 중'이 된다 (PR #55 리뷰 2차)
+        self.object = form.save(commit=False)
+        self.object.save(update_fields=[*form.Meta.fields, "updated_at"])
         messages.success(self.request, "수강생 정보를 수정했습니다.")
-        return response
+        return redirect(self.get_success_url())
 
     def get_success_url(self):
         return reverse("students:detail", args=[self.object.pk])
@@ -90,12 +103,26 @@ class StudentUpdateView(TeacherScopedQuerysetMixin, UpdateView):
 
 @require_POST
 def archive(request, pk):
-    """수강 종료(보관). 남은 '예정' 회차 삭제는 회차 기능(UC-04)을 만들 때 이 동작에 추가한다."""
-    student = get_owned_or_404(Student, request.user, pk=pk)
-    if student.is_active:
-        student.is_active = False
-        student.save(update_fields=["is_active", "updated_at"])
-        messages.success(request, f"{student.name} 수강생을 보관했습니다. 목록에서 '보관 포함'으로 볼 수 있습니다.")
+    """수강 종료(보관). 남은 '예정' 회차는 삭제하고, 완료·휴강·결석 기록은 남긴다 (ERD §3).
+
+    삭제할 개수는 보관 확인창에서 미리 알려 준다. 레슨권 등록·회차 저장과 같은 수강생 행 잠금을 써서
+    보관과 등록이 엇갈려 보관된 수강생에게 레슨권·예정 회차가 새로 생기지 않게 한다 (ERD 동시 변경 규칙).
+    """
+    from lessons.services import scheduled_sessions_of
+
+    deleted = 0
+    with transaction.atomic():
+        student = get_owned_or_404(Student.objects.select_for_update(), request.user, pk=pk)
+        archived = student.is_active
+        if archived:
+            deleted, _ = scheduled_sessions_of(student).delete()
+            student.is_active = False
+            student.save(update_fields=["is_active", "updated_at"])
+    if archived:
+        text = f"{student.name} 수강생을 보관했습니다. 목록에서 '보관 포함'으로 볼 수 있습니다."
+        if deleted:
+            text += f" 남은 예정 회차 {deleted}개를 삭제했습니다."
+        messages.success(request, text)
     return redirect("students:detail", pk=student.pk)
 
 

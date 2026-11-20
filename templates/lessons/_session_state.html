@@ -1,0 +1,6 @@
+{% comment %} 회차 상태 표시: 색이 아니라 모양으로 (SCREENS §4). s = LessonSession {% endcomment %}
+{% if s.status == "completed" %}<span class="state state-done">{% include "ui/icon.html" with name="check" size="sm" %}완료</span>
+{% elif s.status == "cancelled" %}<span class="state state-off">휴강</span>
+{% elif s.status == "absent" %}<span class="state state-off">결석·{% if s.absence_deducted %}차감{% else %}미차감{% endif %}</span>
+{% else %}<span class="state">예정</span>{% endif %}
+{% if s.makeup_for_id %}<span class="badge badge-outline">보강</span>{% endif %}
