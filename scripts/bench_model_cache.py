@@ -1,0 +1,96 @@
+"""메시지 분류 모델 캐시 효과 측정 (#51). 결과는 docs/ML.md §6에 기록한다.
+
+    PC:   python scripts/bench_model_cache.py
+    서버: docker compose exec -T web python scripts/bench_model_cache.py
+
+- 두 경우 모두 서비스 경로 그대로 classifier.classify()를 잰다. 차이는 모델 캐시뿐이다 (PR #52 리뷰).
+  - 캐시 없음: 측정마다 타이머 밖에서 캐시를 비워, classify()가 매번 모델 파일을 다시 불러오게 한다.
+  - 캐시 있음: 캐시를 그대로 두어 프로세스당 한 번만 불러온다.
+  - 캐시 없음 표본에는 로드마다 남는 INFO 로그 출력도 포함된다(서비스 경로 그대로). 로그 없는 로드 시간은 '모델 로드만'.
+- '첫 분류'는 이 측정 프로세스에서 모델을 처음 불러올 때의 시간이다. 운영의 gunicorn 작업 프로세스는
+  /healthz/(classifier.status())가 모델을 먼저 불러오므로, 실제 첫 사용자 요청 지연과 같지 않다.
+- DB에 읽기·쓰기를 하지 않는다. 운영 컨테이너에서 실행해도 데이터는 바뀌지 않는다.
+- 반복 횟수: 환경변수 N_NOCACHE(기본 50), N_CACHED(기본 500)
+"""
+
+import math
+import os
+import statistics
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+
+t0 = time.perf_counter()
+import django  # noqa: E402
+
+django.setup()
+from django.conf import settings  # noqa: E402
+
+from inbox import classifier  # noqa: E402
+from ml import artifact  # noqa: E402
+
+t_import = time.perf_counter() - t0
+
+MESSAGES = [
+    "선생님 이번 주 목요일 수업 취소할 수 있을까요?",
+    "지난번 빠진 수업 보강 언제 가능할까요?",
+    "다음 주 화요일 수업을 수요일로 옮길 수 있나요?",
+    "오늘 숙제 자료 다시 보내주실 수 있나요?",
+]
+
+
+def summary(seconds: list[float]) -> str:
+    ms = sorted(s * 1000 for s in seconds)
+    p95 = ms[max(0, math.ceil(len(ms) * 0.95) - 1)]  # 최근접 순위 방식
+    return f"중앙값 {statistics.median(ms):.2f}ms, 평균 {statistics.mean(ms):.2f}ms, p95 {p95:.2f}ms (n={len(ms)})"
+
+
+def timed(fn) -> float:
+    start = time.perf_counter()
+    fn()
+    return time.perf_counter() - start
+
+
+def positive_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        sys.exit(f"{name}은(는) 1 이상의 정수여야 합니다 (현재 {raw!r})")
+    return value
+
+
+def main() -> None:
+    path = Path(settings.MESSAGE_CLASSIFIER_PATH)
+    n_nocache = positive_int("N_NOCACHE", 50)
+    n_cached = positive_int("N_CACHED", 500)
+
+    classifier.clear_cache()
+    first = timed(lambda: classifier.classify(MESSAGES[0]))
+
+    no_cache = []
+    for i in range(n_nocache):
+        classifier.clear_cache()  # 타이머 밖에서 비운다
+        no_cache.append(timed(lambda i=i: classifier.classify(MESSAGES[i % 4])))
+    classifier.clear_cache()
+    load_only = [timed(lambda: artifact.load(path)) for _ in range(20)]
+    classifier.get_model()  # 타이머 밖에서 캐시를 채워, 캐시 있음 표본은 모두 캐시 적중만 잰다 (PR #52 리뷰)
+    cached = [timed(lambda i=i: classifier.classify(MESSAGES[i % 4])) for i in range(n_cached)]
+
+    print(f"모델 파일 {path.stat().st_size / 1024:.0f}KB, 버전 {classifier.get_model().version}")
+    print(f"Django·라이브러리 준비: {t_import * 1000:.0f}ms (프로세스 시작 시 1회)")
+    print(f"이 프로세스의 첫 분류 (모델 첫 로드 포함): {first * 1000:.1f}ms")
+    print(f"모델 로드만: {summary(load_only)}")
+    print(f"[캐시 없음] classify(), 매번 모델 로드: {summary(no_cache)}")
+    print(f"[캐시 있음] classify(): {summary(cached)}")
+    ratio = statistics.median(no_cache) / statistics.median(cached)
+    print(f"→ 요청당 약 {ratio:.0f}배 차이 (중앙값 기준)")
+
+
+if __name__ == "__main__":
+    main()
