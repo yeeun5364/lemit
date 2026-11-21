@@ -32,7 +32,9 @@ jobs:
         run: ruff format --check .
       - name: 워크플로 검사 (actionlint)
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
-      - name: 배포 스크립트 테스트 (방화벽 계산·ci_deploy 입력 검증·배포 잠금, #42)
+      - name: Self-hosted 러너 사용 규칙 (deploy.yml만, PR 트리거 금지, #56)
+        run: python scripts/check_workflow_policy.py
+      - name: 배포 스크립트 테스트 (방화벽 계산·ci_deploy 입력·main 포함 검증·배포 잠금·워크플로 규칙, #42·#56)
         run: |
           python -m unittest discover -s scripts -p "test_*.py"
           bash scripts/test_ci_deploy.sh

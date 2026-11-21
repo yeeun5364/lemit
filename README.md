@@ -54,7 +54,7 @@
 | 인프라 | Docker 실행 환경 | ✅ | web(gunicorn)+db(+proxy) 컨테이너, 이미지 안 모델 검증·추론, 헬스체크·스모크 테스트. 운영 서버(Lightsail)에서 동작 중 (#5) |
 | 인프라 | GitHub Actions (테스트) | ✅ | 린트·PostgreSQL 18 테스트·Docker 이미지(빌드·스모크) 3개 작업, main 병합 필수 검사 (#6) |
 | 인프라 | AWS Lightsail 배포 | ✅ | **첫 수동 배포 성공 (2026-11-20, `c848f2c`)**: Amazon Linux 2023, db·web·proxy healthy, 스모크 6항목(AI 모델 v2 추론 포함)·공개 경로 확인 통과, 외부에서 5432·8000 차단 확인. 도메인 `lemit.eta.pyhub.kr`에 HTTPS 적용(Let's Encrypt 인증서, HTTP→HTTPS 308, 보안 쿠키, HSTS는 아직 0). 외부 `/healthz/` ok·모델 v2 확인 (2026-11-21). 브라우저 기능 확인·관리자 계정 생성은 사용자 진행 (#48, [docs/DEPLOY.md](docs/DEPLOY.md)) |
-| 인프라 | GitHub Actions 자동 배포(CD) | 🟡 | `deploy.yml`: CI 성공한 main 커밋만, OIDC(장기 AWS 키 없음), 배포 중에만 SSH 22번에 러너 IP 임시 추가, 배포 전용 키(강제 명령), 호스트 키 검증, 동시 배포 잠금. 스크립트 테스트 통과, **AWS·GitHub 설정과 실제 배포 시험은 아직** ([docs/CD.md](docs/CD.md), #42) |
+| 인프라 | GitHub Actions 자동 배포(CD) | 🟡 | **Self-hosted Runner 방식 (#56):** CI(GitHub-hosted)가 성공한 main 커밋만(실제 CI 실행 ID와 작업 결과 확인). 검증은 GitHub-hosted 작업, 배포는 러너 전용 WSL 배포판(라벨 `lemit-deploy`)이 격리 확인 후 SSH 요청 한 줄만. 배포 전용 키는 저장소 밖 고정 경로 강제 명령(서버에서 main 포함 재확인). PR 트리거 금지 등 규칙을 CI에서 검사. 공개 저장소라 위험을 줄이는 구성이며 완전한 차단은 아님. 스크립트 테스트 통과, **러너 격리·서버 설치·GitHub 설정과 실제 배포 시험은 아직** ([docs/CD.md](docs/CD.md)) |
 | 인프라 | 운영 로그·DB 백업 | 🟡 | 500 오류 traceback·AI 모델 경고를 표준 출력으로(`docker compose logs web`), `scripts/backup_db.sh`(목차 확인·보관 개수), `scripts/restore_check.sh`(실행별 임시 DB에 복원 후 건수 비교, 자기가 만든 DB만 삭제), systemd 매일 백업+복원 점검 타이머. 테스트·PC 연습·CI 시나리오 통과, main 반영 (PR #46). 운영 서버에서 수동 백업·복원 점검 통과, systemd 타이머 설치·1회 실행 통과(매일 03:30 KST, 2026-11-20) (#44) |
 
 ## 회차 상태와 차감 규칙
@@ -296,7 +296,7 @@ lemit/
 │   ├── ERD.md             # 데이터 모델·ERD
 │   ├── SCREENS.md         # 화면 목록·흐름·와이어프레임
 │   ├── DEPLOY.md          # 배포 절차서 (Lightsail, 롤백, 장애 대응)
-│   ├── CD.md              # GitHub Actions 자동 배포 설정 (OIDC, SSH 임시 개방)
+│   ├── CD.md              # GitHub Actions 자동 배포 설정 (Self-hosted Runner, 보안 조건)
 │   └── ML.md              # 메시지 분류 모델 설계·학습 결과·한계
 └── devlog/                # 날짜별 진행 기록 (발표 자료 작성용)
     ├── README.md          # 작성 규칙

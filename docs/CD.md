@@ -1,264 +1,241 @@
-# GitHub Actions 자동 배포 (CD) 설정 안내
+# GitHub Actions 자동 배포 (CD) 설정 안내 — Self-hosted Runner
 
-> **상태 (2026-11-19):** 워크플로(`.github/workflows/deploy.yml`)와 서버 스크립트를 만들었습니다. 방화벽 계산, 서버 명령 입력 검증, 배포 잠금은 **자동 테스트로 검증**했습니다. **실제 AWS·GitHub·서버 설정은 아직 안 했습니다.** 아래 §1~§4는 사용자가 직접 하는 단계입니다. 관련 이슈: #42
-> 전제: 서버 준비와 첫 수동 배포를 먼저 끝냅니다([DEPLOY.md](DEPLOY.md) §1~§4). 서버에 `/home/ec2-user/lemit` 폴더와 운영 `.env`가 있어야 합니다.
+> **상태 (2026-11-20):** CD를 **Self-hosted Runner**(개인 PC의 러너 전용 WSL2 배포판) 방식으로 바꿨습니다(#56). 워크플로 규칙 검사, 서버 강제 명령의 입력·main 포함 검증, 설치 스크립트, 러너 격리 확인 단계는 **자동 테스트·컨테이너에서 검증**했습니다. **러너 PC 격리, 서버 강제 명령 설치, GitHub 설정, 실제 배포 시험은 아직 안 했습니다.** 이 문서의 "직접" 단계는 사용자가 합니다.
+> 전제: 서버 준비와 첫 수동 배포를 먼저 끝냅니다([DEPLOY.md](DEPLOY.md) §1~§4).
+> 이전 방식(GitHub-hosted 러너 + OIDC + 배포 중 SSH 임시 개방, #42)은 설정하기 전에 바뀌어 실제로 쓰인 적이 없습니다. §9에 기록만 남깁니다.
 
-## 0. 전체 흐름 (한 번 읽어 보기)
+> ⚠️ **공개 저장소의 Self-hosted Runner는 위험을 "줄이는" 구성이지 "완전히 막는" 구성이 아닙니다.** 남는 위험은 §8에 있습니다.
+> ⚠️ **§4의 검증을 모두 마치기 전에는 배포 키 Secret을 등록하지 않고, 자동 배포(`CD_AUTO_DEPLOY`)를 켜지 않습니다.**
+
+## 0. 전체 흐름
 
 ```text
-main에 병합 → CI(린트·테스트·Docker)가 모두 성공
-   └→ Deploy 워크플로 시작 (자동 배포를 켰을 때. 처음엔 수동 버튼으로만)
-        1. 이 커밋이 main에 있고 CI 3개가 성공했는지 다시 확인
-        2. AWS 로그인: OIDC 1회용 출입증 (오래 쓰는 AWS 키를 GitHub에 두지 않음)
-        3. Lightsail 방화벽 22번 규칙에 "이 GitHub 컴퓨터 IP 하나"를 추가
-        4. 서버 신원 확인(호스트 키) 후 배포 전용 키로 SSH 접속
-           → 서버는 이 키로는 scripts/ci_deploy.sh만 실행 → deploy.sh <커밋>
-        5. 성공·실패와 관계없이 22번 규칙에서 그 IP만 다시 뺌 (관리자 IP·다른 규칙은 그대로)
+main에 병합 → CI(린트·테스트·Docker, GitHub-hosted 러너)가 모두 성공
+   └→ Deploy 워크플로 (자동 배포를 켰을 때. 처음엔 수동 버튼으로만)
+        ① plan   (GitHub-hosted): 요청 검증. 그 커밋의 실제 CI 실행(ci.yml, main push)을 찾아 3개 작업 성공 확인,
+                                  main에 포함된 커밋인지 확인
+        ② deploy (내 PC의 러너 전용 WSL 배포판, 라벨 lemit-deploy):
+             - 러너 격리 확인(root, 관리자·docker 그룹, 비밀번호 없는 sudo, Windows 드라이브 마운트, Windows 프로그램 실행이 있으면 중단)
+             - 저장소 코드를 받지 않음. (자동 배포면) 아직 main 최신인지 확인
+             - 호스트 키 확인 후 배포 전용 키로 SSH 요청 한 줄: deploy-auto <커밋> (수동 배포는 deploy <커밋>)
+        ③ 서버: 이 키로는 /usr/local/bin/lemit-ci-deploy(root 소유 고정 경로)만 실행
+             → 커밋이 origin/main에 포함됐는지 다시 확인 → 서버 잠금을 기다려 잡음
+             → 저장소의 deploy.sh <커밋> (rollback은 rollback.sh)
 ```
 
-**왜 이렇게 하나요?**
-- **평소에는 SSH 22번을 관리자 IP만 허용합니다.** 그러면 GitHub 컴퓨터(IP가 매번 바뀜)는 들어올 수 없습니다. 그래서 배포하는 몇 분 동안만 그 IP 하나를 열어 줍니다.
-- **AWS 키를 GitHub에 저장하지 않습니다.** OIDC는 "이 저장소의 `production` 환경에서 돈 워크플로"에만 AWS가 잠깐 쓸 출입증을 내주는 방식이라, 유출될 장기 키가 없습니다.
-- **배포 전용 열쇠는 배포 명령만 실행합니다.** 혹시 유출되더라도 서버에서 셸을 열 수 없습니다(`deploy <커밋>`, `rollback <태그>`, `status`만 허용).
-- **서버 신원 확인:** 처음 보는 서버라도 일단 접속하는 방식(`StrictHostKeyChecking=no`)은 쓰지 않습니다. 미리 저장한 서버 호스트 키와 다르면 접속을 거부합니다.
+**배포·롤백 직렬화와 롤백 보존 (PR #58 리뷰 P2).** GitHub concurrency 그룹은 진행 1개 + 대기 1개만 두고, 새 대기 작업이 기존 대기 작업을 취소합니다. 그래서 deploy와 rollback이 한 그룹이면 "배포 A 진행 중 + 수동 롤백 B 대기" 상태에서 최신 main 자동 배포 C가 들어올 때 B가 취소될 수 있었습니다. 지금은:
 
-**필요한 것 체크리스트**
-
-| 어디에 | 무엇을 | 단계 |
+| 장치 | 위치 | 효과 |
 |---|---|---|
-| Lightsail + AWS IAM | 서버 태그 `lemit-deploy=allowed`, OIDC 공급자, 역할 `lemit-github-deploy`(권한: 방화벽 읽기 + 태그 붙은 서버의 방화벽 쓰기) | §1 |
-| PC | 서버 호스트 키 지문 확인 | §2 |
-| PC + 서버 | 배포 전용 SSH 키 만들기, 서버 `authorized_keys`에 강제 명령으로 등록 | §3 |
-| GitHub | Environment `production` + Variables 6개 + Secret 1개 | §4 |
-| GitHub | 첫 시험: check → deploy → rollback, 그다음 자동 배포 켜기 | §5 |
+| 그룹 분리: `deploy-production`(자동·수동 deploy), `deploy-production-rollback`, `deploy-production-check` | `deploy.yml` deploy 작업 | 새 자동 배포가 대기 중인 롤백을 취소하지 못함. 대기 중인 deploy는 가장 최근 것 하나만 남음 |
+| 서버 잠금 대기(최대 20분) | 강제 명령 `ci_deploy.sh` → 잠금을 `deploy.sh`·`rollback.sh`에 넘김 | 그룹이 달라 동시에 시작된 deploy·rollback도 서버에서는 하나씩 실행 |
+| 자동 배포 보류 (2단계) | ① 대기 표시 `deploy/state/rollback_pending/<PID>`: `rollback`이 잠금을 기다리기 **전에** 만들고 잠금을 얻으면 지움. 수동 deploy는 지우지 않음(프로세스가 없는 표시는 오래된 것으로 보고 정리). ② 확정 보류 `deploy/state/auto_deploy_hold`: `rollback`이 잠금을 잡은 **뒤** 롤백 직전에 만듦. `deploy-auto`는 잠금을 잡은 뒤 둘 중 하나라도 있으면 건너뜀 | B·C가 어떤 순서로 잠금을 잡든 끝 상태는 "롤백됨, 자동 배포는 건너뜀". 수동 deploy가 대기 중인 롤백보다 먼저 잠금을 잡아도 그 롤백이 실행되며 보류가 다시 확정됨(3차 리뷰 P2). 확정 보류는 **수동 `deploy`가 성공한 뒤에만 풀림**(4차 리뷰): 실패하면 유지되고, 배포하는 사이에 새 롤백이 건 보류도 남음(시작할 때 본 보류 내용과 같을 때만 지움). `check`에 표시됨 |
+| 예전 작업 트리 호환 | 실행할 `deploy.sh`·`rollback.sh`가 잠금 넘겨받기(`DEPLOY_LOCK_HELD`)를 모르면 강제 명령이 잠금을 놓고 실행 | 강제 명령만 먼저 갱신한 서버, 예전 커밋을 수동 배포한 뒤에도 배포·롤백이 동작(3차 리뷰 P1). 설치 스크립트가 작업 트리 버전을 사전 확인해 알려 줌 |
 
-## 1. AWS IAM 설정 (AWS 콘솔, 직접)
+- 시험: `scripts/test_ci_deploy.sh`에서 배포 A가 잠금을 잡은 상태로 롤백 B와 자동 배포 C를 두 순서로 보내 끝 상태를 확인합니다(DRY_RUN). GitHub의 그룹 대기·취소 동작 자체는 로컬에서 재현할 수 없어 정책 검사(그룹 식이 정확히 이 세 갈래인지)로 고정하고, 실제 동작은 §6의 첫 시험에서 확인합니다.
+- 수동 요청끼리(수동 deploy와 rollback)는 서버 잠금을 먼저 잡은 순서로 실행됩니다. 마지막에 실행된 것이 롤백이면 보류가 확정돼 있고, 성공한 수동 deploy면 풀려 있습니다(테스트로 확인).
+- 시험(자식 스크립트까지 실제 실행): 잠금 코드만 진짜와 같은 가짜 `deploy.sh`·`rollback.sh`로 새 작업 트리·예전 작업 트리(이 기능 이전 잠금 코드) 각각에서 배포·롤백이 실행되는지, "배포 A 진행 + 수동 배포 D·롤백 B 대기" 경합을 3회 반복해 위 규칙이 지켜지는지 확인합니다.
+- 서버에서 관리자가 `scripts/rollback.sh`를 직접 실행한 경우에는 보류가 걸리지 않습니다(강제 명령을 거친 rollback만).
 
-Lightsail도 같은 AWS 계정이라 **IAM 콘솔**(콘솔 상단 검색창에 IAM)에서 합니다.
+- **판단은 GitHub 컴퓨터에서, 내 PC에서는 최소한만.** 러너 작업은 `run` 단계 몇 개뿐이고 외부 액션·저장소 코드를 실행하지 않습니다.
+- **SSH 방화벽을 열고 닫지 않습니다.** 러너 PC의 공인 IP가 이미 22번에 허용된 관리자 IP이므로 러너에 AWS 권한이 필요 없습니다.
+- **배포 키는 배포 명령만 실행합니다.** 셸·포트 포워딩·`.env`·DB 접근이 없습니다. 강제 명령은 저장소 밖 root 소유 경로라, 예전 커밋을 배포해도 강제 명령이 예전 버전으로 바뀌지 않습니다.
 
-### 1-1. OIDC 공급자 추가 (계정에 한 번만)
-IAM → **자격 증명 공급자(Identity providers)** → **공급자 추가**
-- 공급자 유형: **OpenID Connect**
-- 공급자 URL: `https://token.actions.githubusercontent.com`
-- 대상(Audience): `sts.amazonaws.com`
+## 1. 공개 저장소에서 Self-hosted Runner: 위험과 대응
 
-### 1-2. 서버에 태그 달기 (Lightsail 콘솔)
-Lightsail → `lemit-server` → **태그** → 키-값 태그 추가: 키 `lemit-deploy`, 값 `allowed`
-- 아래 정책은 **이 태그가 붙은 인스턴스의 방화벽만** 바꿀 수 있게 합니다(PR #43 리뷰 반영). AWS 문서상 `PutInstancePublicPorts`는 태그 기반 권한 제어를 지원합니다.
+GitHub는 공개 저장소에 Self-hosted Runner를 권장하지 않습니다. 포크 PR은 **자기가 고친 워크플로 파일**로 실행되므로, PR의 워크플로에 `runs-on: [self-hosted, lemit-deploy]`를 적으면 승인되는 순간 내 러너에서 돕니다. 개인 계정 저장소에서는 러너를 특정 워크플로 전용으로 묶는 기능(러너 그룹, 조직 기능)을 쓸 수 없습니다.
 
-### 1-3. 권한 정책 만들기
-IAM → **정책** → **정책 생성** → JSON 탭에 아래를 붙여넣고, 이름을 `lemit-lightsail-ssh-window`로 정합니다.
+| 위험 | 대응 | 한계 |
+|---|---|---|
+| 포크 PR이 내 러너에서 코드 실행 | 외부 기여자의 모든 PR은 승인해야 실행(§1-1). 승인 전 `.github/` 변경 확인 | **승인을 잘못 누르면 실행됨** |
+| 저장소 안에서 실수로 PR·push 작업이 러너를 씀 | `scripts/check_workflow_policy.py`(CI): self-hosted는 `deploy.yml`의 작업 하나만, 다른 워크플로는 GitHub-hosted 라벨 문자열만, 트리거는 `workflow_run`(CI·completed·main)·`workflow_dispatch`만, 검증 작업의 저장소·이벤트·ref 조건, production·작업 단위 concurrency·액션 미사용 | 조건의 **존재**를 보며 논리 전체를 증명하지는 않음. 포크 PR에는 효과 없음 |
+| 러너 작업이 개인 PC에 접근 | 러너 전용 WSL 배포판 + sudo 없는 전용 사용자 + Windows 드라이브·프로그램 실행 끄기(§2). 배포 작업이 매번 실제 마운트(`/proc/self/mountinfo`의 drvfs, `/mnt` 밖·fstab 포함)·sudo 권한·그룹·interop(설정 + Windows 실행 시험)을 확인하고 아니면 중단 | 확인 단계는 배포 작업에만 있음. 승인된 악성 PR 작업은 이 확인을 거치지 않으므로 **격리 자체**가 방어선 |
+| 배포 키 유출 | production Environment Secret(main 브랜치만), 키는 한 단계 안에서만 파일로 만들고 삭제, 강제 명령, 서버에서 main 포함 재확인 | 키를 쓰는 동안 같은 러너에 숨어 있던 프로그램은 읽을 수 있음 |
+| 예전 커밋 배포로 강제 명령이 약해짐 | 강제 명령을 저장소 밖 root 소유 고정 경로에 설치(§3-2), 저장소 안에서 실행되면 거부 | 갱신은 관리자가 직접(자동 아님) |
+| 테스트 안 된 코드 배포 | 실제 CI 실행 ID와 그 작업 결과 확인 + main 포함(plan), 서버도 main 포함 확인 | main에 들어간 커밋은 배포될 수 있음(main 보호 규칙에 의존) |
+| 운영 `.env`·DB | 러너는 셸·DB 접근 없음. `deploy.sh`·`rollback.sh`는 `.env`를 읽기만 하고 `down -v`를 쓰지 않음 | 배포 시 마이그레이션은 실행되고, 이미지 롤백은 DB 스키마를 되돌리지 않음(DEPLOY.md) |
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ReadFirewall",
-      "Effect": "Allow",
-      "Action": "lightsail:GetInstancePortStates",
-      "Resource": "*",
-      "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-southeast-2"}}
-    },
-    {
-      "Sid": "WriteFirewallOnlyOnTaggedInstance",
-      "Effect": "Allow",
-      "Action": "lightsail:PutInstancePublicPorts",
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestedRegion": "ap-southeast-2",
-          "aws:ResourceTag/lemit-deploy": "allowed"
-        }
-      }
-    }
-  ]
-}
-```
+### 1-1. 포크 PR 승인 정책 (직접, 가장 먼저)
+저장소 → **Settings → Actions → General → Approval for running fork pull request workflows from contributors**
+- **"Require approval for all external contributors"** 를 고릅니다. 지금 값(`first_time_contributors`)은 처음 기여하는 사람만 승인을 요구합니다.
+- 외부 PR의 "Approve and run"을 누르기 전에 **`.github/` 아래 변경이 있는지** 반드시 확인합니다. 있으면 승인하지 않습니다.
+- GitHub 계정 2단계 인증을 켭니다(계정이 탈취되면 워크플로를 바꿔 러너를 쓸 수 있음).
 
-- 권한은 **방화벽 읽기**(읽기 전용, 태그 조건은 문서에 지원이 명시되지 않아 리전으로만 제한)와 **태그 붙은 인스턴스의 방화벽 쓰기**뿐입니다. 이 역할로는 인스턴스를 켜고 끄거나 지울 수 없습니다.
-- 첫 시험에서 `AccessDenied ... PutInstancePublicPorts`가 나오면 1-2의 태그(키·값 철자)를 확인하세요. 그래도 안 되면 그 오류 내용을 알려주세요. 태그 조건 대신 리전 조건만 쓰는 방식으로 바꿀지 함께 정합니다.
-- **주의:** 방화벽 쓰기 권한이 있으므로, 이 역할을 쓰는 워크플로가 악용되면 그 인스턴스의 다른 포트도 열 수 있습니다. 그래서 아래 신뢰 정책과 §4 Environment 승인으로 **이 저장소의 production 배포만** 이 역할을 쓰게 묶습니다.
+## 2. 러너 실행 환경 (WSL, 직접)
 
-### 1-4. 역할 만들기
-IAM → **역할** → **역할 생성**
-1. 신뢰할 수 있는 엔터티: **웹 자격 증명(Web identity)** → 공급자 `token.actions.githubusercontent.com`, Audience `sts.amazonaws.com`.
-   GitHub 조직·저장소를 묻는 칸이 나오면 `yeeun5364`, `lemit`을 입력합니다.
-2. 권한: `lemit-lightsail-ssh-window` 선택
-3. 이름: `lemit-github-deploy`
-4. 만든 뒤 역할의 **신뢰 관계 → 신뢰 정책 편집**에서 `Condition`을 아래처럼 **production 환경으로 좁힙니다.** `<계정ID>`는 콘솔 오른쪽 위 계정 메뉴의 12자리 숫자입니다.
+개인 개발 환경과 **분리된** 러너 전용 배포판을 씁니다. 지금 개발에 쓰는 배포판에 설치한 러너는 제거합니다.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {"Federated": "arn:aws:iam::<계정ID>:oidc-provider/token.actions.githubusercontent.com"},
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:yeeun5364/lemit:environment:production"
-        }
-      }
-    }
-  ]
-}
-```
-
-5. 역할 화면 위쪽의 **ARN**(`arn:aws:iam::<계정ID>:role/lemit-github-deploy`)을 복사해 둡니다. §4의 `AWS_ROLE_ARN`에 넣습니다.
-
-## 2. 서버 호스트 키 확인 (가짜 서버 차단용)
-
-1. **서버(SSH 접속한 창)에서** 지문을 봅니다.
-   ```bash
-   ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+1. **러너 전용 배포판을 만듭니다**(PowerShell). 이름은 예시입니다.
+   ```powershell
+   wsl --install -d Ubuntu-24.04 --name lemit-runner
    ```
-   `256 SHA256:xxxx... (ED25519)` 형태로 나옵니다. 처음 SSH 접속할 때 확인했던 지문과 같아야 합니다.
-2. **PC의 PowerShell에서** 호스트 키 한 줄을 받아 지문을 비교합니다.
+   사용 중인 WSL 버전에서 `--name`이 안 되면, 새 배포판을 내보내기·가져오기(`wsl --export`/`wsl --import`)로 다른 이름의 복사본을 만듭니다.
+2. **sudo 권한이 없는 전용 사용자**로 러너를 설치·등록합니다. 기존 러너(`lemit-ubuntu-runner`)는 개발 배포판에서 `./config.sh remove`로 등록 해제합니다.
+   ```bash
+   sudo adduser --disabled-password --gecos "" ghrunner
+   id ghrunner          # groups에 sudo·docker가 없어야 함
+   ```
+3. **Windows 드라이브·프로그램 접근을 끕니다.** 러너 배포판의 `/etc/wsl.conf`:
+   ```ini
+   [boot]
+   systemd=true
+
+   [automount]
+   enabled=false
+
+   [interop]
+   enabled=false
+   appendWindowsPath=false
+   ```
+   PowerShell에서 `wsl --terminate lemit-runner` 후 다시 엽니다. 이 설정을 바꿀 때만 잠깐 관리자 사용자를 쓰고, 러너는 `ghrunner`로만 돌립니다.
+   - **`/proc/sys/fs/binfmt_misc/WSLInterop`이 `enabled`로 보여도 정상일 수 있습니다.** WSL2의 배포판들은 한 VM의 커널을 함께 쓰고, 이 등록(`.exe` 파일을 WSL의 `/init`으로 넘기는 규칙)도 배포판끼리 공유합니다. 개인 배포판이 interop을 쓰면 러너 배포판에서도 `enabled`로 보입니다. 실제로 Windows 프로그램이 실행되는지는 Windows 쪽이 배포판별 설정으로 정하므로, 등록 상태가 아니라 **실행 시험**(§4)으로 확인합니다. 배포 작업도 매번 같은 시험을 합니다(약 10초).
+4. **라벨 `lemit-deploy`**: 등록할 때 `./config.sh --url https://github.com/yeeun5364/lemit --token <등록 토큰> --labels lemit-deploy`, 또는 Settings → Actions → Runners에서 라벨 추가.
+5. **서비스 실행:** 러너 폴더에서 `sudo ./svc.sh install ghrunner && sudo ./svc.sh start`
+   - **WSL은 systemd 서비스만으로 계속 켜져 있지 않습니다.** Windows를 재부팅하면 배포판이 시작되어야 러너가 온라인이 되고, 배포판 안에 실행 중인 세션이 없으면 WSL이 배포판을 멈출 수 있습니다. 터미널을 한 번 열었다 닫는 것만으로는 부족할 수 있습니다.
+   - **합격 기준:** Windows 재부팅 → 로그인 → **WSL 터미널을 모두 닫은 상태로 10분 이상** 기다린 뒤에도 Settings → Actions → Runners에서 러너가 Idle(온라인)이고, Deploy `check`를 받아 실행합니다.
+   - 유지 방법 후보(**아직 시험하지 않음**): Windows 작업 스케줄러에 "로그온할 때" 작업으로 `wsl.exe -d lemit-runner --exec sleep infinity`를 숨김 실행해 배포판을 켜 둡니다. 위 합격 기준으로 확인한 방법만 씁니다.
+6. **도구:** `ssh`, `ssh-keygen`, `git` (배포 작업이 처음에 확인).
+7. **공인 IP:** 러너 배포판에서 `curl -fsS https://checkip.amazonaws.com` 결과가 Lightsail SSH 22번에 허용된 관리자 IP와 같아야 합니다(관리자 IP는 이 공개 문서가 아니라 개인 메모에). 다르면 배포가 "SSH 연결 실패"로 끝납니다. 22번을 넓게 열지 않습니다.
+
+## 3. 서버 호스트 키·배포 전용 SSH 키 (PC + 서버, 직접)
+
+### 3-1. 호스트 키 (가짜 서버 차단)
+1. **서버에서** 지문 확인: `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
+2. **PC에서** 호스트 키 한 줄을 받아 지문 비교:
    ```powershell
    ssh-keyscan -t ed25519 15.135.58.179 2>$null | Tee-Object -Variable hk
    $hk | ssh-keygen -lf -
    ```
-3. 두 지문이 **같을 때만**, `ssh-keyscan`이 출력한 한 줄(`15.135.58.179 ssh-ed25519 AAAA...`)을 §4의 `LIGHTSAIL_KNOWN_HOSTS`에 넣습니다. 이 값은 공개 정보라 Variable로 둡니다.
+3. 두 지문이 **같을 때만** 그 한 줄을 §5의 `LIGHTSAIL_KNOWN_HOSTS`에 씁니다(공개 정보라 Variable).
 
-## 3. 배포 전용 SSH 키 (PC + 서버, 직접)
-
-지금 쓰는 `lemit-key.pem`은 서버 전체를 다룰 수 있는 **관리자 키**입니다. GitHub에는 **배포만 할 수 있는 새 키**를 따로 만들어 줍니다.
-
-1. **PC(PowerShell)에서 키를 만듭니다.** GitHub가 자동으로 써야 해서 암호는 비웁니다. 암호를 물으면 **아무것도 입력하지 않고 엔터를 두 번** 누릅니다.
-   ```powershell
-   ssh-keygen -t ed25519 -f $HOME\.ssh\lemit-github-deploy -C lemit-github-deploy
-   Get-Content $HOME\.ssh\lemit-github-deploy.pub   # 공개 키 한 줄 (ssh-ed25519 AAAA... lemit-github-deploy)
-   ```
-2. **서버에서 공개 키를 "강제 명령"과 함께 등록합니다.** 아래 한 줄의 `ssh-ed25519 AAAA...` 부분을 1번에서 나온 공개 키로 바꿔 실행합니다.
+### 3-2. 강제 명령 설치 + 배포 전용 키
+1. **서버에서 강제 명령을 고정 경로에 설치합니다.** 검토한 main 버전에서 실행합니다.
    ```bash
-   echo 'command="/home/ec2-user/lemit/scripts/ci_deploy.sh",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA...여기에공개키... lemit-github-deploy' >> ~/.ssh/authorized_keys
+   cd ~/lemit && git fetch origin && git checkout --detach origin/main
+   sudo bash scripts/install_ci_deploy.sh      # → /usr/local/bin/lemit-ci-deploy (root 소유, 755)
+   ```
+   - 설치 스크립트는 `/usr/local/bin`이 root 소유이고 다른 사용자가 쓸 수 없는지 확인하고, 내용이 같아도 항상 `root:root 755`로 다시 맞춥니다.
+   - 설치 스크립트는 작업 트리의 `deploy.sh`·`rollback.sh`가 잠금 넘겨받기를 지원하는지 출력합니다. "이전 버전" 주의가 나오면 위의 `git checkout --detach origin/main`을 했는지 확인하고 다시 설치합니다. 예전 버전이어도 강제 명령은 호환 모드(잠금을 놓고 실행)로 동작합니다.
+   - `scripts/ci_deploy.sh`를 바꾼 PR이 병합되면 **같은 방법으로 다시 설치**합니다. 배포가 자동으로 바꾸지 않습니다. Deploy `check` 결과의 "강제 명령" 줄이 "저장소 버전과 다름"이면 갱신이 필요한지 확인합니다.
+2. **PC에서 키를 만듭니다**(암호 없이 엔터 두 번): `ssh-keygen -t ed25519 -f $HOME\.ssh\lemit-github-deploy -C lemit-github-deploy`
+3. **서버 `~/.ssh/authorized_keys`에 강제 명령과 함께 한 줄로 등록합니다.** 예전 줄(`command="/home/ec2-user/lemit/scripts/ci_deploy.sh"...`)이 있으면 지웁니다.
+   ```bash
+   echo 'command="/usr/local/bin/lemit-ci-deploy",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc ssh-ed25519 AAAA...여기에공개키... lemit-github-deploy' >> ~/.ssh/authorized_keys
    chmod 600 ~/.ssh/authorized_keys
    ```
-   이 키로 접속하면 서버는 무엇을 요청받든 `scripts/ci_deploy.sh`만 실행합니다.
-3. **PC에서 시험합니다.** 첫 줄은 상태가 출력되어야 하고, 둘째 줄은 거부되어야 합니다.
-   ```powershell
-   ssh -i $HOME\.ssh\lemit-github-deploy ec2-user@15.135.58.179 status   # 상태 출력
-   ssh -i $HOME\.ssh\lemit-github-deploy ec2-user@15.135.58.179 ls       # "허용하지 않는 요청" → 정상
-   ```
-   PC는 관리자 IP라 방화벽을 통과합니다. GitHub는 배포할 때 워크플로가 잠깐 열어 줍니다.
-4. **개인 키 내용**을 §4의 Secret `LIGHTSAIL_SSH_KEY`에 붙여넣습니다.
-   ```powershell
-   Get-Content $HOME\.ssh\lemit-github-deploy -Raw | Set-Clipboard   # 화면에 띄우지 않고 클립보드로
-   ```
-   - **이 내용을 채팅·PR·이슈·파일에 붙여넣지 않습니다.** GitHub Secret 입력칸에만 붙여넣습니다.
-   - 등록 후 PC의 개인 키 파일은 지워도 됩니다. 다시 필요하면 새로 만들어 등록합니다.
 
-## 4. GitHub 설정 (웹, 직접)
+## 4. Secret 연결 전 검증 (직접, 모두 통과해야 다음 단계)
 
-### 4-1. Environment 만들기
-저장소 → **Settings → Environments → New environment** → 이름 `production`
-- **Required reviewers:** 본인 계정을 체크합니다(권장). 배포마다 "승인" 버튼을 눌러야 진행됩니다. 수업 복습 중에는 실수 방지에 좋습니다.
-- **Deployment branches and tags:** "Selected branches and tags" → `main`만 추가합니다.
+**아래를 모두 확인하기 전에는 §5의 Secret을 등록하지 않고 자동 배포를 켜지 않습니다.** 결과는 개인 메모에 날짜와 함께 남깁니다(IP 등은 공개 문서에 쓰지 않음).
 
-### 4-2. Environment 안에 Variables·Secret 등록
-같은 `production` 화면 아래쪽에 등록합니다. 저장소 전체 설정이 아니라 **Environment에** 넣어야 production 배포 작업만 읽을 수 있습니다.
+**러너 격리** (러너 배포판에서 `ghrunner`로)
+
+| 확인 | 기대 결과 |
+|---|---|
+| `id` | uid가 0이 아니고 groups에 sudo·wheel·admin·docker·lxd 없음 |
+| `sudo -n -l` | 실패(비밀번호 없이 쓸 수 있는 sudo 권한이 하나도 없음) |
+| 관리자 사용자로 `sudo -l -U ghrunner` | "not allowed to run sudo" (sudo 규칙 없음) |
+| `grep -E 'aname=drvfs\| - drvfs ' /proc/self/mountinfo` | 아무것도 안 나옴 (Windows 드라이브 마운트 없음. `/mnt` 밖·`/etc/fstab`·Docker Desktop 연동 마운트 포함) |
+| `powershell.exe` 또는 `cmd.exe` | 실행 안 됨(명령 없음) |
+| `cat /etc/wsl.conf` | `[interop]` 아래 `enabled=false` (§2-3) |
+| Windows 실행 시험: `p=$(mktemp --suffix=.exe); printf 'MZ' > $p; chmod 700 $p; $p < /dev/null; echo "종료 $?"; rm -f $p` | 약 10초 뒤 `UtilAcceptVsock:…: accept4 failed 110`, `종료 1` (Windows가 요청을 받지 않음). 바로 `Invalid argument`가 나오거나 `종료 0`이면 interop이 켜진 것 |
+| `cat /proc/sys/fs/binfmt_misc/WSLInterop` | 참고용. 개인 배포판이 interop을 쓰면 `enabled`로 보이는 것이 정상(§2-3). 판단은 위 실행 시험으로 |
+| 개발 배포판에서 `wsl -l -v` | 러너가 개발 배포판이 아닌 `lemit-runner`에 있음 |
+
+> 2026-11-20 실측(WSL 3.0.5, 커널 6.18): 러너 배포판(interop 끔)은 `WSLInterop`이 `enabled`였지만 실제 `whoami.exe` 실행이 위 오류로 막혔고, `WSL_INTEROP=/run/WSL/1_interop`처럼 소켓을 직접 지정해도 막혔습니다. 같은 파일을 개인 배포판(interop 켬)에서 실행하면 바로 실행됐습니다.
+
+**SSH 최소 권한** (배포 키로, 러너 배포판 또는 PC에서. `KEY=lemit-github-deploy 키 경로`)
+
+| 명령 | 기대 결과 |
+|---|---|
+| `ssh -i $KEY ec2-user@서버 status` | 상태 출력, 끝에 "강제 명령: 저장소 버전과 같음" |
+| `ssh -i $KEY ec2-user@서버 ls` | "허용하지 않는 요청" (종료 2) |
+| `ssh -i $KEY ec2-user@서버 'deploy 0123456789abcdef0123456789abcdef01234567'` | "main에 포함되지 않은 커밋" |
+| `ssh -i $KEY -t ec2-user@서버` | 셸이 열리지 않음(빈 요청 거부) |
+| `ssh -i $KEY -N -L 15432:localhost:5432 ec2-user@서버` 실행 중 다른 창에서 `127.0.0.1:15432`로 접속 시도 | 포워딩 거부(ssh 창에 `administratively prohibited`) |
+| 서버에서 `ls -l /usr/local/bin/lemit-ci-deploy` | `root root`, `-rwxr-xr-x` |
+| 서버에서 `grep lemit-github-deploy ~/.ssh/authorized_keys` | `command="/usr/local/bin/lemit-ci-deploy"`와 `no-port-forwarding,...,no-pty,no-user-rc`가 있는 한 줄만 |
+
+## 5. GitHub 설정 (웹, 직접, §4 통과 후)
+
+### 5-1. Environment `production`
+저장소 → **Settings → Environments → New environment** → `production`
+- **Deployment branches and tags:** "Selected branches and tags" → **`main`만**.
+- **Required reviewers (권장):** 본인 계정. 배포마다 승인을 눌러야 러너 작업이 시작되어, PC를 켰을 때 예상하지 못한 배포가 바로 실행되는 것도 막습니다.
+
+### 5-2. Environment 안에 Variables·Secret
 
 | 종류 | 이름 | 값 |
 |---|---|---|
-| Variable | `AWS_REGION` | `ap-southeast-2` |
-| Variable | `AWS_ROLE_ARN` | §1-4에서 복사한 역할 ARN |
-| Variable | `LIGHTSAIL_INSTANCE_NAME` | `lemit-server` |
-| Variable | `LIGHTSAIL_HOST` | `15.135.58.179` |
+| Variable | `LIGHTSAIL_HOST` | `15.135.58.179` (§3-1의 known_hosts 줄과 같은 이름) |
 | Variable | `LIGHTSAIL_USER` | `ec2-user` |
-| Variable | `LIGHTSAIL_KNOWN_HOSTS` | §2에서 확인한 한 줄 |
-| **Secret** | `LIGHTSAIL_SSH_KEY` | §3의 배포 전용 **개인 키** 전체(`-----BEGIN ... END ...-----` 포함) |
+| Variable | `LIGHTSAIL_KNOWN_HOSTS` | §3-1에서 확인한 한 줄 |
+| **Secret** | `LIGHTSAIL_SSH_KEY` | §3-2의 배포 전용 **개인 키** 전체 |
 
-- 앱 비밀값(Django 비밀키, DB 비밀번호)은 **GitHub에 넣지 않습니다.** 서버의 `.env`에만 있습니다.
+- 개인 키는 채팅·PR·이슈·파일에 붙여넣지 않고, **러너 배포판에 파일로 두지 않습니다.** 등록 후 PC의 개인 키 파일은 지워도 됩니다.
+- 앱 비밀값(Django 비밀키, DB 비밀번호)은 GitHub에 넣지 않습니다(서버 `.env`에만).
 
-### 4-3. 자동 배포 스위치 (나중에)
-저장소 → **Settings → Secrets and variables → Actions → Variables 탭 → New repository variable**
-- 이름 `CD_AUTO_DEPLOY`, 값 `true`
-- **§5의 수동 시험이 모두 성공한 뒤에** 만듭니다. 없거나 `true`가 아니면 자동 배포는 하지 않고 수동 버튼만 동작합니다.
+### 5-3. 자동 배포 스위치 (§6 시험 후)
+Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DEPLOY` = `true`. 없으면 수동 버튼만 동작합니다.
 
-## 5. 첫 시험 (직접, 순서대로)
+## 6. 첫 시험 (직접, 순서대로)
 
-**준비**
-- Lightsail 방화벽의 SSH 22번이 **관리자 IP로만 제한**되어 있어야 이 방식의 의미가 있습니다([DEPLOY.md](DEPLOY.md) §1 3번). 바꾸기 전에 SSH 창 하나를 열어 둔 상태에서 진행합니다.
-- **기준 방화벽 규칙을 적어 둡니다.** 시험 단계마다 이 표와 콘솔 화면을 비교합니다. 이 문서는 공개 저장소에 있으니 **관리자 IP는 이 문서가 아니라 개인 메모에** 적습니다.
-
-  | 규칙 | IPv4 | IPv6 | 비고 |
-  |---|---|---|---|
-  | SSH 22 | 관리자 IP만 (+ 브라우저 SSH 허용 체크 여부) | 제한 또는 삭제 | 배포 중에만 러너 IP 1개가 잠깐 추가됨 |
-  | HTTP 80 | 모든 IPv4 | 규칙 없음 | |
-  | HTTPS 443 | 모든 IPv4 | 모든 IPv6 | 도메인 `lemit.eta.pyhub.kr` 연결 후 추가 |
-
-  위 표는 **Lightsail 콘솔에 설정된 규칙**입니다(2026-11-22 기준). 실제 외부 접속 시험은 따로 구분합니다.
-  - IPv4: 80(HTTP→HTTPS 308)·443(`https://lemit.eta.pyhub.kr/healthz/` 200) 외부 접속 확인 (2026-11-21, PC)
-  - IPv6: 도메인에 AAAA 레코드가 없어 **외부 접속 시험은 하지 않았습니다.** 443 IPv6 규칙은 콘솔 설정으로만 확인
-
-- **시험하는 동안 콘솔에서 방화벽을 바꾸지 않습니다.** 스크립트는 그사이 변경을 감지하면 덮어쓰지 않고 다시 시도하거나 실패로 멈춥니다. 다만 Lightsail API에는 "내가 읽은 뒤 아무도 안 바꿨을 때만 쓰기" 기능이 없어 아주 짧은 틈은 남습니다.
-
-1. **check** (연결만 확인, 배포 안 함): Actions → **Deploy** → **Run workflow** → action `check`
-   - 로그 확인 순서: 설정값 확인 → AWS 인증 → 러너 IP 추가 → 서버 `status` 출력(현재 태그·기록·컨테이너·공개 경로) → **러너 IP 제거**
-   - 끝난 뒤 Lightsail 콘솔에서 22번 규칙이 **원래대로**(관리자 IP만)인지 기준 표와 비교합니다. 80·443·IPv6 규칙도 그대로인지 봅니다.
-2. **deploy:** action `deploy`, sha는 비워 둠(main 최신)
-   - "CI 3개 작업 모두 성공" 확인 → 서버 `deploy.sh` 출력 → `배포 완료` → 러너 IP 제거
+1. **check:** Actions → Deploy → Run workflow(브랜치 main) → `check`
+   - plan 성공 → deploy 작업이 `lemit-runner`의 러너에서 시작 → "러너 격리 확인" 통과 → 서버 `status`
+2. **deploy:** `deploy`, sha 비움 → plan "CI 실행 …: 3개 작업 모두 성공" → 서버 `deploy.sh` → `배포 완료`
    - 브라우저로 `https://lemit.eta.pyhub.kr`에서 분류 동선을 확인합니다. (IP `15.135.58.179`는 SSH 주소로만 씁니다. IP로 HTTPS 접속하면 인증서가 없어 끊깁니다)
-   - 콘솔에서 방화벽 규칙이 기준 표와 같은지 다시 확인합니다(이후 3·4단계 뒤에도 매번).
-3. **같은 버전 다시 deploy:** 안전하게 `OK`로 끝나는지 확인합니다. 빌드 캐시를 쓰고, 마이그레이션이 없고, 컨테이너도 그대로입니다.
-4. **rollback:** `check` 결과의 이미지 목록에서 이전 태그를 골라 action `rollback`, rollback_tag에 입력합니다.
-4-1. **실패·취소해도 정리되는지:** `deploy`를 실행한 뒤 "서버에서 실행" 단계가 진행 중일 때 Actions 화면에서 **Cancel workflow**를 누릅니다.
-   - 로그에서 "SSH 22번에서 러너 IP 제거" 단계가 실행되어 성공했는지 확인합니다.
-   - 콘솔의 22번 규칙에 러너 IP가 남지 않았는지 확인합니다.
-   - 서버에서는 진행 중이던 배포가 끝까지 돌 수 있습니다. 끝난 뒤 `check`로 상태를 봅니다.
-5. 모두 성공하면 §4-3 `CD_AUTO_DEPLOY=true`를 켭니다. 이후에는 main에 병합하고 CI가 성공하면 자동으로 배포됩니다(production 승인을 켰다면 승인 후).
-
-**확인할 것과 실패 시 볼 곳**
+3. **같은 버전 다시 deploy:** `OK`로 끝나는지
+4. **rollback:** `check`의 이미지 목록에서 이전 태그로 `rollback` → 다음 `check`에 "자동 배포: 보류 중" 표시 → 수동 `deploy`가 성공하면 보류가 풀리는지 (실패하면 "보류를 유지합니다"로 끝나고 `check`에 계속 보류 중)
+5. **러너가 꺼져 있을 때:** `sudo ./svc.sh stop` 후 `check` → "Waiting for a runner"로 대기 → 서비스 시작 후 이어서 실행되는지
+6. **Windows 재부팅 후** §2-5의 합격 기준(터미널을 모두 닫고 10분 뒤에도 온라인, `check` 실행)을 통과하는지
+7. 모두 성공하면 §5-3 자동 배포를 켭니다.
 
 | 증상 | 원인 후보 |
 |---|---|
-| "production Environment 설정이 빠졌습니다" | §4-2 이름 오타, Environment가 아닌 곳에 등록 |
-| AWS 인증 실패 (`Not authorized to perform sts:AssumeRoleWithWebIdentity`) | §1-4 신뢰 정책의 `sub`(저장소·환경 이름), OIDC 공급자 Audience |
-| `AccessDenied ... PutInstancePublicPorts` | §1-3 정책 미연결, §1-2 태그(`lemit-deploy=allowed`) 누락·오타, 리전 조건 |
-| "SSH 연결 실패" | §2 호스트 키 줄, §3 authorized_keys 등록(한 줄, 따옴표), 배포 키 Secret 내용 |
-| `Host key verification failed` | 서버 호스트 키가 바뀌었거나 `LIGHTSAIL_KNOWN_HOSTS`가 틀림 → §2 다시 확인. **바로 맞추지 말고 원인부터 확인** |
-| "러너 IP가 방화벽에 남아 있습니다" | §7 수동 복구 |
-| "읽는 사이 규칙이 바뀌었습니다" / "방화벽이 기대와 다릅니다" | 배포 중 콘솔에서 방화벽을 바꿨거나 다른 작업이 동시에 바꿈 → §7에서 기준 표와 비교 후 다시 실행 |
-| "다른 배포·롤백이 진행 중" | 서버에서 수동 배포가 돌고 있음 (서버 잠금) |
+| "러너가 격리되지 않았습니다: …" | §2의 해당 항목. 고친 뒤 §4를 다시 확인 |
+| "… `[interop] enabled=false`가 없음" | 러너 배포판 `/etc/wsl.conf` (§2-3) |
+| "Windows 프로그램 실행(interop)이 막혔는지 확인하지 못함(종료 코드 …)" | `Invalid argument`·종료 0: interop이 켜져 있음 → wsl.conf 확인 후 `wsl --terminate`로 다시 시작. 종료 124: 30초 안에 끝나지 않음. 그 밖의 문구: WSL 업데이트로 오류 문구가 바뀌었을 수 있음 → §4 실행 시험으로 직접 확인한 뒤 deploy.yml의 판정 문구를 PR로 고침(확인 전에는 배포하지 않음) |
+| "production Environment 설정이 빠졌습니다" | §5-2 이름 오타, Environment가 아닌 곳에 등록 |
+| deploy 작업이 계속 "Waiting for a runner" | 러너 오프라인(배포판 미시작 포함), 라벨 `lemit-deploy` 누락 |
+| "성공한 CI 실행을 찾지 못했습니다" | 그 커밋의 main push CI가 없거나 실패 |
+| "SSH 연결 실패" | 러너 공인 IP(§2-7), authorized_keys(§3-2), Secret 내용 |
+| `Host key verification failed` | 서버 호스트 키 변경 또는 known_hosts 오류 → **바로 맞추지 말고 원인부터 확인** |
+| "main에 포함되지 않은 커밋입니다" | main 밖의 커밋 요청. 서버 `git fetch`가 안 됐으면 "git fetch 실패" |
+| "강제 명령은 저장소 밖의 고정 경로에 설치해야 합니다" | authorized_keys가 예전 경로를 가리킴 → §3-2 |
+| "다른 배포·롤백이 진행 중입니다. 끝날 때까지 기다립니다" | 다른 배포·롤백이 서버 잠금을 잡고 있음. 끝나면 이어서 실행 (정상) |
+| "…초 안에 잠금을 얻지 못했습니다" | 20분 넘게 잠금이 풀리지 않음 → `check`와 관리자 SSH로 진행 중인 배포 확인 |
+| 자동 배포가 "자동 배포 보류 중이라 배포하지 않습니다"로 성공 종료 | 그 전에 강제 명령으로 rollback을 했거나 rollback이 대기 중임 (정상). 원인을 확인한 뒤 수동 `deploy`(sha 비움)로 다시 배포해 **성공하면** 확정 보류가 풀림 (대기 중인 롤백이 있으면 그 롤백이 끝난 뒤 다시 보류됨) |
+| 수동 deploy가 "수동 배포 실패(종료 …): 자동 배포 보류를 유지합니다" | 배포가 실패해 보류를 그대로 둠 (정상). 원인을 고친 뒤 다시 수동 `deploy` |
+| "… 잠금 넘겨받기 이전 버전이라 잠금을 놓고 실행합니다 (호환 모드)" | 작업 트리가 이 기능 이전 커밋. 동작에는 문제없음. 다음 배포부터 새 스크립트가 쓰임 |
 
-## 6. 안전장치 요약
+## 7. 러너 PC가 꺼져 있을 때
 
-| 위험 | 장치 |
+| 상황 | 동작 |
 |---|---|
-| 테스트 안 된 코드 배포 | main에 포함된 커밋 + CI 3개 성공만 배포 (워크플로가 GitHub API로 재확인) |
-| AWS 키 유출 | 장기 키 없음(OIDC). 역할은 production 환경에서만, 방화벽 읽기·쓰기만 |
-| SSH 상시 노출 | 22번은 관리자 IP만. 배포 중에만 러너 IP /32 추가 후 반드시 제거(`if: always()`), 제거 확인 |
-| 배포 키 유출 | 강제 명령: `deploy <SHA 40자리>`·`rollback <태그 12자리>`·`status`만. 셸·포트 포워딩 불가 |
-| 가짜 서버 접속 | 저장한 호스트 키로만 접속(`StrictHostKeyChecking=yes`) |
-| 동시 배포 | 워크플로 동시 실행 1개 + 서버 `flock` 잠금 |
-| 공개 로그 노출 | 방화벽 규칙(관리자 IP)·키·`.env`를 출력하지 않음 |
-| fork PR 악용 | 배포는 이 저장소 main의 push에 대한 CI 성공일 때만(fork·PR 이벤트 제외). 스크립트는 항상 main에서 가져옴 |
+| PC가 꺼진 동안 main에 병합 | plan은 GitHub 컴퓨터에서 끝나고, deploy 작업은 맞는 러너를 기다립니다. GitHub 문서 기준 Self-hosted 러너를 기다리는 작업은 **24시간** 뒤 실패합니다. 실패 알림은 GitHub 알림 설정에 따르며 이 워크플로가 보장하지 않습니다. |
+| 그사이 배포가 여러 번 | deploy 작업의 동시 실행 그룹(`deploy-production`)에서 진행 중인 것은 취소하지 않고, **기다리는 deploy는 나중에 들어온 하나만** 남습니다(검증을 통과한 작업만 그룹에 들어감). rollback·check는 각각 별도 그룹이라 새 deploy가 대기 중인 rollback을 취소하지 않습니다(§0 직렬화와 롤백 보존). |
+| PC를 켰는데 남은 자동 배포가 오래된 커밋 | plan(요청 시점), 러너(실행 직전), 서버(잠금을 잡은 뒤) 세 번 main 최신 커밋과 비교해, 더 새 커밋이 있으면 **건너뜁니다**. 새 커밋의 CI가 성공하면 그 배포가 실행됩니다. 새 커밋의 CI가 실패했다면 아무것도 배포되지 않으니 필요하면 수동 `deploy`. |
+| 24시간이 지나 실패 | 서버는 바뀌지 않았습니다. PC를 켠 뒤 수동 `deploy`(sha 비움). |
+| 배포 도중 PC가 꺼지거나 네트워크가 끊김 | SSH가 끊기면 서버의 `deploy.sh`가 중간에 멈출 수 있습니다. **이 경우의 동작은 시험하지 않았습니다.** 관리자 SSH나 `check`로 상태를 보고, 이상하면 `rollback` 또는 서버에서 `deploy.sh`를 다시 실행합니다(DEPLOY.md). |
+| 예상하지 못한 시점의 배포가 싫다면 | §5-1 Required reviewers |
 
-**남는 한계**
-- 러너가 갑자기 죽으면(`always()`도 못 도는 경우) 러너 IP가 22번에 남을 수 있습니다. §7로 확인·복구합니다.
-- 방화벽은 "전체 다시 쓰기" API로 바꿉니다. 쓰기 직전 다시 읽어 비교하고 쓴 뒤 검증하지만, API에 조건부 쓰기가 없어 아주 짧은 틈은 남습니다. 배포 중 콘솔 변경을 피합니다.
+## 8. 남는 위험 (인정하고 운영)
+
+- **외부 PR 승인 실수:** 승인된 포크 PR의 작업은 내 러너에서 실행됩니다. 배포 작업의 격리 확인 단계를 거치지 않으므로, 피해 범위는 §2의 격리 상태에 달려 있습니다.
+- **계정 탈취:** 저장소 쓰기 권한이 있으면 워크플로를 바꿔 러너를 쓸 수 있습니다(2단계 인증).
+- **러너가 작업마다 새로 만들어지지 않습니다(ephemeral 아님).** 악성 작업이 남긴 프로그램이 다음 배포 때 키를 읽을 수 있습니다. 의심되면 러너 배포판을 지우고 다시 만든 뒤 배포 키를 교체합니다(§3-2).
+- **최신 확인과 서버 배포 사이의 짧은 틈:** 서버가 잠금을 잡은 뒤 "main 최신"을 확인한 직후 새 커밋이 병합되면, 이전 커밋이 먼저 배포되고 이어서 새 커밋 배포가 실행됩니다.
+- **강제 명령 갱신 전에는 롤백 보존이 동작하지 않습니다:** `deploy-auto` 요청은 예전 강제 명령에서 "허용하지 않는 요청"으로 거부됩니다(배포 안 됨, 안전한 쪽 실패). 이 PR 병합 후 §3-2로 강제 명령을 갱신해야 자동 배포가 동작합니다.
+- **호환 모드의 틈:** 작업 트리의 스크립트가 잠금 넘겨받기 이전 버전이면 강제 명령이 잠금을 놓고 실행하므로, 그 틈에 다른 요청이 잠금을 잡으면 예전 스크립트가 "다른 배포·롤백이 진행 중"(75)으로 실패합니다(겹쳐 실행되지는 않음, 롤백 보류도 사라지지 않음).
+- **대기 표시의 PID 확인:** 롤백 대기 표시는 PID로 살아 있는지 판단합니다. 비정상 종료 후 같은 PID가 다른 프로세스에 재사용되면 그 프로세스가 끝날 때까지 자동 배포가 보류될 수 있습니다(안전한 쪽). 수동 deploy는 대기 표시를 지우지 않으므로, `check`에 "대기 중인 롤백 있음"이 계속 보이면 진행 중인 롤백이 없는지 확인한 뒤 관리자가 서버에서 `deploy/state/rollback_pending/`의 파일을 지웁니다.
+- **격리 확인의 범위:** `/usr/lib/wsl/drivers`(WSL2가 항상 붙이는 읽기 전용 Windows 드라이버 저장소)는 허용합니다. interop은 공유되는 binfmt 등록 대신 설정 파일과 실제 실행 시험으로 판단하며, 실행 시험은 WSL이 내는 오류 문구에 기대므로 WSL 버전이 바뀌면 다시 확인해야 합니다(문구가 다르면 배포를 멈추는 쪽으로 실패). 비밀번호가 필요한 sudo 규칙은 확인 단계가 잡지 못하므로, 전용 사용자는 비밀번호 없이(`--disabled-password`) 만들고 §4에서 `sudo -l -U ghrunner`로 확인합니다.
+- **정책 검사의 범위:** 조건 문자열이 있는지 확인하며, 조건식 전체의 논리를 증명하지는 않습니다. 워크플로 변경 PR은 사람이 함께 봅니다.
+- **강제 명령 갱신은 수동:** 갱신을 잊으면 서버는 예전(이미 검토한) 강제 명령을 계속 씁니다.
+- 관리자 IP(집 인터넷)가 바뀌면 배포가 실패합니다(안전한 쪽 실패).
 - 배포 중 약 20~30초 동안 실패한 새 버전이 응답할 수 있습니다(DEPLOY.md §3, 자동 롤백 전).
 
-## 7. 방화벽 수동 확인·복구 (러너가 비정상 종료됐거나 실패했을 때)
+## 9. 이전 방식 기록 (#42, 사용하지 않음)
 
-언제 하나요?
-- 워크플로가 "러너 IP가 남아 있습니다", "방화벽이 기대와 다릅니다", "계속 바뀌어 중단" 오류로 끝났을 때
-- 러너가 갑자기 죽거나 오래 멈춰 정리 단계가 실행되지 않았을 때(로그에 "SSH 22번에서 러너 IP 제거"가 없음)
-
-순서
-1. **Actions 로그에서 러너 IP를 확인합니다.** "러너 공인 IP 확인" 단계에 `러너 IP: x.x.x.x`로 나옵니다.
-2. **Lightsail 콘솔** → `lemit-server` → **네트워킹** → IPv4 방화벽의 SSH 22 규칙을 엽니다.
-   - 허용 IP 목록에서 그 러너 IP만 지웁니다. **관리자 IP는 지우지 않습니다.**
-   - 22번 규칙이 러너 IP만 허용하고 있었다면(원래 22번 규칙이 없던 경우) 규칙 자체를 삭제합니다.
-3. **§5 기준 표와 비교합니다.** 80·443·IPv6 규칙이 바뀌었으면 기준 표대로 되돌립니다.
-4. **PC에서 관리자 SSH 접속을 확인합니다.** 지금 열린 창은 닫지 말고, 새 창에서 접속합니다.
-5. 원인이 정리되면 Actions에서 `check`를 다시 실행합니다. 정상이면 22번 규칙이 기준 표와 같은 상태로 끝납니다.
-
-콘솔 대신 AWS CLI를 쓸 수 있다면, 같은 스크립트로 그 IP만 정확히 뺄 수 있습니다. 관리자 PC에 AWS CLI가 설정되어 있을 때만 해당합니다.
-```bash
-python3 scripts/lightsail_firewall.py close --instance lemit-server --cidr <러너IP>/32
-```
-
+GitHub-hosted 러너가 OIDC로 AWS 역할을 받아, 배포하는 동안만 SSH 22번에 러너 IP를 추가하고 끝나면 빼는 방식이었습니다. production Environment와 AWS 설정을 하기 전에 Self-hosted 방식으로 바뀌어 실제 배포에 쓰이지 않았습니다.
+- AWS에 OIDC 공급자, 역할 `lemit-github-deploy`, 서버 태그 `lemit-deploy=allowed`를 만들었다면 이제 필요 없습니다.
+- `scripts/lightsail_firewall.py`(22번 규칙에서 IP 하나만 추가·제거, 테스트 포함)는 남겨 둡니다. 관리자 PC에 AWS CLI가 있으면 쓸 수 있습니다: `python3 scripts/lightsail_firewall.py close --instance lemit-server --cidr <IP>/32`
