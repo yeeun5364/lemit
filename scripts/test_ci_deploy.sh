@@ -93,9 +93,11 @@ expect "main 최신 커밋이 아니라"                 "deploy-auto $C1"   # m
 expect "DRY_RUN: bash scripts/rollback.sh $TAG"  "rollback $TAG"     # 롤백은 보류를 건다
 if [ -f "$HOLD" ]; then pass=$((pass+1)); echo "[통과] 롤백 뒤 보류 파일 있음"; else fail=$((fail+1)); echo "[실패] 롤백 뒤 보류 파일 없음"; fi
 expect "자동 배포 보류 중"                       "deploy-auto $C2"   # 보류 중 → 배포하지 않음(0)
-expect "보류를 풉니다"                           "deploy $C2"        # 수동 배포가 보류를 푼다
-if [ ! -f "$HOLD" ]; then pass=$((pass+1)); echo "[통과] 수동 배포 뒤 보류 풀림"; else fail=$((fail+1)); echo "[실패] 수동 배포 뒤에도 보류 남음"; fi
-expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 다시 자동 배포 가능
+expect "성공하면 풉니다"                         "deploy $C2"        # DRY_RUN은 배포하지 않으므로
+if [ -f "$HOLD" ]; then pass=$((pass+1)); echo "[통과] 배포하지 않은 수동 배포(DRY_RUN)는 보류를 풀지 않음"
+else fail=$((fail+1)); echo "[실패] 배포하지 않았는데 보류가 풀림"; fi
+rm -f "$HOLD"                                   # 성공 후 해제는 아래 '실제 실행' 시험에서 확인
+expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 보류가 없으면 다시 자동 배포 가능
 
 # 서버 잠금 대기: 다른 배포가 잠금을 잡고 있으면 기다렸다가 진행, 시간 안에 못 얻으면 실패
 LOCK="$T/server/deploy/state/deploy.lock"
@@ -164,7 +166,9 @@ if command -v flock > /dev/null; then
         fi
         for name in deploy rollback; do
             printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'cd "$(dirname "$0")/.."' 'STATE_DIR=deploy/state' \
-                "$take_lock" 'take_lock' "echo \"$name \$1\" >> \"$ACTIONS\"" 'sleep 1' > "$T/server/scripts/$name.sh"
+                "$take_lock" 'take_lock' "echo \"$name \$1\" >> \"$ACTIONS\"" \
+                '[ -z "${STUB_REHOLD:-}" ] || printf "%s\n" "$STUB_REHOLD" > deploy/state/auto_deploy_hold' \
+                'sleep 1' '[ "${STUB_FAIL:-0}" != 1 ] || { echo "가짜 배포 실패"; exit 1; }' > "$T/server/scripts/$name.sh"
         done
         local has=old
         grep -q DEPLOY_LOCK_HELD "$T/server/scripts/deploy.sh" && has=new
@@ -188,6 +192,35 @@ if command -v flock > /dev/null; then
     if [ "$(cat "$ACTIONS")" = "$(printf 'deploy %s\nrollback %s\ndeploy %s\nrollback %s' "$C2" "$TAG" "$C2" "$TAG")" ]; then
         pass=$((pass+1)); echo "[통과] (실행) 새·예전 작업 트리 모두 배포·롤백 스크립트가 실제로 실행됨"
     else fail=$((fail+1)); echo "[실패] (실행) 실행 기록: $(cat "$ACTIONS")"; fi
+
+    # 보류는 수동 배포가 성공한 뒤에만 풀림 (PR #58 4차 리뷰). 새·예전 작업 트리 모두
+    hold_case() {  # hold_case <설명> <new|old> <fail 0|1> <배포 중 새 보류 내용 또는 ''> <기대: kept|released|replaced>
+        local out code now
+        make_stubs "$2"
+        printf '%s\n' "기존 보류 (요청 1)" > "$HOLD"
+        out="$(SSH_ORIGINAL_COMMAND="deploy $C2" CI_DEPLOY_DRY_RUN=0 STUB_FAIL="$3" STUB_REHOLD="$4" \
+            bash "$T/lemit-ci-deploy" 2>&1)"; code=$?
+        now="$(cat "$HOLD" 2> /dev/null || echo '(없음)')"
+        local ok=0
+        case "$5" in
+            kept) [ "$code" -ne 0 ] && [ "$now" = "기존 보류 (요청 1)" ] && grep -qF "보류를 유지합니다" <<< "$out" && ok=1 ;;
+            released) [ "$code" -eq 0 ] && [ ! -f "$HOLD" ] && grep -qF "보류를 풉니다" <<< "$out" && ok=1 ;;
+            replaced) [ "$code" -eq 0 ] && [ "$now" = "$4" ] && grep -qF "그 보류는 유지합니다" <<< "$out" && ok=1 ;;
+        esac
+        if [ "$ok" = 1 ]; then pass=$((pass+1)); echo "[통과] 보류($1): 종료 $code, 보류 $now"
+        else fail=$((fail+1)); echo "[실패] 보류($1): 기대 $5, 종료 $code, 보류 $now, 출력: $out"; fi
+    }
+    hold_case "수동 배포 실패 → 유지"                 new 1 "" kept
+    hold_case "수동 배포 성공 → 해제"                 new 0 "" released
+    hold_case "호환 모드, 수동 배포 실패 → 유지"      old 1 "" kept
+    hold_case "호환 모드, 수동 배포 성공 → 해제"      old 0 "" released
+    hold_case "배포 중 새 롤백 보류 → 새 보류 유지"   new 0 "새 롤백 보류 (요청 2)" replaced
+    hold_case "호환 모드, 배포 중 새 롤백 보류 → 유지" old 0 "새 롤백 보류 (요청 2)" replaced
+    # 실패로 보류가 남아 있으면 자동 배포는 계속 건너뜀
+    printf '%s\n' "기존 보류 (요청 1)" > "$HOLD"
+    STUB_FAIL=1 CI_DEPLOY_DRY_RUN=0 SSH_ORIGINAL_COMMAND="deploy $C2" bash "$T/lemit-ci-deploy" > /dev/null 2>&1
+    expect "자동 배포 보류 중"                       "deploy-auto $C2"
+    rm -f "$HOLD"
 
     # 실제 경합: 배포 A 진행 중 + 수동 배포 D 대기 + 롤백 B 대기 → A가 끝난 뒤 D·B가 어떤 순서로 잠금을 잡든
     # 마지막이 롤백이면 보류가 확정돼 있어야 하고(리뷰 시나리오), 마지막이 수동 배포면 보류가 풀려 있어야 한다

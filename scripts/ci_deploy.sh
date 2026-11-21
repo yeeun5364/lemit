@@ -10,7 +10,7 @@
 #
 # 허용하는 요청 (SSH가 SSH_ORIGINAL_COMMAND로 넘겨줌). 그 밖의 요청은 모두 거부(종료 코드 2):
 #   deploy <커밋 SHA 40자리>       → (수동 배포) origin/main에 포함된 커밋인지 확인 후 scripts/deploy.sh <SHA>.
-#                                    자동 배포 보류(아래)를 푼다
+#                                    배포가 **성공하면** 자동 배포 보류(아래)를 푼다. 실패하면 보류 유지
 #   deploy-auto <커밋 SHA 40자리>  → (자동 배포) 보류 중이거나 origin/main 최신 커밋이 아니면 아무것도 바꾸지 않고 끝낸다(0).
 #                                    아니면 deploy와 같다
 #   rollback <이미지 태그 12자리>   → 자동 배포 보류를 건 뒤 scripts/rollback.sh <태그>
@@ -25,7 +25,8 @@
 #   1) 대기 표시 deploy/state/rollback_pending/<PID>: rollback이 잠금을 기다리기 **전에** 만들고, 잠금을 얻으면 지운다.
 #      수동 배포는 이것을 지우지 않는다. 그 PID 프로세스가 없으면(비정상 종료) 오래된 표시로 보고 지운다.
 #   2) 확정 보류 deploy/state/auto_deploy_hold: rollback이 잠금을 잡은 **뒤**, 롤백을 실행하기 직전에 만든다.
-#      수동 배포(deploy)로만 풀린다 (장애 원인을 확인한 사람이 다시 배포를 시작).
+#      수동 배포(deploy)가 **성공한 뒤에만** 풀린다 (장애 원인을 확인한 사람이 다시 배포를 시작, PR #58 4차 리뷰).
+#      수동 배포는 시작할 때 본 보류 내용과 성공 후의 내용이 같을 때만 지운다 (배포 중 새 롤백이 건 보류는 남김).
 #   deploy-auto는 잠금을 잡은 뒤 둘 중 하나라도 있으면 배포하지 않는다. 그래서 롤백과 자동 배포가 어떤 순서로 잠금을
 #   잡든 끝 상태는 '롤백됨, 자동 배포는 건너뜀'이고, 수동 배포가 대기 중인 롤백보다 먼저 잠금을 잡아도 그 롤백이
 #   실행되면서 보류가 다시 확정된다.
@@ -117,6 +118,37 @@ lock_server() {
     export DEPLOY_LOCK_HELD=1
 }
 
+# 수동 배포: deploy.sh를 (exec가 아니라) 자식으로 실행하고, 종료 코드 0일 때만 보류를 푼다.
+# deploy.sh는 모든 실패(사전 점검·빌드·check --deploy·스모크 후 자동 롤백·공개 경로 확인)를 0이 아닌 코드로 끝낸다.
+deploy_then_release_hold() {
+    local script=scripts/deploy.sh compat=0 rc
+    if ! grep -q 'DEPLOY_LOCK_HELD' "$script" 2> /dev/null; then
+        echo "[ci_deploy] 작업 트리의 $script 는 잠금 넘겨받기 이전 버전이라 잠금을 놓고 실행합니다 (호환 모드, docs/CD.md §3-2)"
+        compat=1
+        exec 9>&-
+        unset DEPLOY_LOCK_HELD
+    fi
+    if [ "${CI_DEPLOY_DRY_RUN:-0}" = "1" ]; then echo "DRY_RUN: bash $script $ARG"; exit 0; fi   # 배포 안 함 → 보류 유지
+    set +e
+    bash "$script" "$ARG"
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        [ -z "$HOLD_ID" ] || echo "[ci_deploy] 수동 배포 실패(종료 $rc): 자동 배포 보류를 유지합니다"
+        exit "$rc"
+    fi
+    [ -n "$HOLD_ID" ] || exit 0
+    # 호환 모드에서는 배포하는 동안 잠금을 놓았으므로 다시 잡고 확인한다
+    [ "$compat" = 0 ] || lock_server
+    if [ -f "$HOLD" ] && [ "$(cat "$HOLD")" = "$HOLD_ID" ]; then
+        rm -f "$HOLD"
+        echo "[ci_deploy] 수동 배포 성공: 자동 배포 보류를 풉니다"
+    else
+        echo "[ci_deploy] 수동 배포 성공. 다만 배포하는 사이에 새 롤백 보류가 걸려 그 보류는 유지합니다"
+    fi
+    exit 0
+}
+
 check_main_commit() {
     if [ "${CI_DEPLOY_SKIP_FETCH:-0}" != "1" ]; then
         # 대상 ref를 명시해 원격 추적 ref를 반드시 갱신한다 (fetch 설정과 무관하게)
@@ -132,15 +164,18 @@ case "${ACTION:-}" in
         [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
         check_main_commit
         lock_server
+        # 보류는 수동 배포가 **성공한 뒤에만** 푼다 (PR #58 4차 리뷰). 지금의 보류 내용을 기억해 두고,
+        # 배포가 성공했을 때 그 보류가 그대로일 때만 지운다 (그사이 새 롤백이 건 보류는 남김)
+        HOLD_ID=""
         if [ -f "$HOLD" ]; then
-            rm -f "$HOLD"
-            echo "[ci_deploy] 수동 배포라 자동 배포 보류를 풉니다"
+            HOLD_ID="$(cat "$HOLD")"
+            echo "[ci_deploy] 자동 배포 보류 중입니다. 이 수동 배포가 성공하면 풉니다 (실패하면 유지)"
         fi
         # 대기 중인 롤백의 표시는 지우지 않는다 (그 롤백이 실행되면 보류가 다시 확정됨)
         if rollback_pending; then
             echo "[ci_deploy] 대기 중인 롤백이 있습니다. 그 롤백이 실행되면 자동 배포가 다시 보류됩니다"
         fi
-        run_script scripts/deploy.sh "$ARG"
+        deploy_then_release_hold
         ;;
     deploy-auto)
         [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy-auto에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
@@ -175,7 +210,8 @@ case "${ACTION:-}" in
         trap 'rm -f "$PENDING"' EXIT
         lock_server
         # 2) 잠금 안에서 보류 확정 → 대기 표시 정리 → 롤백 (exec 뒤에는 trap이 없으므로 먼저 지운다)
-        printf '%s rollback %s 이후 자동 배포 보류\n' "$(date '+%F %T %Z')" "$ARG" > "$HOLD.tmp"
+        # 요청 PID를 넣어 보류마다 내용이 달라지게 한다 (수동 배포가 '자기가 본 보류'만 풀도록)
+        printf '%s rollback %s 이후 자동 배포 보류 (요청 %s)\n' "$(date '+%F %T %Z')" "$ARG" "$$" > "$HOLD.tmp"
         mv -f "$HOLD.tmp" "$HOLD"
         rm -f "$PENDING"
         trap - EXIT
