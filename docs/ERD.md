@@ -208,6 +208,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | 대상 | 규칙 | 구현 위치 |
 |---|---|---|
 | `User.email` | 대소문자를 무시하고 유일 (로그인도 대소문자 무시) | DB `UniqueConstraint(Lower(email))` + 회원가입 폼 검증 (UC-01, 2026-11-19) |
+| `User.email` = `demo@example.com` | 시연용 데모 계정(`seed_demo`) 전용. 일반 회원가입 불가. `seed_demo`는 Django 그룹 `lemit-demo`가 있는 계정만 데모로 다루고, 표시 없는 같은 이메일 계정이 있으면 아무것도 바꾸지 않고 멈춤 | 회원가입 폼 검증 + 명령의 그룹 확인 (#24, PR #65 리뷰) |
 | `Student` | `is_minor`이면 `guardian_phone` 필수 | DB `CheckConstraint` + 폼 검증 |
 | `Student.phone`, `guardian_phone` | 숫자 9~15자리. 숫자·공백·`-`·`()`만, `+`는 맨 앞(국제번호 허용). 성인이면 보호자 정보는 저장하지 않음 | 모델 검증 `validate_phone` + 폼 (UC-02, PR #37 리뷰, 2026-11-19) |
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
