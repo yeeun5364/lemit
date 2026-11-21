@@ -11,10 +11,11 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 
-from accounts.management.commands.seed_demo import DEMO_EMAIL
+from accounts.forms import SignupForm
+from accounts.management.commands.seed_demo import DEMO_EMAIL, DEMO_GROUP
 from inbox import classifier
 from inbox.models import Conversation, Message
-from lessons.models import Enrollment, LessonSession
+from lessons.models import Enrollment, Label, LessonSession
 from students.models import Student
 
 User = get_user_model()
@@ -151,6 +152,49 @@ class SeedDemoRerunTests(TestCase):
         with self.assertRaises(CommandError):
             seed()
         self.assertEqual(Student.objects.filter(teacher__email=DEMO_EMAIL).count(), 0)
+
+    def test_created_account_is_marked_as_demo(self):
+        seed(password="p-1234-5678")
+        self.assertTrue(User.objects.get(email=DEMO_EMAIL).groups.filter(name=DEMO_GROUP).exists())
+
+    def test_existing_unmarked_account_is_not_taken_over(self):
+        """PR #65 리뷰 P1: 같은 이메일의 일반 계정이 이미 있으면 데이터·비밀번호를 바꾸기 전에 멈춘다."""
+        owner = User.objects.create_user(email="Demo@Example.com", password="owner-pass-1234", name="실제 사용자")
+        student = Student.objects.create(teacher=owner, name="실제 학생")
+        e = Enrollment.objects.create(
+            student=student, title="실제 레슨", total_count=4, start_date=datetime.date(2026, 11, 1)
+        )
+        start = timezone.now()
+        LessonSession.objects.create(enrollment=e, start_at=start, end_at=start + datetime.timedelta(hours=1))
+        Conversation.objects.create(teacher=owner, student=student, subject="실제 대화")
+        Label.objects.create(teacher=owner, name="실제 라벨", color="blue")
+        before = (self.counts(owner), Label.objects.filter(teacher=owner).count(), owner.name)
+
+        for kwargs, env in (({"password": "takeover-1234"}, {}), ({}, {"LEMIT_DEMO_PASSWORD": "env-takeover-1234"})):
+            with self.subTest(kwargs=kwargs, env=env), mock.patch.dict("os.environ", env):
+                with self.assertRaisesMessage(CommandError, "데모 계정이 아닙니다"):
+                    seed(**kwargs)
+                owner.refresh_from_db()
+                self.assertEqual((self.counts(owner), Label.objects.filter(teacher=owner).count(), owner.name), before)
+                self.assertTrue(owner.check_password("owner-pass-1234"))  # 비밀번호 그대로
+                self.assertFalse(owner.groups.filter(name=DEMO_GROUP).exists())  # 표시도 붙지 않음
+                self.assertTrue(Student.objects.filter(pk=student.pk).exists())
+        self.assertEqual(User.objects.filter(email__iexact=DEMO_EMAIL).count(), 1)
+
+    def test_signup_rejects_demo_email(self):
+        for email in (DEMO_EMAIL, DEMO_EMAIL.upper()):
+            with self.subTest(email=email):
+                form = SignupForm(
+                    data={
+                        "email": email,
+                        "name": "가입자",
+                        "password1": "Lemit-pass-9876",
+                        "password2": "Lemit-pass-9876",
+                    }
+                )
+                self.assertFalse(form.is_valid())
+                self.assertIn("email", form.errors)
+        self.assertFalse(User.objects.filter(email__iexact=DEMO_EMAIL).exists())
 
     def test_works_when_model_unavailable(self):
         with mock.patch.object(classifier, "classify", side_effect=classifier.MessageClassifierUnavailable("없음")):

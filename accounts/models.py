@@ -2,6 +2,10 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.db.models.functions import Lower
 
+# 시연용 데모 계정 이메일 (seed_demo 전용, #24). example.com은 문서·예시용 예약 도메인이라 실제 메일이 가지 않는다.
+# 회원가입에서는 받지 않는다 (PR #65 리뷰).
+DEMO_EMAIL = "demo@example.com"
+
 
 class UserManager(BaseUserManager):
     """username 대신 email을 로그인 ID로 쓰는 매니저."""

@@ -4,6 +4,9 @@
   분류별 수강생 메시지를 만든다.
 - 다시 실행하면 **데모 계정의 데이터만** 지우고 새로 만든다. 다른 강사의 데이터는 건드리지 않는다.
   계정 자체는 지우지 않는다(비밀번호를 주지 않으면 기존 비밀번호 유지).
+- **이 명령이 만든 계정인지 표시로 확인한다 (PR #65 리뷰 P1).** 새로 만들 때 Django 그룹 DEMO_GROUP에 넣고,
+  다시 실행할 때 그 표시가 있는 계정만 다룬다. 같은 이메일의 계정이 표시 없이 이미 있으면(직접 가입한 일반 계정 등)
+  데이터·비밀번호를 바꾸기 전에 멈춘다. 관리자 계정도 거부한다. 회원가입에서도 이 이메일을 받지 않는다.
 - 날짜는 실행한 날(서버 시간대) 기준으로 계산한다. 시연 당일에 다시 실행하면 '오늘 수업'과 잔여 회차가 맞춰진다.
 - 이름은 가짜, 번호는 010-0000-XXXX 형식만 쓴다 (실제 개인정보 없음).
 - 비밀번호: --password > 환경변수 LEMIT_DEMO_PASSWORD > (새 계정이면) 무작위 생성 후 한 번 출력.
@@ -17,17 +20,19 @@ import os
 import secrets
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from accounts.models import DEMO_EMAIL
 from inbox import services
 from inbox.models import Conversation, Message
 from lessons.models import Enrollment, Label, LessonSession
 from students.models import Student
 
-DEMO_EMAIL = "demo@example.com"  # example.com은 문서·예시용 예약 도메인 (실제 메일이 가지 않음)
 DEMO_NAME = "데모 강사"
+DEMO_GROUP = "lemit-demo"  # seed_demo가 만든 계정 표시. 일반 사용자는 화면에서 바꿀 수 없다
 
 # (이름, 연락처, 미성년자, 보호자 이름, 보호자 연락처, 메모)
 STUDENTS = [
@@ -114,6 +119,11 @@ class Command(BaseCommand):
         user = User.objects.filter(email__iexact=DEMO_EMAIL).first()
         if user is not None and (user.is_staff or user.is_superuser):
             raise CommandError(f"{DEMO_EMAIL} 은 관리자 계정이라 데모 데이터로 덮어쓰지 않습니다.")
+        if user is not None and not user.groups.filter(name=DEMO_GROUP).exists():
+            raise CommandError(
+                f"{DEMO_EMAIL} 계정이 이미 있지만 seed_demo가 만든 데모 계정이 아닙니다(그룹 {DEMO_GROUP} 없음). "
+                "기존 데이터와 비밀번호를 바꾸지 않고 멈춥니다. 그 계정을 확인한 뒤 관리자가 정리하세요."
+            )
 
         generated = ""
         with transaction.atomic():
@@ -121,6 +131,7 @@ class Command(BaseCommand):
                 if not password:
                     password = generated = secrets.token_urlsafe(12)
                 user = User.objects.create_user(email=DEMO_EMAIL, password=password, name=DEMO_NAME)
+                user.groups.add(Group.objects.get_or_create(name=DEMO_GROUP)[0])
             else:
                 self._clear(user)
                 user.name = DEMO_NAME
