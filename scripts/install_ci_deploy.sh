@@ -27,5 +27,15 @@ fi
 install -o root -g root -m 0755 scripts/ci_deploy.sh "$DEST"
 [ "$(stat -c '%u:%g %a' "$DEST")" = "0:0 755" ] || { echo "[install-ci-deploy] 소유자·권한 확인 실패: $(stat -c '%U:%G %a' "$DEST")"; exit 1; }
 echo "[install-ci-deploy] 설치: $DEST ($(sha256sum "$DEST" | cut -c1-12), root:root 755)"
+# 사전 확인 (PR #58 3차 리뷰 P1): 작업 트리의 deploy.sh·rollback.sh가 잠금 넘겨받기(DEPLOY_LOCK_HELD)를 아는지.
+# 모르는 예전 버전이어도 강제 명령은 잠금을 놓고 실행하는 호환 모드로 동작하지만, 그 사이 다른 요청과 겹치면 75로 실패할 수 있다
+for s in scripts/deploy.sh scripts/rollback.sh; do
+    if grep -q 'DEPLOY_LOCK_HELD' "$s"; then
+        echo "[install-ci-deploy] 작업 트리 $s: 잠금 넘겨받기 지원"
+    else
+        echo "[install-ci-deploy] 주의: 작업 트리 $s 가 잠금 넘겨받기 이전 버전입니다. 강제 명령은 호환 모드로 동작합니다."
+        echo "  권장: 위 안내대로 origin/main을 checkout한 뒤 다시 설치하세요 (docs/CD.md §3-2)"
+    fi
+done
 echo "[install-ci-deploy] authorized_keys의 배포 키 줄은 다음 형식이어야 합니다 (docs/CD.md §3-2):"
 echo "  command=\"$DEST\",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty,no-user-rc ssh-ed25519 AAAA... lemit-github-deploy"

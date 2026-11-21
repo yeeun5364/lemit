@@ -14,15 +14,24 @@
 #   deploy-auto <커밋 SHA 40자리>  → (자동 배포) 보류 중이거나 origin/main 최신 커밋이 아니면 아무것도 바꾸지 않고 끝낸다(0).
 #                                    아니면 deploy와 같다
 #   rollback <이미지 태그 12자리>   → 자동 배포 보류를 건 뒤 scripts/rollback.sh <태그>
-#   status                         → 현재 태그·자동 배포 보류·최근 배포 기록·컨테이너 상태·공개 경로·강제 명령 버전 (읽기 전용)
+#   status                         → 현재 태그·자동 배포 보류(대기 중인 롤백 포함)·최근 배포 기록·컨테이너 상태·공개 경로·
+#                                    강제 명령 버전 (읽기 전용)
 #
 # 서버 변경 직렬화와 롤백 보존 (PR #58 리뷰 P2: 대기 중인 롤백을 새 자동 배포가 밀어내지 않게):
 # - GitHub Actions에서 rollback은 deploy와 다른 concurrency 그룹이라 GitHub가 대기 중인 롤백을 취소하지 않는다.
 #   대신 서버에서 직렬화한다: deploy·deploy-auto·rollback은 deploy/state/deploy.lock을 최대 CI_DEPLOY_LOCK_WAIT초
 #   기다려 잡고, 잡은 잠금을 deploy.sh·rollback.sh에 넘긴다(DEPLOY_LOCK_HELD=1, 파일 설명자 9).
-# - rollback은 잠금을 기다리기 전에 자동 배포 보류(deploy/state/auto_deploy_hold)부터 건다. deploy-auto는 잠금을 잡은
-#   뒤에 보류를 확인한다. 그래서 롤백과 자동 배포가 어떤 순서로 잠금을 잡든 끝 상태는 '롤백됨, 자동 배포는 건너뜀'이다.
-#   보류는 수동 배포(deploy)로만 풀린다 (장애 원인을 확인한 사람이 다시 배포를 시작).
+# - 자동 배포 보류는 두 단계다 (PR #58 3차 리뷰 P2: 대기 중인 롤백의 보류를 수동 배포가 지우지 않게):
+#   1) 대기 표시 deploy/state/rollback_pending/<PID>: rollback이 잠금을 기다리기 **전에** 만들고, 잠금을 얻으면 지운다.
+#      수동 배포는 이것을 지우지 않는다. 그 PID 프로세스가 없으면(비정상 종료) 오래된 표시로 보고 지운다.
+#   2) 확정 보류 deploy/state/auto_deploy_hold: rollback이 잠금을 잡은 **뒤**, 롤백을 실행하기 직전에 만든다.
+#      수동 배포(deploy)로만 풀린다 (장애 원인을 확인한 사람이 다시 배포를 시작).
+#   deploy-auto는 잠금을 잡은 뒤 둘 중 하나라도 있으면 배포하지 않는다. 그래서 롤백과 자동 배포가 어떤 순서로 잠금을
+#   잡든 끝 상태는 '롤백됨, 자동 배포는 건너뜀'이고, 수동 배포가 대기 중인 롤백보다 먼저 잠금을 잡아도 그 롤백이
+#   실행되면서 보류가 다시 확정된다.
+# - 잠금 넘겨받기를 모르는 예전 deploy.sh·rollback.sh가 작업 트리에 있으면(이 기능 이전 커밋, 또는 예전 커밋을 배포한 뒤)
+#   잠금을 넘기면 자기 잠금에 막혀 75로 끝난다 (PR #58 3차 리뷰 P1). 그래서 실행할 스크립트가 DEPLOY_LOCK_HELD를
+#   모르면 잠금을 놓고 실행한다(호환 모드). 그 틈에 다른 요청이 잠금을 잡으면 예전 스크립트가 75로 실패한다(겹치지는 않음).
 #
 # 요청 문자열을 셸로 실행(eval)하지 않는다. 단어로 나눈 뒤 형식을 정규식으로 검사한다.
 # deploy의 main 포함 확인: 배포 키가 유출되거나 러너가 오염돼도 main 밖의 커밋(다른 브랜치·임의 커밋)은 배포되지 않는다.
@@ -59,6 +68,7 @@ cd "$REPO_REAL"
 
 STATE_DIR="deploy/state"
 HOLD="$STATE_DIR/auto_deploy_hold"
+PENDING_DIR="$STATE_DIR/rollback_pending"
 MAIN_REF="${CI_DEPLOY_MAIN_REF:-refs/remotes/origin/main}"
 
 [ "${#REQ}" -le 80 ] || reject "너무 깁니다"
@@ -69,6 +79,29 @@ read -r ACTION ARG EXTRA <<< "$REQ" || true
 run() {
     if [ "${CI_DEPLOY_DRY_RUN:-0}" = "1" ]; then echo "DRY_RUN: $*"; exit 0; fi
     exec "$@"
+}
+
+# 서버 스크립트를 실행한다. 잠금 넘겨받기를 아는 버전이면 잠금을 쥔 채로, 모르는 예전 버전이면 잠금을 놓고 (호환 모드)
+run_script() {
+    local script="$1"
+    shift
+    if ! grep -q 'DEPLOY_LOCK_HELD' "$script" 2> /dev/null; then
+        echo "[ci_deploy] 작업 트리의 $script 는 잠금 넘겨받기 이전 버전이라 잠금을 놓고 실행합니다 (호환 모드, docs/CD.md §3-2)"
+        exec 9>&-
+        unset DEPLOY_LOCK_HELD
+    fi
+    run bash "$script" "$@"
+}
+
+# 살아 있는 롤백 대기 표시가 있으면 0. 프로세스가 없는 오래된 표시는 지운다
+rollback_pending() {
+    local f pid alive=1
+    for f in "$PENDING_DIR"/*; do
+        [ -f "$f" ] || continue
+        pid="${f##*/}"
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2> /dev/null; then alive=0; else rm -f "$f"; fi
+    done
+    return "$alive"
 }
 
 # 서버 변경 잠금을 기다려 잡는다. 잠금(설명자 9)은 exec로 넘어가 deploy.sh·rollback.sh가 끝날 때까지 유지된다
@@ -103,16 +136,24 @@ case "${ACTION:-}" in
             rm -f "$HOLD"
             echo "[ci_deploy] 수동 배포라 자동 배포 보류를 풉니다"
         fi
-        run bash scripts/deploy.sh "$ARG"
+        # 대기 중인 롤백의 표시는 지우지 않는다 (그 롤백이 실행되면 보류가 다시 확정됨)
+        if rollback_pending; then
+            echo "[ci_deploy] 대기 중인 롤백이 있습니다. 그 롤백이 실행되면 자동 배포가 다시 보류됩니다"
+        fi
+        run_script scripts/deploy.sh "$ARG"
         ;;
     deploy-auto)
         [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy-auto에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
         check_main_commit
         lock_server
-        # 잠금을 잡은 뒤에 확인한다: 기다리는 사이에 롤백이 보류를 걸었을 수 있다
+        # 잠금을 잡은 뒤에 확인한다: 기다리는 사이에 롤백이 보류를 걸었거나 대기 중일 수 있다
         if [ -f "$HOLD" ]; then
             echo "[ci_deploy] 자동 배포 보류 중이라 배포하지 않습니다: $(head -n 1 "$HOLD")"
             echo "[ci_deploy] 다시 배포하려면 수동 배포(Actions → Deploy → deploy)를 실행하세요 (docs/CD.md §5)"
+            exit 0
+        fi
+        if rollback_pending; then
+            echo "[ci_deploy] 자동 배포 보류 중이라 배포하지 않습니다: 대기 중인 롤백이 있음"
             exit 0
         fi
         # 기다리는 사이에 main에 더 새 커밋이 들어왔으면 그 커밋의 자동 배포에 맡긴다
@@ -123,23 +164,31 @@ case "${ACTION:-}" in
             echo "[ci_deploy] main 최신 커밋이 아니라 이 자동 배포는 건너뜁니다 (새 커밋의 자동 배포가 따로 실행됨)"
             exit 0
         fi
-        run bash scripts/deploy.sh "$ARG"
+        run_script scripts/deploy.sh "$ARG"
         ;;
     rollback)
         [[ "${ARG:-}" =~ ^[0-9a-f]{12}$ ]] || reject "rollback에는 이미지 태그 12자리(소문자 16진수)가 필요합니다"
-        # 잠금을 기다리기 전에 보류부터 건다 (그사이 잠금을 먼저 잡는 자동 배포도 멈추게)
-        mkdir -p "$STATE_DIR"
-        printf '%s rollback %s 요청 이후 자동 배포 보류\n' "$(date '+%F %T %Z')" "$ARG" > "$HOLD.tmp"
-        mv -f "$HOLD.tmp" "$HOLD"
-        echo "[ci_deploy] 자동 배포를 보류했습니다 (수동 배포로 풀림)"
+        # 1) 잠금을 기다리기 전에 대기 표시 (그사이 잠금을 먼저 잡는 자동 배포도 멈추게, 수동 배포는 지우지 않음)
+        mkdir -p "$PENDING_DIR"
+        PENDING="$PENDING_DIR/$$"
+        printf '%s rollback %s 대기\n' "$(date '+%F %T %Z')" "$ARG" > "$PENDING"
+        trap 'rm -f "$PENDING"' EXIT
         lock_server
-        run bash scripts/rollback.sh "$ARG"
+        # 2) 잠금 안에서 보류 확정 → 대기 표시 정리 → 롤백 (exec 뒤에는 trap이 없으므로 먼저 지운다)
+        printf '%s rollback %s 이후 자동 배포 보류\n' "$(date '+%F %T %Z')" "$ARG" > "$HOLD.tmp"
+        mv -f "$HOLD.tmp" "$HOLD"
+        rm -f "$PENDING"
+        trap - EXIT
+        echo "[ci_deploy] 자동 배포를 보류했습니다 (수동 배포로 풀림)"
+        run_script scripts/rollback.sh "$ARG"
         ;;
     status)
         [ -z "${ARG:-}" ] || reject "status에는 인자가 없습니다"
         if [ "${CI_DEPLOY_DRY_RUN:-0}" = "1" ]; then echo "DRY_RUN: status"; exit 0; fi
         echo "== 현재 배포 태그: $(cat deploy/state/current_tag 2> /dev/null || echo 없음)"
-        if [ -f "$HOLD" ]; then echo "== 자동 배포: 보류 중 ($(head -n 1 "$HOLD"))"; else echo "== 자동 배포: 보류 없음"; fi
+        if [ -f "$HOLD" ]; then echo "== 자동 배포: 보류 중 ($(head -n 1 "$HOLD"))"
+        elif rollback_pending; then echo "== 자동 배포: 보류 중 (대기 중인 롤백 있음)"
+        else echo "== 자동 배포: 보류 없음"; fi
         echo "== 최근 배포 기록"; tail -n 5 deploy/state/history.log 2> /dev/null || echo "(기록 없음)"
         echo "== 컨테이너"; docker compose --profile proxy ps --format '{{.Service}} {{.Status}}' || true
         echo "== 이미지"; docker image ls lemit-web --format '{{.Tag}} {{.CreatedSince}}' | head -n 5 || true

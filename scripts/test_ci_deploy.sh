@@ -129,6 +129,89 @@ if command -v flock > /dev/null; then
     }
     race "롤백 대기 중 자동 배포 도착" "rollback $TAG" "deploy-auto $C2"
     race "자동 배포 대기 중 롤백 도착" "deploy-auto $C2" "rollback $TAG"
+
+    # 대기 중인 롤백의 표시를 수동 배포가 지우지 않음 (PR #58 3차 리뷰 P2). 잠금을 기다리는 롤백 B의 상태
+    # (살아 있는 PID의 대기 표시)를 만들어 두고, 수동 배포 D가 먼저 잠금을 잡는 순서를 결정적으로 재현한다
+    PENDING_DIR="$T/server/deploy/state/rollback_pending"
+    rm -f "$HOLD"; mkdir -p "$PENDING_DIR"
+    sleep 30 &
+    WAITER=$!
+    echo "대기" > "$PENDING_DIR/$WAITER"
+    expect "대기 중인 롤백이 있습니다"               "deploy $C2"        # D가 먼저 잠금 → 표시는 남김
+    if [ -f "$PENDING_DIR/$WAITER" ]; then pass=$((pass+1)); echo "[통과] 수동 배포 뒤에도 대기 중인 롤백 표시 유지"
+    else fail=$((fail+1)); echo "[실패] 수동 배포가 대기 중인 롤백 표시를 지움"; fi
+    expect "대기 중인 롤백이 있음"                   "deploy-auto $C2"   # 자동 배포는 대기 중인 롤백 때문에 건너뜀
+    kill "$WAITER" 2> /dev/null; wait "$WAITER" 2> /dev/null
+    expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 프로세스가 없는 표시는 오래된 것 → 정리 후 배포
+    if [ ! -e "$PENDING_DIR/$WAITER" ]; then pass=$((pass+1)); echo "[통과] 오래된 대기 표시 정리"
+    else fail=$((fail+1)); echo "[실패] 오래된 대기 표시가 남음"; fi
+
+    # 자식 스크립트까지 실제로 실행 (DRY_RUN 아님, PR #58 3차 리뷰 P1). 서버 저장소의 deploy.sh·rollback.sh를
+    # 잠금 코드만 진짜와 같은 가짜로 바꿔, 실행 순서를 actions.log에 남긴다
+    ACTIONS="$T/actions.log"
+    make_stubs() {  # make_stubs new|old
+        local name take_lock
+        if [ "$1" = new ]; then
+            take_lock="$(sed -n '/^take_lock() {/,/^}/p' scripts/rollback.sh)"   # 이 PR의 실제 잠금 코드
+        else
+            # 이 기능 이전(main)의 잠금 코드 그대로: 잠금 넘겨받기를 모름
+            take_lock='take_lock() {
+    if command -v flock > /dev/null 2>&1; then
+        exec 9> "$STATE_DIR/deploy.lock"
+        flock -n 9 || { echo "[lock] 다른 배포·롤백이 진행 중입니다. 끝난 뒤 다시 실행하세요."; exit 75; }
+    fi
+}'
+        fi
+        for name in deploy rollback; do
+            printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'cd "$(dirname "$0")/.."' 'STATE_DIR=deploy/state' \
+                "$take_lock" 'take_lock' "echo \"$name \$1\" >> \"$ACTIONS\"" 'sleep 1' > "$T/server/scripts/$name.sh"
+        done
+        local has=old
+        grep -q DEPLOY_LOCK_HELD "$T/server/scripts/deploy.sh" && has=new
+        [ "$has" = "$1" ] || { echo "가짜 스크립트 생성 오류 ($1)"; exit 1; }
+    }
+    real() {  # real <기대 출력 일부> <요청> : 자식까지 실행, 종료 0이어야 함
+        local out code
+        out="$(SSH_ORIGINAL_COMMAND="$2" CI_DEPLOY_DRY_RUN=0 bash "$T/lemit-ci-deploy" 2>&1)"; code=$?
+        if [ "$code" -eq 0 ] && grep -qF "$1" <<< "$out"; then pass=$((pass+1)); echo "[통과] (실행) $2 → $1"
+        else fail=$((fail+1)); echo "[실패] (실행) $2: 기대 $1, 종료 $code, 출력: $out"; fi
+    }
+    rm -f "$HOLD" "$ACTIONS"
+    make_stubs new
+    real "잡은 잠금으로 진행" "deploy $C2"
+    real "잡은 잠금으로 진행" "rollback $TAG"
+    rm -f "$HOLD"
+    # 예전 작업 트리 + 새 강제 명령 (배포 체크아웃 전 첫 Actions 배포·롤백): 자기 잠금에 막혀 75로 끝나지 않아야 함
+    make_stubs old
+    real "호환 모드" "deploy $C2"
+    real "호환 모드" "rollback $TAG"
+    if [ "$(cat "$ACTIONS")" = "$(printf 'deploy %s\nrollback %s\ndeploy %s\nrollback %s' "$C2" "$TAG" "$C2" "$TAG")" ]; then
+        pass=$((pass+1)); echo "[통과] (실행) 새·예전 작업 트리 모두 배포·롤백 스크립트가 실제로 실행됨"
+    else fail=$((fail+1)); echo "[실패] (실행) 실행 기록: $(cat "$ACTIONS")"; fi
+
+    # 실제 경합: 배포 A 진행 중 + 수동 배포 D 대기 + 롤백 B 대기 → A가 끝난 뒤 D·B가 어떤 순서로 잠금을 잡든
+    # 마지막이 롤백이면 보류가 확정돼 있어야 하고(리뷰 시나리오), 마지막이 수동 배포면 보류가 풀려 있어야 한다
+    make_stubs new
+    for i in 1 2 3; do
+        rm -f "$HOLD" "$ACTIONS"; rm -rf "$PENDING_DIR"
+        flock "$LOCK" sleep 2 &
+        holder=$!
+        sleep 0.3
+        SSH_ORIGINAL_COMMAND="deploy $C2" CI_DEPLOY_DRY_RUN=0 CI_DEPLOY_LOCK_WAIT=20 bash "$T/lemit-ci-deploy" > "$T/d.out" 2>&1 &
+        pd=$!
+        sleep 0.3
+        SSH_ORIGINAL_COMMAND="rollback $TAG" CI_DEPLOY_DRY_RUN=0 CI_DEPLOY_LOCK_WAIT=20 bash "$T/lemit-ci-deploy" > "$T/b.out" 2>&1 &
+        pb=$!
+        wait "$holder" "$pd" "$pb"
+        last="$(tail -n 1 "$ACTIONS" | cut -d' ' -f1)"
+        left="$(find "$PENDING_DIR" -type f 2> /dev/null | wc -l)"
+        if [ "$(wc -l < "$ACTIONS")" -eq 2 ] && [ "$left" -eq 0 ] \
+            && { { [ "$last" = rollback ] && [ -f "$HOLD" ]; } || { [ "$last" = deploy ] && [ ! -f "$HOLD" ]; }; }; then
+            pass=$((pass+1)); echo "[통과] 경합(수동 배포·롤백 대기, $i회차): 마지막 $last, 보류 $([ -f "$HOLD" ] && echo 있음 || echo 없음)"
+        else
+            fail=$((fail+1)); echo "[실패] 경합(수동 배포·롤백 대기, $i회차): 기록 $(tr '\n' ' ' < "$ACTIONS"), 보류 $([ -f "$HOLD" ] && echo 있음 || echo 없음), 남은 표시 $left"
+        fi
+    done
 else
     echo "flock이 없어 잠금 대기·경합 시나리오를 건너뜀 (Linux에서 실행)"
 fi
