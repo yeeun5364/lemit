@@ -24,7 +24,7 @@
         <ul class="nav">
           <li><a href="{% url 'home' %}" class="nav-item{% if url_name == 'home' %} is-active{% endif %}"{% if url_name == 'home' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="dashboard" %}대시보드</a></li>
           {# 수업 일정(UC-05): 일정 화면과 회차 화면(상세·추가·수정)에서 활성. 레슨권 추가는 수강생 메뉴 쪽 #}
-          {% if app_name == 'lessons' and url_name != 'enrollment_create' %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item is-active" aria-current="page">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% else %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% endif %}
+          {% if app_name == 'lessons' and 'enrollment' not in url_name and 'label' not in url_name %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item is-active" aria-current="page">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% else %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% endif %}
           <li><a href="{% url 'students:list' %}" class="nav-item{% if app_name == 'students' %} is-active{% endif %}"{% if app_name == 'students' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="users" %}수강생</a></li>
           {% with unread=inbox_unread %}
           <li><a href="{% url 'inbox:list' %}" class="nav-item{% if app_name == 'inbox' %} is-active{% endif %}"{% if app_name == 'inbox' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="inbox" %}메시지함{% if unread %}<span class="nav-count" aria-label="안 읽은 메시지 {{ unread }}개">{{ unread }}</span>{% endif %}</a></li>
@@ -46,6 +46,7 @@
             <span class="avatar" aria-hidden="true">{{ user.name|slice:":1" }}</span>
             <span class="user-text"><span class="user-name">{{ user.name }}</span><span class="user-email">{{ user.email }}</span></span>
           </div>
+          <a class="btn btn-ghost btn-sm{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}" href="{% url 'lessons:label_list' %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" size="sm" %}라벨</a>
           <form method="post" action="{% url 'logout' %}">
             {% csrf_token %}
             <button type="submit" class="btn btn-ghost btn-sm">{% include "ui/icon.html" with name="logout" size="sm" %}로그아웃</button>

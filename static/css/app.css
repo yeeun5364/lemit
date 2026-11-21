@@ -531,9 +531,9 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .day.is-selected .day-num { background: var(--text); color: #fff; }
 .day.is-today .day-num { background: var(--primary); color: #fff; }
 .day-dots { height: 6px; display: flex; gap: 3px; }
-.dot { width: 6px; height: 6px; border-radius: 50%; background: #9aa1ad; }  /* 라벨 없음 = 회색 (UC-16에서 라벨 색) */
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lc, #9aa1ad); }  /* 라벨 없음 = 회색 */
 .sched-row { gap: var(--space-3); }
-.label-bar { align-self: stretch; width: 4px; border-radius: 2px; background: #c3c8d0; flex: 0 0 4px; }
+.label-bar { align-self: stretch; width: 4px; border-radius: 2px; background: var(--lc, #c3c8d0); flex: 0 0 4px; }
 .sched-time { display: flex; flex-direction: column; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 48px; }
 .sched-end { font-weight: 400; font-size: var(--fs-xs); color: var(--text-muted); }
 .week-list { display: flex; flex-direction: column; gap: var(--space-3); }
@@ -542,8 +542,9 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .week-day-title { font-size: var(--fs-md); font-weight: 700; margin: 0; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .week-day .sessions { margin-top: var(--space-3); }
 @media (max-width: 767px) {
-  .sched-filter { margin-left: 0; width: 100%; }
-  .sched-filter select { flex: 1 1 auto; }
+  /* 수강생·라벨 필터가 한 줄에 넘치지 않도록 '이름 | 선택' 두 칸 격자로 한 줄에 하나씩 (UC-16) */
+  .sched-filter { margin-left: 0; width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .sched-filter select { width: 100%; min-width: 0; }
   .day { min-height: 44px; padding: 4px 0 6px; }
   .day-num { width: 28px; height: 28px; font-size: var(--fs-sm); }
   .rows .row.sched-row { flex-wrap: nowrap; align-items: center; }
@@ -627,3 +628,35 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }
+
+/* 라벨 8색 (UC-16, SCREENS §4·§5). 색은 라벨 전용: 막대·점·칩에만 쓰고 상태·분류 배지에는 쓰지 않는다.
+   흰 배경에서 그래픽 대비 3:1 이상이 되도록 고른 값. */
+.lc-red { --lc: #d93d42; }
+.lc-orange { --lc: #e2620e; }
+.lc-yellow { --lc: #b58900; }
+.lc-green { --lc: #2f9e44; }
+.lc-teal { --lc: #0d8f96; }
+.lc-blue { --lc: #3b6fe0; }
+.lc-purple { --lc: #8e4ec6; }
+.lc-brown { --lc: #9a6244; }
+.label-chip { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted); }
+.label-chip .dot { width: 8px; height: 8px; }
+.label-name { font-weight: 600; }
+.pass-actions { display: inline-flex; align-items: center; gap: var(--space-1, 4px); margin-left: auto; }
+.pass-actions form { margin: 0; }
+
+/* S12 라벨 관리 */
+.label-rows .row { align-items: center; }
+.label-swatch { width: 14px; height: 14px; border-radius: 50%; background: var(--lc, #9aa1ad); flex: 0 0 14px; }
+.color-field { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+.color-field legend { padding: 0; }
+.color-picker { display: flex; flex-wrap: wrap; gap: var(--space-2); border: 0; padding: 0; margin: 0; }
+.color-option { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 4px; min-width: var(--touch, 44px); cursor: pointer; font-size: var(--fs-xs); color: var(--text-muted); }
+.color-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.color-option .swatch { width: 32px; height: 32px; border-radius: 50%; background: var(--lc); display: inline-flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 3px transparent; }
+.color-option .swatch .icon { visibility: hidden; }
+.color-option input:checked + .swatch { box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 4px var(--text); }
+.color-option input:checked + .swatch .icon { visibility: visible; }
+.color-option input:checked ~ .color-name { color: var(--text); font-weight: 700; }
+.color-option input:focus-visible + .swatch { outline: 2px solid var(--primary); outline-offset: 4px; }
+.danger-zone { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }

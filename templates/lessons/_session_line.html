@@ -1,11 +1,12 @@
 {% comment %} 일정 화면의 회차 한 줄 (S05·S05-W·대시보드). s = LessonSession.
-   왼쪽 막대는 라벨 색 자리(UC-16 전에는 회색), 상태는 색이 아니라 모양으로 (SCREENS §4). {% endcomment %}
+   왼쪽 막대는 레슨권 라벨 색(라벨 없으면 회색), 상태는 색이 아니라 모양으로 (SCREENS §4, UC-16).
+   색만으로 정보를 전하지 않도록 라벨 이름도 보조 줄에 글자로 쓴다. {% endcomment %}
 <li><a class="row session-row sched-row is-{{ s.status }}" href="{% url 'lessons:session_detail' s.pk %}">
-  <span class="label-bar" aria-hidden="true"></span>
+  {% with lb=s.enrollment.label %}<span class="label-bar{% if lb %} lc-{{ lb.color }}{% endif %}" aria-hidden="true"></span>
   <span class="sched-time">{{ s.start_at|time:"H:i" }}<span class="sched-end">{{ s.end_at|time:"H:i" }}</span></span>
   <span class="row-main">
     <span class="row-title">{{ s.enrollment.student.name }} · {{ s.enrollment.title }}</span>
-    {% if s.place %}<span class="row-sub">{{ s.place }}</span>{% endif %}
+    {% if lb or s.place %}<span class="row-sub">{% if lb %}<span class="label-name">{{ lb.name }}</span>{% endif %}{% if lb and s.place %} · {% endif %}{{ s.place }}</span>{% endif %}
   </span>
   <span class="row-side">{% include "lessons/_session_state.html" %}</span>
-</a></li>
+</a></li>{% endwith %}

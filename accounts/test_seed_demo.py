@@ -76,6 +76,16 @@ class SeedDemoContentTests(TestCase):
         self.assertIn("exhausted", states.values())
         self.assertIn("", states.values())
 
+    def test_labels_color_enrollments_and_one_stays_gray(self):
+        """UC-16 시연: 라벨 색 막대·점과 라벨 없음(회색)이 함께 보이도록."""
+        labels = Label.objects.filter(teacher=self.teacher)
+        self.assertGreaterEqual(labels.count(), 2)
+        self.assertEqual(len(set(labels.values_list("color", flat=True))), labels.count())
+        enrollments = Enrollment.objects.filter(student__teacher=self.teacher)
+        self.assertTrue(enrollments.filter(label__isnull=False).exists())
+        self.assertTrue(enrollments.filter(label__isnull=True).exists())
+        self.assertFalse(enrollments.exclude(label__isnull=True).exclude(label__teacher=self.teacher).exists())
+
     def test_messages_cover_every_label_with_real_model(self):
         msgs = Message.objects.filter(conversation__teacher=self.teacher)
         student_msgs = msgs.filter(sender=Message.Sender.STUDENT)

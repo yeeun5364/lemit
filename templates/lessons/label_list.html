@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}라벨{% endblock %}
+{% block page_title %}라벨{% endblock %}
+{% block page_desc %}<p class="page-desc">수업 형태나 사람에 따라 라벨을 만들어 레슨권에 붙이면, 일정에서 그 레슨권의 회차가 라벨 색으로 보여요.</p>{% endblock %}
+{% block page_actions %}<a class="btn btn-primary" href="{% url 'lessons:label_create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}라벨 추가</a>{% endblock %}
+{% block content %}
+<div class="card card-flush">
+  {% if labels %}
+  <ul class="rows label-rows">
+    {% for lb in labels %}
+    <li><a class="row" href="{% url 'lessons:label_edit' lb.pk %}">
+      <span class="label-swatch lc-{{ lb.color }}" aria-hidden="true"></span>
+      <span class="row-main">
+        <span class="row-title">{{ lb.name }}</span>
+        <span class="row-sub">{{ lb.get_color_display }}</span>
+      </span>
+      <span class="row-side"><span class="muted small">레슨권 {{ lb.enrollment_count }}개</span></span>
+    </a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="tag" %}</span>
+    <p class="empty-title">아직 라벨이 없어요</p>
+    <p class="muted small">라벨이 없어도 모든 기능은 그대로 동작하고, 회차는 회색으로 보여요.</p>
+    <a class="btn btn-secondary btn-sm" href="{% url 'lessons:label_create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}라벨 추가</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{% if label %}라벨 수정{% else %}라벨 추가{% endif %}{% endblock %}
+{% block back %}<a class="back-link" href="{{ next }}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}돌아가기</a>{% endblock %}
+{% block page_title %}{% if label %}라벨 수정{% else %}라벨 추가{% endif %}{% endblock %}
+{% block page_desc %}<p class="page-desc">이름과 색을 고르세요. <span class="req" aria-hidden="true">*</span> 표시는 필수 항목입니다.</p>{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}">
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% include "ui/field.html" with field=form.name %}
+    <fieldset class="field color-field"{% if form.color.errors %} aria-invalid="true" aria-describedby="{{ form.color.auto_id }}_error"{% endif %}>
+      <legend class="field-label">색<span class="req" aria-hidden="true">*</span><span class="sr-only">(필수)</span></legend>
+      <div class="color-picker">
+        {% for choice in form.color %}
+        <label class="color-option lc-{{ choice.data.value }}">
+          {{ choice.tag }}<span class="swatch">{% include "ui/icon.html" with name="check" size="sm" %}</span><span class="color-name">{{ choice.choice_label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      {% if form.color.errors %}<ul class="errorlist" id="{{ form.color.auto_id }}_error">{% for e in form.color.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+    </fieldset>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">저장</button>
+      <a class="btn btn-ghost" href="{{ next }}">취소</a>
+    </div>
+  </form>
+  {% if label %}
+  <form method="post" action="{% url 'lessons:label_delete' label.pk %}" class="danger-zone"
+        data-confirm="'{{ label.name }}' 라벨을 삭제할까요?{% if enrollment_count %} 레슨권 {{ enrollment_count }}개가 라벨 없음(회색)이 됩니다.{% endif %} 회차 기록은 그대로입니다.">
+    {% csrf_token %}
+    <p class="muted small">{% if enrollment_count %}이 라벨을 쓰는 레슨권 {{ enrollment_count }}개는 삭제 후 라벨 없음(회색)이 됩니다.{% else %}이 라벨을 쓰는 레슨권이 없습니다.{% endif %} 회차 기록은 그대로입니다.</p>
+    <button type="submit" class="btn btn-danger btn-sm">라벨 삭제</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

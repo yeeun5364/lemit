@@ -50,7 +50,25 @@ def _local_midnight(d):
     return timezone.make_aware(datetime.datetime.combine(d, datetime.time.min), timezone.get_current_timezone())
 
 
-def sessions_by_day(teacher, first_day, last_day, student_id=None):
+MAX_DOTS = 3
+
+
+def day_dots(sessions):
+    """달력 점 색: 그날 회차의 라벨 색을 나온 순서대로 최대 3개, 같은 라벨은 하나로 (SCREENS S05).
+
+    라벨 없는 회차는 ""(회색)이고, 라벨 없음끼리도 점 하나로 합친다.
+    """
+    dots, seen = [], set()
+    for s in sessions:
+        label = s.enrollment.label
+        key = label.pk if label else None
+        if key not in seen:
+            seen.add(key)
+            dots.append(label.color if label else "")
+    return dots[:MAX_DOTS]
+
+
+def sessions_by_day(teacher, first_day, last_day, student_id=None, label_id=None):
     """first_day~last_day(포함) 사이의 내 회차를 {날짜: [회차, ...]}로. 각 날 안은 시작 시각 순."""
     qs = (
         LessonSession.objects.filter(
@@ -64,6 +82,8 @@ def sessions_by_day(teacher, first_day, last_day, student_id=None):
     )
     if student_id:
         qs = qs.filter(enrollment__student_id=student_id)
+    if label_id:
+        qs = qs.filter(enrollment__label_id=label_id)
     days = defaultdict(list)
     for s in qs:
         days[timezone.localtime(s.start_at).date()].append(s)
