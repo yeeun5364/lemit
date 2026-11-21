@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0 (저장소 정책: 액션은 커밋 SHA로 고정)
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.14"
           cache: pip
@@ -64,8 +64,8 @@ jobs:
       DJANGO_DEBUG: "False"
       DATABASE_URL: postgres://lemit:lemit-ci@127.0.0.1:5432/lemit
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0 (저장소 정책: 액션은 커밋 SHA로 고정)
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.14"
           cache: pip
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0 (저장소 정책: 액션은 커밋 SHA로 고정)
       - name: CI용 .env 만들기 (실제 비밀값 아님, CI 안에서만 사용)
         run: |
           cat > .env <<'EOF'

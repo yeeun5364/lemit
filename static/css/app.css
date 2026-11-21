@@ -502,6 +502,46 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
   .rows .row.session-row .row-side { width: auto; padding-left: 0; }
 }
 
+/* 수업 일정 (S05·S05-W, UC-05) */
+.sched-toolbar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.sched-nav { display: flex; gap: var(--space-2); }
+.segmented { display: inline-flex; border: 1px solid var(--border-input); border-radius: var(--radius-sm); overflow: hidden; }
+.segmented a { padding: 8px 18px; color: var(--text); font-weight: 600; min-height: var(--touch); display: inline-flex; align-items: center; }
+.segmented a + a { border-left: 1px solid var(--border-input); }
+.segmented a.is-active { background: var(--primary); color: #fff; }
+.segmented a:hover { text-decoration: none; }
+.sched-filter { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.sched-filter select { width: auto; min-width: 140px; }
+.month { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.month th { padding: var(--space-3) 0; font-size: var(--fs-xs); color: var(--text-muted); font-weight: 600; }
+.month th.is-sun, .day.is-sun .day-num { color: #9aa1ad; }
+.month td { padding: 2px; text-align: center; }
+.day { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0 8px; border-radius: var(--radius-sm); color: var(--text); min-height: 52px; }
+.day:hover { background: var(--surface-hover); text-decoration: none; }
+.day-num { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-weight: 600; }
+.day.is-out .day-num { color: #b9bec7; font-weight: 400; }
+.day.is-selected .day-num { background: var(--text); color: #fff; }
+.day.is-today .day-num { background: var(--primary); color: #fff; }
+.day-dots { height: 6px; display: flex; gap: 3px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: #9aa1ad; }  /* 라벨 없음 = 회색 (UC-16에서 라벨 색) */
+.sched-row { gap: var(--space-3); }
+.label-bar { align-self: stretch; width: 4px; border-radius: 2px; background: #c3c8d0; flex: 0 0 4px; }
+.sched-time { display: flex; flex-direction: column; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 48px; }
+.sched-end { font-weight: 400; font-size: var(--fs-xs); color: var(--text-muted); }
+.week-list { display: flex; flex-direction: column; gap: var(--space-3); }
+.week-day { padding: var(--space-4) var(--space-5); }
+.week-day.is-today { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+.week-day-title { font-size: var(--fs-md); font-weight: 700; margin: 0; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.week-day .sessions { margin-top: var(--space-3); }
+@media (max-width: 767px) {
+  .sched-filter { margin-left: 0; width: 100%; }
+  .sched-filter select { flex: 1 1 auto; }
+  .day { min-height: 44px; padding: 4px 0 6px; }
+  .day-num { width: 28px; height: 28px; font-size: var(--fs-sm); }
+  .rows .row.sched-row { flex-wrap: nowrap; align-items: center; }
+  .rows .row.sched-row .row-side { width: auto; padding-left: 0; }
+}
+
 /* 8. 로그인·회원가입 ------------------------------------------------------- */
 .auth-body { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: var(--space-6) var(--space-4); background: var(--bg); }
 .auth-wrap { width: 100%; max-width: 420px; }
