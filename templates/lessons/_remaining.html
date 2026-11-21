@@ -1,0 +1,4 @@
+{% comment %} 잔여 회차 표시 (UC-07). e = with_usage()를 붙인 Enrollment. 색만이 아니라 글자·아이콘으로도 구분한다. {% endcomment %}
+{% if e.remaining_state == "exhausted" %}<span class="badge badge-amber">{% include "ui/icon.html" with name="info" size="sm" %}소진</span> <span class="remaining is-exhausted">0/{{ e.total_count }}{% if e.overflow_count %} · 초과 {{ e.overflow_count }}회{% endif %}</span>
+{% elif e.remaining_state == "low" %}<span class="remaining is-low">{% include "ui/icon.html" with name="info" size="sm" %}잔여 {{ e.remaining_count }}/{{ e.total_count }}<span class="sr-only"> (얼마 남지 않음)</span></span>
+{% else %}<span class="remaining">잔여 {{ e.remaining_count }}/{{ e.total_count }}</span>{% endif %}

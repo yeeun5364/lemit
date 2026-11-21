@@ -470,6 +470,14 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .pass-counts dt { color: var(--text-muted); font-size: var(--fs-xs); }
 .pass-counts dd { margin: 0; font-size: var(--fs-lg); font-weight: 700; }
 .pass-counts .is-zero { color: var(--warning-text); }
+.pass-counts .is-low { color: var(--warning-text); }
+/* 수강생 목록의 잔여 회차 (S08, UC-07): 2회 이하·소진은 글자·아이콘으로도 구분 */
+.pass-lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.pass-line { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; font-size: var(--fs-sm); }
+.pass-line-title { color: var(--text-muted); overflow-wrap: anywhere; }
+.remaining { font-weight: 600; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+.remaining.is-low { color: var(--warning-text); font-weight: 700; }
+.remaining.is-exhausted { color: var(--warning-text); }
 .pass-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .pass-foot form { margin: 0; }
 .ended-passes { margin-top: var(--space-4); }
