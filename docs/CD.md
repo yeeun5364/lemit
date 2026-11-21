@@ -182,7 +182,8 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 
 1. **check:** Actions → Deploy → Run workflow(브랜치 main) → `check`
    - plan 성공 → deploy 작업이 `lemit-runner`의 러너에서 시작 → "러너 격리 확인" 통과 → 서버 `status`
-2. **deploy:** `deploy`, sha 비움 → plan "CI 실행 …: 3개 작업 모두 성공" → 서버 `deploy.sh` → `배포 완료` → 서비스 주소 확인
+2. **deploy:** `deploy`, sha 비움 → plan "CI 실행 …: 3개 작업 모두 성공" → 서버 `deploy.sh` → `배포 완료`
+   - 브라우저로 `https://lemit.eta.pyhub.kr`에서 분류 동선을 확인합니다. (IP `15.135.58.179`는 SSH 주소로만 씁니다. IP로 HTTPS 접속하면 인증서가 없어 끊깁니다)
 3. **같은 버전 다시 deploy:** `OK`로 끝나는지
 4. **rollback:** `check`의 이미지 목록에서 이전 태그로 `rollback` → 다음 `check`에 "자동 배포: 보류 중" 표시 → 수동 `deploy`로 보류가 풀리는지
 5. **러너가 꺼져 있을 때:** `sudo ./svc.sh stop` 후 `check` → "Waiting for a runner"로 대기 → 서비스 시작 후 이어서 실행되는지
