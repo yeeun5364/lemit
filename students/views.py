@@ -24,7 +24,13 @@ class StudentListView(TeacherScopedQuerysetMixin, ListView):
     context_object_name = "students"
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        from django.db.models import Prefetch
+
+        from lessons.models import Enrollment
+
+        # 진행 중 레슨권과 잔여 회차를 한 번에 가져온다 (수강생 수만큼 쿼리가 늘지 않게, UC-07)
+        passes = Enrollment.objects.active().with_usage().order_by("-start_date", "-id")
+        qs = super().get_queryset().prefetch_related(Prefetch("enrollments", queryset=passes, to_attr="active_passes"))
         self.query = self.request.GET.get("q", "").strip()[:50]
         self.include_archived = self.request.GET.get("archived") == "1"
         if not self.include_archived:
