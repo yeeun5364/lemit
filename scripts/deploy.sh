@@ -29,6 +29,11 @@ main() {
 
     # 동시 배포 방지 (#42): 수동 배포·GitHub Actions 배포·롤백이 겹치지 않게 서버에서 잠금을 건다
     take_lock() {
+        # 강제 명령(ci_deploy.sh)이 잠금을 기다려 잡고 넘겨준 경우: 그 잠금(설명자 9)을 그대로 쓴다 (PR #58 리뷰 P2)
+        if [ "${DEPLOY_LOCK_HELD:-0}" = "1" ] && { true >&9; } 2> /dev/null && flock -n 9 2> /dev/null; then
+            echo "[lock] 호출한 강제 명령이 잡은 잠금으로 진행합니다"
+            return 0
+        fi
         if command -v flock > /dev/null 2>&1; then
             exec 9> "$STATE_DIR/deploy.lock"
             flock -n 9 || { echo "[lock] 다른 배포·롤백이 진행 중입니다. 끝난 뒤 다시 실행하세요."; exit 75; }

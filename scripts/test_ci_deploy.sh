@@ -80,6 +80,58 @@ expect REJECT "bash"
 expect REJECT "sh -c id"
 expect REJECT $'status\nid'                     # 여러 줄
 expect REJECT "deploy $(printf 'a%.0s' $(seq 1 90))"   # 너무 김
+expect REJECT "deploy-auto"
+expect REJECT "deploy-auto main"
+expect REJECT "deploy-auto $SHA extra"
+expect REJECT "deploy-auto $FEATURE"            # main 밖 커밋
+
+# 자동 배포(deploy-auto)와 롤백 뒤 보류 (PR #58 리뷰 P2). 지금 원격 main = c2
+HOLD="$T/server/deploy/state/auto_deploy_hold"
+rm -f "$HOLD"
+expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 보류 없음 + main 최신 → 배포
+expect "main 최신 커밋이 아니라"                 "deploy-auto $C1"   # main에 있지만 최신이 아님 → 건너뜀(0)
+expect "DRY_RUN: bash scripts/rollback.sh $TAG"  "rollback $TAG"     # 롤백은 보류를 건다
+if [ -f "$HOLD" ]; then pass=$((pass+1)); echo "[통과] 롤백 뒤 보류 파일 있음"; else fail=$((fail+1)); echo "[실패] 롤백 뒤 보류 파일 없음"; fi
+expect "자동 배포 보류 중"                       "deploy-auto $C2"   # 보류 중 → 배포하지 않음(0)
+expect "보류를 풉니다"                           "deploy $C2"        # 수동 배포가 보류를 푼다
+if [ ! -f "$HOLD" ]; then pass=$((pass+1)); echo "[통과] 수동 배포 뒤 보류 풀림"; else fail=$((fail+1)); echo "[실패] 수동 배포 뒤에도 보류 남음"; fi
+expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 다시 자동 배포 가능
+
+# 서버 잠금 대기: 다른 배포가 잠금을 잡고 있으면 기다렸다가 진행, 시간 안에 못 얻으면 실패
+LOCK="$T/server/deploy/state/deploy.lock"
+if command -v flock > /dev/null; then
+    flock "$LOCK" sleep 3 &
+    sleep 0.5
+    CI_DEPLOY_LOCK_WAIT=1 expect "FAIL:잠금을 얻지 못했습니다" "deploy $C2"
+    CI_DEPLOY_LOCK_WAIT=10 expect "기다립니다" "deploy $C2"           # 3초 뒤 잠금을 얻어 진행
+    wait
+
+    # 경합 재현 (리뷰 시나리오): 배포 A 진행 중(잠금 보유) + 수동 롤백 B 대기 + 최신 main 자동 배포 C 도착.
+    # B·C가 어떤 순서로 도착하든 끝 상태는 'B 실행, C는 보류로 건너뜀'이어야 한다 (잠금을 잡는 순서는 보장되지 않음)
+    race() {  # race <설명> <먼저 보낼 요청> <나중 요청>
+        rm -f "$HOLD"
+        flock "$LOCK" sleep 3 &                    # A: 진행 중인 배포
+        local holder=$!
+        sleep 0.5
+        SSH_ORIGINAL_COMMAND="$2" CI_DEPLOY_LOCK_WAIT=20 bash "$T/lemit-ci-deploy" > "$T/first.out" 2>&1 &
+        local p1=$!
+        sleep 0.5
+        SSH_ORIGINAL_COMMAND="$3" CI_DEPLOY_LOCK_WAIT=20 bash "$T/lemit-ci-deploy" > "$T/second.out" 2>&1 &
+        local p2=$!
+        wait "$holder" "$p1" "$p2"
+        local all; all="$(cat "$T/first.out" "$T/second.out")"
+        if grep -qF "DRY_RUN: bash scripts/rollback.sh $TAG" <<< "$all" && grep -qF "자동 배포 보류 중" <<< "$all" \
+            && ! grep -qF "DRY_RUN: bash scripts/deploy.sh" <<< "$all"; then
+            pass=$((pass+1)); echo "[통과] 경합($1): 롤백 실행, 자동 배포는 보류로 건너뜀"
+        else
+            fail=$((fail+1)); echo "[실패] 경합($1): $all"
+        fi
+    }
+    race "롤백 대기 중 자동 배포 도착" "rollback $TAG" "deploy-auto $C2"
+    race "자동 배포 대기 중 롤백 도착" "deploy-auto $C2" "rollback $TAG"
+else
+    echo "flock이 없어 잠금 대기·경합 시나리오를 건너뜀 (Linux에서 실행)"
+fi
 
 echo "=== ci_deploy 시나리오: 통과 $pass, 실패 $fail ==="
 [ "$fail" -eq 0 ]

@@ -32,13 +32,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - run: |
+          if [ "$EVENT" = "workflow_run" ]; then REMOTE="deploy-auto $SHA"; else REMOTE="deploy $SHA"; fi
   deploy:
     needs: plan
     if: github.repository == 'yeeun5364/lemit'
     runs-on: [self-hosted, Linux, X64, lemit-deploy]
     environment: production
     concurrency:
-      group: ${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' || 'deploy-production' }}
+      group: >-
+        ${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' ||
+            needs.plan.outputs.action == 'rollback' && 'deploy-production-rollback' || 'deploy-production' }}
       cancel-in-progress: false
     steps:
       - run: echo deploy
@@ -133,11 +137,14 @@ class WorkflowPolicyTests(unittest.TestCase):
             ("      - run: echo deploy", "      - uses: actions/checkout@v5", "액션(uses)"),
             ("      cancel-in-progress: false\n", "      cancel-in-progress: true\n", "concurrency"),
             ("    concurrency:\n", "    no_concurrency:\n", "concurrency"),
-            (
-                "${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' || 'deploy-production' }}",
-                "deploy-production",
-                "다른 그룹",
-            ),
+            (">-\n        ${{", ">-\n        x${{", "다른 그룹"),
+            # 롤백을 배포와 같은 그룹으로 되돌림 (새 자동 배포가 대기 중인 롤백을 취소할 수 있음, PR #58 리뷰 P2)
+            ("'deploy-production-rollback'", "'deploy-production'", "다른 그룹"),
+            ("needs.plan.outputs.action == 'rollback' && 'deploy-production-rollback' || ", "", "다른 그룹"),
+            # 그룹이 한 줄이든 여러 줄이든 같은 식이면 통과
+            ("      group: >-\n        ${{", "      group: ${{", None),
+            # 자동 배포를 deploy로 요청 (서버의 롤백 뒤 보류를 우회)
+            ('REMOTE="deploy-auto $SHA"', 'REMOTE="deploy $SHA"', "deploy-auto"),
         ]
         for old, new, msg in cases:
             with self.subTest(change=new or f"삭제: {old.strip()[:30]}"):

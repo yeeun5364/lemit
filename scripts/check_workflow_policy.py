@@ -14,7 +14,9 @@
    - environment: production (배포 키 Secret은 main 브랜치에서만 받음)
    - needs의 모든 작업이 GitHub-hosted이고, 그 작업의 if에 저장소·이벤트·ref·자동 배포 스위치 조건이 모두 있음
    - 자기 if에 github.repository 조건
-   - 작업 단위 concurrency(cancel-in-progress: false), check는 배포와 다른 그룹
+   - 작업 단위 concurrency(cancel-in-progress: false), 그룹은 EXPECTED_GROUP 그대로:
+     check·rollback·deploy를 각각 다른 그룹으로 (새 자동 배포가 대기 중인 롤백을 취소하지 못하게, PR #58 리뷰 P2)
+   - 검증 작업이 자동 배포(workflow_run)를 서버에 deploy-auto로 요청 (롤백 뒤 보류를 서버가 지키게)
    - 액션(uses)을 쓰지 않고 run 단계만 (저장소 코드·외부 액션을 개인 PC에서 실행하지 않음)
 
 한계: 조건 문자열이 **있는지** 확인하며, 조건식 전체의 논리를 증명하지는 않는다 (docs/CD.md §8).
@@ -56,6 +58,12 @@ GATE_CONDITIONS = [
     "github.event.workflow_run.head_branch == 'main'",
     "github.event.workflow_run.head_repository.full_name == github.repository",
 ]
+# self-hosted 작업의 concurrency group (공백은 무시하고 정확히 비교)
+EXPECTED_GROUP = (
+    "${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' || "
+    "needs.plan.outputs.action == 'rollback' && 'deploy-production-rollback' || 'deploy-production' }}"
+)
+AUTO_DEPLOY_REQUEST = 'REMOTE="deploy-auto $SHA"'
 
 
 def _squash(text):
@@ -128,16 +136,21 @@ def check_deploy(doc):
             for c in GATE_CONDITIONS:
                 if _squash(c) not in cond:
                     errors.append(f"{DEPLOY} jobs.{need}: if에 조건이 없습니다: {c}")
+            runs = "\n".join(str((st or {}).get("run", "")) for st in gate.get("steps") or [])
+            if AUTO_DEPLOY_REQUEST not in runs:
+                errors.append(
+                    f"{DEPLOY} jobs.{need}: 자동 배포는 서버에 deploy-auto로 요청해야 합니다 ({AUTO_DEPLOY_REQUEST})"
+                )
         if "github.repository ==" not in str(job.get("if", "")):
             errors.append(f"{where}: if에 github.repository 조건이 있어야 합니다")
         conc = job.get("concurrency")
         if not isinstance(conc, dict) or not conc.get("group") or conc.get("cancel-in-progress") is not False:
             errors.append(f"{where}: 작업 단위 concurrency(group, cancel-in-progress: false)가 있어야 합니다")
         else:
-            group = _squash(conc.get("group"))
-            if not all(x in group for x in ("== 'check'", "'deploy-production-check'", "'deploy-production'")):
+            if _squash(conc.get("group")) != _squash(EXPECTED_GROUP):
                 errors.append(
-                    f"{where}: concurrency group은 check와 배포(deploy·rollback)를 다른 그룹으로 나눠야 합니다"
+                    f"{where}: concurrency group은 check·rollback·deploy를 각각 다른 그룹으로 나눠야 합니다: "
+                    f"{EXPECTED_GROUP}"
                 )
         for i, step in enumerate(job.get("steps") or []):
             if "uses" in (step or {}):
