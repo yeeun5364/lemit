@@ -122,7 +122,12 @@ class ClassificationFlowTests(InboxTestBase):
         self.assertEqual(Student.objects.values().get(pk=self.student.pk), before)
 
     def test_classification_does_not_change_sessions_or_passes(self):
-        """UC-17 수용 기준: 휴강·보강·일정 변경으로 분류돼도 회차의 상태·일시와 레슨권은 그대로다 (ERD 2-10)."""
+        """UC-17 수용 기준: 휴강·보강·일정 변경 **각각**으로 분류돼도 회차의 상태·일시와 레슨권은 그대로다 (ERD 2-10).
+
+        모델 예측 변동과 분리하려고 분류 결과를 라벨별로 고정한다 (실제 모델 동선은
+        test_student_message_is_classified_and_shown이 따로 확인). 요청마다 POST 성공·저장된 분류를 확인한 직후
+        스냅샷을 비교해, 중간 요청의 변경을 다음 요청이 되돌리는 경우도 잡는다 (PR #62 리뷰 P2).
+        """
         import datetime
 
         from lessons.models import Enrollment, LessonSession
@@ -131,19 +136,39 @@ class ClassificationFlowTests(InboxTestBase):
             student=self.student, title="피아노", total_count=8, start_date=datetime.date(2026, 11, 1)
         )
         start = timezone.make_aware(datetime.datetime(2026, 11, 25, 16))
-        session = LessonSession.objects.create(enrollment=e, start_at=start, end_at=start + datetime.timedelta(hours=1))
-        before = (list(LessonSession.objects.values()), list(Enrollment.objects.values()))
-        for body in (
-            "다음 주 수요일 수업 쉬어도 될까요? 아파서 못 갈 것 같아요",
-            MAKEUP_TEXT,
-            "수업 시간을 5시로 바꿀 수 있을까요?",
-        ):
-            self.post_student_message(body=body)
-        labels = set(Message.objects.values_list("predicted_label", flat=True))
-        self.assertTrue(labels & {"CANCELLATION", "MAKEUP", "RESCHEDULE"}, labels)  # 일정 관련으로 분류됐는데도
-        self.assertEqual((list(LessonSession.objects.values()), list(Enrollment.objects.values())), before)
-        session.refresh_from_db()
-        self.assertEqual(session.status, LessonSession.Status.SCHEDULED)
+        LessonSession.objects.create(enrollment=e, start_at=start, end_at=start + datetime.timedelta(hours=1))
+        done_start = start - datetime.timedelta(days=7)
+        LessonSession.objects.create(
+            enrollment=e,
+            start_at=done_start,
+            end_at=done_start + datetime.timedelta(hours=1),
+            status=LessonSession.Status.COMPLETED,
+        )
+
+        def snapshot():
+            return (
+                list(LessonSession.objects.order_by("pk").values()),
+                list(Enrollment.objects.order_by("pk").values()),
+            )
+
+        before = snapshot()
+        version = classifier.get_model().version
+        cases = (
+            ("CANCELLATION", "다음 주 수요일 수업 쉬어도 될까요? 아파서 못 갈 것 같아요"),
+            ("MAKEUP", MAKEUP_TEXT),
+            ("RESCHEDULE", "수업 시간을 5시로 바꿀 수 있을까요?"),
+        )
+        for label, body in cases:
+            with self.subTest(label=label):
+                fixed = classifier.MessagePrediction(label=label, confidence=0.9, model_version=version)
+                with mock.patch.object(classifier, "classify", return_value=fixed) as classify:
+                    res = self.post_student_message(body=body, subject=f"{label} 문의")
+                classify.assert_called_once_with(body)
+                msg = Message.objects.get(body=body)
+                self.assertRedirects(res, reverse("inbox:detail", args=[msg.conversation_id]))
+                self.assertEqual(msg.predicted_label, label)
+                self.assertEqual(snapshot(), before)  # 이 요청 직후 회차·레슨권 그대로
+        self.assertEqual(Message.objects.count(), len(cases))
 
     def test_body_is_html_escaped(self):
         self.post_student_message(body="<script>alert(1)</script> 보강 가능할까요")
