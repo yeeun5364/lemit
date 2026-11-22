@@ -50,7 +50,9 @@ jobs:
             [ "$type" = "tag" ] || break
             read -r type sha < <(gh api "repos/$REPO/git/tags/$sha" --jq '"\(.object.type) \(.object.sha)"') || true
           done
-          [ "$type" = "commit" ] && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::태그 $TAG 의 커밋을 찾지 못했습니다"; exit 1; }
+          if [ "$type" != "commit" ] || ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::태그 $TAG 의 커밋을 찾지 못했습니다"; exit 1
+          fi
           [ "$sha" = "$PUSHED_SHA" ] || { echo "::error::태그 $TAG 가 푸시된 커밋($PUSHED_SHA)이 아니라 $sha 를 가리킵니다 (그사이 옮겨짐)"; exit 1; }
           status="$(gh api "repos/$REPO/compare/$sha...main" --jq .status)"
           case "$status" in
