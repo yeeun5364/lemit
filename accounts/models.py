@@ -75,6 +75,7 @@ class LoginAttempt(models.Model):
 
     계정과 연결하지 않고 입력한 이메일(소문자)과 접속 IP만 남긴다. 없는 이메일도 같은 방식으로 세어
     가입 여부가 드러나지 않게 한다. 하루가 지난 기록은 새 기록을 남길 때 지운다.
+    로그인 시도는 비밀번호 확인 전에 행을 먼저 만들고(예약), 성공하면 그 행을 지운다.
     """
 
     class Kind(models.TextChoices):
@@ -84,6 +85,8 @@ class LoginAttempt(models.Model):
     kind = models.CharField("종류", max_length=10, choices=Kind.choices)
     email = models.CharField("입력한 이메일", max_length=254, blank=True)
     ip = models.GenericIPAddressField("IP", null=True, blank=True)
+    # 로그인 성공 후 이메일 집계에서만 뺀다. 행은 남아 IP 집계에는 계속 들어간다 (PR #70 리뷰 P2)
+    email_cleared = models.BooleanField("이메일 집계 제외", default=False)
     created_at = models.DateTimeField("시각", auto_now_add=True, db_index=True)
 
     class Meta:

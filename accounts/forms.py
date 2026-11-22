@@ -50,13 +50,20 @@ class LoginForm(AuthenticationForm):
 
         email = self.cleaned_data.get("username")
         kind = LoginAttempt.Kind.LOGIN
-        if throttle.is_blocked(kind, self.request, email):
+        # 비밀번호를 확인하기 전에 시도 한 칸을 예약한다. 확인·예약이 잠금 안에서 한 번에 일어나므로
+        # 여러 worker에 동시에 들어온 요청도 한도를 넘어 비밀번호 확인까지 가지 못한다 (PR #70 리뷰 P2)
+        attempt = throttle.reserve(kind, self.request, email)
+        if attempt is None:
             raise forms.ValidationError(throttle.BLOCKED_MESSAGE, code="throttled")
         try:
             cleaned = super().clean()
         except forms.ValidationError as e:
-            if e.code == "invalid_login":
-                throttle.record(kind, self.request, email)
+            if e.code != "invalid_login":  # 실패가 아닌 다른 오류(비활성 계정 등)는 세지 않는다
+                throttle.release(attempt)
             raise
+        except Exception:
+            throttle.release(attempt)
+            raise
+        throttle.release(attempt)  # 성공은 실패가 아니므로 반납
         throttle.clear_email(kind, email)
         return cleaned

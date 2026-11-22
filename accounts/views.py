@@ -60,11 +60,8 @@ class PasswordResetView(auth_views.PasswordResetView):
         from accounts import throttle
         from accounts.models import LoginAttempt
 
-        email = form.cleaned_data.get("email")
-        kind = LoginAttempt.Kind.RESET
-        blocked = throttle.is_blocked(kind, self.request, email)
-        throttle.record(kind, self.request, email)
-        if blocked:
+        # 한도 확인과 사용 기록을 잠금 안에서 한 번에 한다(동시 요청도 한도까지만 메일 발송, PR #70 리뷰 P2)
+        if throttle.reserve(LoginAttempt.Kind.RESET, self.request, form.cleaned_data.get("email")) is None:
             return redirect(self.get_success_url())
         return super().form_valid(form)
 
