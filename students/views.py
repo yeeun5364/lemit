@@ -52,14 +52,14 @@ class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         from lessons.models import Enrollment, LessonSession
-        from lessons.services import scheduled_sessions_of
+        from lessons.services import makeup_needed_sessions, scheduled_sessions_of
 
         # 수강생은 이미 로그인한 강사 것으로 좁혀 찾았으므로 그 수강생의 레슨권·회차만 가져온다
         enrollments = list(Enrollment.objects.filter(student=self.object).select_related("label").with_usage())
         # 회차 이력: 레슨권별(최근 레슨권 먼저)로 묶고, 묶음 안은 최신순 (SCREENS S10)
         sessions = (
             LessonSession.objects.filter(enrollment__student=self.object)
-            .select_related("enrollment")
+            .select_related("enrollment", "makeup")
             .order_by("-enrollment__start_date", "-enrollment_id", "-start_at", "-id")
         )
         return super().get_context_data(
@@ -67,6 +67,7 @@ class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
             ended_enrollments=[e for e in enrollments if not e.is_active],
             sessions=sessions,
             scheduled_count=scheduled_sessions_of(self.object).count(),
+            makeup_needed=list(makeup_needed_sessions(self.object)),  # UC-08 '보강 필요' 모아 보기
             **kwargs,
         )
 

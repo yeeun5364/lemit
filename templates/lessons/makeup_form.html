@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}보강 등록 · {{ original.enrollment.student.name }}{% endblock %}
+{% block back %}<a class="back-link" href="{{ back_url }}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}{{ back_label }}</a>{% endblock %}
+{% block page_title %}보강 등록{% endblock %}
+{% block page_desc %}<p class="page-desc">{{ original.enrollment.student.name }} · {{ original.enrollment.title }} — {{ original.start_at|date:"n월 j일 (D)" }} {{ original.start_at|time:"H:i" }} {% if original.status == "cancelled" %}휴강{% else %}결석{% endif %}을 대신하는 회차입니다. 보강 회차를 완료하면 1회 차감됩니다. <span class="req" aria-hidden="true">*</span> 표시는 필수 항목입니다.</p>{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <form method="post" class="form" novalidate data-once>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% include "ui/field.html" with field=form.date %}
+    <div class="field-row">
+      {% include "ui/field.html" with field=form.start_time %}
+      {% include "ui/field.html" with field=form.end_time %}
+    </div>
+    {% include "ui/field.html" with field=form.place %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">보강 등록</button>
+      <a class="btn btn-ghost" href="{{ back_url }}">취소</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

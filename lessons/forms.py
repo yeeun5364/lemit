@@ -192,3 +192,52 @@ class SessionForm(forms.ModelForm):
                 self.instance.start_at = timezone.make_aware(datetime.datetime.combine(date, start), tz)
                 self.instance.end_at = timezone.make_aware(datetime.datetime.combine(date, end), tz)
         return cleaned
+
+
+class CancelForm(forms.Form):
+    """휴강 처리 (UC-08). 사유는 선택."""
+
+    reason = forms.CharField(
+        label="휴강 사유",
+        required=False,
+        max_length=500,
+        widget=forms.Textarea(attrs={"rows": 2, "placeholder": "예: 강사 개인 사정 (선택)"}),
+    )
+
+
+class MakeupForm(forms.Form):
+    """보강 등록 (UC-09). 레슨권은 원래 회차의 것으로 고정하고 날짜·시간·장소만 받는다."""
+
+    date = forms.DateField(label="날짜", widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"))
+    start_time = forms.TimeField(label="시작", widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"))
+    end_time = forms.TimeField(label="종료", widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M"))
+    place = forms.CharField(
+        label="장소 메모",
+        required=False,
+        max_length=100,
+        widget=forms.TextInput(attrs={"placeholder": "예: A 레슨실"}),
+    )
+
+    def __init__(self, *args, original, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.is_bound:
+            start = timezone.localtime(original.start_at)
+            end = timezone.localtime(original.end_at)
+            self.initial.update(
+                date=timezone.localdate() + datetime.timedelta(days=1),
+                start_time=start.time(),
+                end_time=end.time(),
+                place=original.place,
+            )
+
+    def clean(self):
+        cleaned = super().clean()
+        date, start, end = cleaned.get("date"), cleaned.get("start_time"), cleaned.get("end_time")
+        if date and start and end:
+            if end <= start:
+                self.add_error("end_time", "종료 시간은 시작 시간보다 늦어야 합니다.")
+            else:
+                tz = timezone.get_current_timezone()
+                cleaned["start_at"] = timezone.make_aware(datetime.datetime.combine(date, start), tz)
+                cleaned["end_at"] = timezone.make_aware(datetime.datetime.combine(date, end), tz)
+        return cleaned

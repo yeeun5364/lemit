@@ -58,6 +58,26 @@
   </section>
 </div>
 
+{% if makeup_needed %}
+<section class="card section makeup-needed" aria-labelledby="makeup-title">
+  <div class="card-head">
+    <h2 id="makeup-title" class="card-title">보강 필요 <span class="badge badge-amber">{{ makeup_needed|length }}</span></h2>
+  </div>
+  <p class="muted small">휴강·미차감 결석 중 아직 보강을 잡지 않은 회차입니다. 회차를 열어 '보강 등록'을 누르세요.</p>
+  <ul class="rows sessions">
+    {% for s in makeup_needed %}
+    <li><a class="row session-row is-{{ s.status }}" href="{% url 'lessons:session_detail' s.pk %}">
+      <span class="row-main">
+        <span class="row-title">{{ s.start_at|date:"n/j" }} ({{ s.start_at|date:"D"|slice:":1" }}) {{ s.start_at|time:"H:i" }} · {{ s.enrollment.title }}</span>
+        {% if s.reason %}<span class="row-sub">{{ s.reason|truncatechars:40 }}</span>{% endif %}
+      </span>
+      <span class="row-side"><span class="state state-off">{{ s.get_status_display }}</span><span class="btn btn-secondary btn-sm">보강 등록</span></span>
+    </a></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 <section class="card section" aria-labelledby="history-title">
   <div class="card-head">
     <h2 id="history-title" class="card-title">회차 이력</h2>

@@ -15,6 +15,9 @@
       <dt>시간</dt><dd>{{ session.start_at|time:"H:i" }} – {{ session.end_at|time:"H:i" }}</dd>
       <dt>장소</dt><dd>{{ session.place|default:"—" }}</dd>
       <dt>상태</dt><dd>{% include "lessons/_session_state.html" with s=session %}</dd>
+      {% if session.reason %}<dt>사유</dt><dd>{{ session.reason|linebreaksbr }}</dd>{% endif %}
+      {% if session.makeup_for %}<dt>원래 회차</dt><dd><a href="{% url 'lessons:session_detail' session.makeup_for.pk %}">{{ session.makeup_for.start_at|date:"n/j (D)" }} {{ session.makeup_for.start_at|time:"H:i" }} · {{ session.makeup_for.get_status_display }}</a></dd>{% endif %}
+      {% if session.makeup %}<dt>보강 회차</dt><dd><a href="{% url 'lessons:session_detail' session.makeup.pk %}">{{ session.makeup.start_at|date:"n/j (D)" }} {{ session.makeup.start_at|time:"H:i" }} · {{ session.makeup.get_status_display }}</a></dd>{% endif %}
     </dl>
     {% if session.status == "scheduled" %}
     <form method="post" action="{% url 'lessons:session_complete' session.pk %}" class="status-action"
@@ -22,6 +25,31 @@
       {% csrf_token %}
       <button type="submit" class="btn btn-primary btn-block">{% include "ui/icon.html" with name="check" size="sm" %}완료 처리</button>
       <p class="muted small">완료하면 레슨권에서 1회 차감됩니다.{% if enrollment.remaining_count <= 0 %} <strong class="warn-text">잔여 회차가 없어 초과 진행으로 기록됩니다.</strong>{% endif %}</p>
+    </form>
+    <details class="status-action cancel-box">
+      <summary class="btn btn-secondary btn-block">휴강 처리</summary>
+      <form method="post" action="{% url 'lessons:session_cancel' session.pk %}" class="form">
+        {% csrf_token %}
+        {% include "ui/field.html" with field=cancel_form.reason %}
+        <button type="submit" class="btn btn-secondary btn-block">휴강으로 기록</button>
+        <p class="muted small">강사 사정으로 열리지 않은 수업입니다. 레슨권은 차감하지 않고, 이후 보강을 등록할 수 있습니다.</p>
+      </form>
+    </details>
+    {% elif needs_makeup %}
+    <div class="status-action">
+      {% if session.enrollment.student.is_active and session.enrollment.is_active %}
+      <a class="btn btn-primary btn-block" href="{% url 'lessons:session_makeup' session.pk %}">{% include "ui/icon.html" with name="plus" size="sm" %}보강 등록</a>
+      <p class="muted small">보강 회차를 만들어 이 회차와 연결합니다. 보강을 완료하면 1회 차감됩니다.</p>
+      {% else %}
+      <p class="muted small">보관된 수강생이나 종료된 레슨권의 회차에는 보강을 등록할 수 없습니다.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if session.status == "cancelled" and not session.makeup and session.enrollment.student.is_active %}
+    <form method="post" action="{% url 'lessons:session_uncancel' session.pk %}" class="status-action"
+          data-confirm="휴강을 취소하고 예정으로 되돌릴까요?">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-ghost btn-block">{% include "ui/icon.html" with name="restore" size="sm" %}휴강 취소</button>
     </form>
     {% elif session.status == "completed" and session.enrollment.student.is_active %}
     <form method="post" action="{% url 'lessons:session_uncomplete' session.pk %}" class="status-action"

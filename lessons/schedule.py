@@ -77,7 +77,7 @@ def sessions_by_day(teacher, first_day, last_day, student_id=None, label_id=None
             start_at__gte=_local_midnight(first_day),
             start_at__lt=_local_midnight(last_day + datetime.timedelta(days=1)),
         )
-        .select_related("enrollment__student", "enrollment__label")
+        .select_related("enrollment__student", "enrollment__label", "makeup")
         .order_by("start_at", "id")
     )
     if student_id:
