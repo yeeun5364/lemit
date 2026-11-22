@@ -7,8 +7,10 @@
   "한도 확인 → 시도 한 칸 예약(행 추가)"을 하므로, 여러 worker의 동시 요청도 한도를 넘어 통과하지 못한다.
   로그인은 비밀번호를 확인하기 **전에** 칸을 예약하고, 성공하면 그 칸을 반납(release)한다.
 - 없는 이메일도 똑같이 세고 똑같이 막으므로, 막혔다는 사실로 가입 여부가 드러나지 않는다.
-- 로그인에 성공하면 그 이메일의 실패를 **이메일 집계에서만** 뺀다(email_cleared). 행은 남아 IP 집계에는 계속
-  들어간다(PR #70 리뷰 P2: 여러 계정을 번갈아 시도하다 한 번 성공해도 IP 누적은 유지).
+- 로그인에 성공하면 그 이메일의 **확정된** 실패를 **이메일 집계에서만** 뺀다(email_cleared). 행은 남아 IP 집계에는
+  계속 들어간다(PR #70 리뷰 P2: 여러 계정을 번갈아 시도하다 한 번 성공해도 IP 누적은 유지).
+- 로그인 예약은 비밀번호 확인이 끝날 때까지 pending=True다. 같은 이메일의 다른 요청이 그사이 성공해도 진행 중인
+  예약은 초기화하지 않고, 그 요청이 실패로 끝나면 confirm()으로 확정된 실패가 되어 그대로 남는다(PR #70 재검토 P2).
 - IP는 프록시(Caddy) 뒤에서만 X-Forwarded-For의 마지막 값(Caddy가 본 접속 주소)을 쓴다. 프록시 없이 이 헤더를
   믿으면 누구나 위조할 수 있으므로 DJANGO_BEHIND_PROXY가 꺼져 있으면 REMOTE_ADDR만 쓴다.
 - 개인정보를 오래 두지 않도록 기록할 때마다 RETENTION보다 오래된 행을 지운다.
@@ -75,7 +77,7 @@ def _counts(kind, email, ip):
     return by_email, by_ip
 
 
-def reserve(kind, request, email):
+def reserve(kind, request, email, pending=False):
     """한도 안이면 시도 한 칸을 기록하고 그 기록을 돌려준다. 한도에 닿았으면 기록하지 않고 None.
 
     잠금 안에서 확인과 기록을 함께 하므로, 동시에 들어온 요청도 정확히 한도까지만 통과한다.
@@ -89,7 +91,15 @@ def reserve(kind, request, email):
         if by_email >= PER_EMAIL or by_ip >= PER_IP:
             return None
         LoginAttempt.objects.filter(created_at__lt=timezone.now() - RETENTION).delete()
-        return LoginAttempt.objects.create(kind=kind, email=email, ip=ip)
+        return LoginAttempt.objects.create(kind=kind, email=email, ip=ip, pending=pending)
+
+
+def confirm(attempt):
+    """진행 중인 로그인 예약을 확정된 실패로 바꾼다 (비밀번호가 틀림)."""
+    from accounts.models import LoginAttempt
+
+    if attempt is not None:
+        LoginAttempt.objects.filter(pk=attempt.pk).update(pending=False)
 
 
 def release(attempt):
@@ -101,7 +111,12 @@ def release(attempt):
 
 
 def clear_email(kind, email):
-    """로그인 성공: 그 이메일의 실패를 이메일 집계에서만 뺀다. 행은 남겨 IP 집계에는 계속 들어가게 한다."""
+    """로그인 성공: 그 이메일의 확정된 실패만 이메일 집계에서 뺀다. 행은 남겨 IP 집계에는 계속 들어가게 한다.
+
+    비밀번호를 아직 확인 중인 다른 요청의 예약(pending=True)은 건드리지 않는다 (PR #70 재검토 P2).
+    """
     from accounts.models import LoginAttempt
 
-    LoginAttempt.objects.filter(kind=kind, email=_normalize(email), email_cleared=False).update(email_cleared=True)
+    LoginAttempt.objects.filter(kind=kind, email=_normalize(email), email_cleared=False, pending=False).update(
+        email_cleared=True
+    )

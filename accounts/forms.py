@@ -52,13 +52,15 @@ class LoginForm(AuthenticationForm):
         kind = LoginAttempt.Kind.LOGIN
         # 비밀번호를 확인하기 전에 시도 한 칸을 예약한다. 확인·예약이 잠금 안에서 한 번에 일어나므로
         # 여러 worker에 동시에 들어온 요청도 한도를 넘어 비밀번호 확인까지 가지 못한다 (PR #70 리뷰 P2)
-        attempt = throttle.reserve(kind, self.request, email)
+        attempt = throttle.reserve(kind, self.request, email, pending=True)
         if attempt is None:
             raise forms.ValidationError(throttle.BLOCKED_MESSAGE, code="throttled")
         try:
             cleaned = super().clean()
         except forms.ValidationError as e:
-            if e.code != "invalid_login":  # 실패가 아닌 다른 오류(비활성 계정 등)는 세지 않는다
+            if e.code == "invalid_login":
+                throttle.confirm(attempt)  # 확정된 실패: 이후의 성공만 이 기록을 이메일 집계에서 뺄 수 있다
+            else:  # 실패가 아닌 다른 오류(비활성 계정 등)는 세지 않는다
                 throttle.release(attempt)
             raise
         except Exception:

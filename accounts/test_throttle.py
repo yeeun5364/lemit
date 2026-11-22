@@ -88,6 +88,37 @@ class LoginThrottleTests(TestCase):
         r = self.login(password=PASSWORD, ip="198.51.100.2")  # 이메일 쪽은 성공으로 초기화됐으므로 다른 IP는 통과
         self.assertRedirects(r, reverse("home"), fetch_redirect_response=False)
 
+    def test_success_during_inflight_failure_keeps_that_failure(self):
+        """PR #70 재검토 P2: A가 비밀번호를 확인하는 동안 같은 이메일의 B가 로그인에 성공해도,
+        A가 실패로 끝나면 A의 실패는 이메일 집계에 남는다 (성공은 확정된 실패만 초기화)."""
+        from django.contrib.auth import forms as auth_forms
+
+        from accounts.forms import LoginForm
+
+        real_authenticate = auth_forms.authenticate
+        calls = []
+
+        def authenticate_with_overlap(request=None, **credentials):
+            calls.append(credentials)
+            if len(calls) == 1:  # A의 확인 도중에 B가 성공한다 (B의 확인은 실제 인증)
+                r = self.client.post(
+                    reverse("login"),
+                    {"username": "teacher@example.com", "password": PASSWORD},
+                    REMOTE_ADDR="198.51.100.9",
+                )
+                self.assertRedirects(r, reverse("home"), fetch_redirect_response=False)
+                return None  # A는 틀린 비밀번호
+            return real_authenticate(request, **credentials)
+
+        request_a = RequestFactory().post("/accounts/login/", REMOTE_ADDR="203.0.113.77")
+        form = LoginForm(request=request_a, data={"username": "teacher@example.com", "password": "wrong-pass"})
+        with mock.patch.object(auth_forms, "authenticate", side_effect=authenticate_with_overlap):
+            self.assertFalse(form.is_valid())
+        self.assertEqual(len(calls), 2)
+        rows = LoginAttempt.objects.filter(kind="login", email="teacher@example.com")
+        self.assertEqual(rows.count(), 1)  # B의 성공 예약은 반납, A의 실패만 남음
+        self.assertEqual(rows.filter(pending=False, email_cleared=False).count(), 1)  # 이메일 집계에 들어감
+
     def test_old_records_are_purged(self):
         old = LoginAttempt.objects.create(kind="login", email="old@example.com", ip="203.0.113.1")
         LoginAttempt.objects.filter(pk=old.pk).update(created_at=timezone.now() - throttle.RETENTION * 2)

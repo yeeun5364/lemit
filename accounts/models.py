@@ -87,6 +87,9 @@ class LoginAttempt(models.Model):
     ip = models.GenericIPAddressField("IP", null=True, blank=True)
     # 로그인 성공 후 이메일 집계에서만 뺀다. 행은 남아 IP 집계에는 계속 들어간다 (PR #70 리뷰 P2)
     email_cleared = models.BooleanField("이메일 집계 제외", default=False)
+    # 비밀번호 확인 중인 로그인 예약. 실패로 끝나면 False(확정된 실패), 성공하면 행을 지운다.
+    # 진행 중인 예약은 다른 요청의 로그인 성공으로 초기화되지 않는다 (PR #70 재검토 P2)
+    pending = models.BooleanField("확인 중", default=False)
     created_at = models.DateTimeField("시각", auto_now_add=True, db_index=True)
 
     class Meta:
