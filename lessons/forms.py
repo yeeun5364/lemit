@@ -264,5 +264,11 @@ class AbsentForm(forms.Form):
         widget=forms.Textarea(attrs={"rows": 2, "placeholder": "예: 수강생 감기 (선택)"}),
     )
 
+    def __init__(self, *args, **kwargs):
+        # 회차 상세에서 휴강 폼(CancelForm)과 같은 페이지에 렌더링된다. 기본 ID(id_reason)가 겹치면
+        # '결석 사유' 라벨이 휴강 사유 칸을 가리키므로 결석 폼 필드는 absent_ 접두사를 쓴다 (PR #72 리뷰)
+        kwargs.setdefault("auto_id", "absent_%s")
+        super().__init__(*args, **kwargs)
+
     def clean_deducted(self):
         return self.cleaned_data["deducted"] == "yes"

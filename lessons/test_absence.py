@@ -56,6 +56,28 @@ class AbsenceTests(TestCase):
         self.assertIn('name="deducted" value="yes"', page)
         self.assertNotIn("checked", page[page.index('id="absent-box"') : page.index("결석으로 기록")])
 
+    def test_absent_and_cancel_reason_labels_point_to_their_own_fields(self):
+        """휴강·결석 폼이 한 페이지에 있어도 사유 라벨이 각자 자기 입력칸을 가리킨다 (PR #72 리뷰)."""
+        s = self.session()
+        pages = {
+            "처음 화면": self.client.get(reverse("lessons:session_detail", args=[s.pk])),
+            "오류 후 다시 표시": self.client.post(reverse("lessons:session_absent", args=[s.pk]), {"reason": "감기"}),
+        }
+        for name, r in pages.items():
+            with self.subTest(name):
+                html = r.content.decode()
+                cancel = html[html.index("휴강 처리") : html.index('id="absent-box"')]
+                absent = html[html.index('id="absent-box"') : html.index("결석으로 기록")]
+                self.assertIn('for="id_reason"', cancel)
+                self.assertIn('id="id_reason"', cancel)
+                self.assertIn('for="absent_reason"', absent)
+                self.assertIn('id="absent_reason"', absent)
+                self.assertNotIn('"id_reason"', absent)
+                self.assertIn('id="absent_deducted_0"', absent)
+                self.assertEqual(html.count('id="id_reason"'), 1)
+                self.assertEqual(html.count('id="absent_reason"'), 1)
+        self.assertIn("감기", pages["오류 후 다시 표시"].content.decode())  # 입력값 유지
+
     def test_deducted_absence_uses_one_count_and_cannot_have_makeup(self):
         s = self.session()
         before = self.remaining()
