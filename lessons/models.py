@@ -14,7 +14,7 @@ from django.db.models.functions import Coalesce
 
 
 class Label(models.Model):
-    """레슨권 색 구분 라벨 (ERD 2-9, UC-16). 화면은 MVP 후속, 모델만 먼저 만든다."""
+    """레슨권 색 구분 라벨 (ERD 2-9, UC-16). 화면은 S12 라벨 관리, 레슨권 등록·라벨 변경."""
 
     class Color(models.TextChoices):
         RED = "red", "빨강"

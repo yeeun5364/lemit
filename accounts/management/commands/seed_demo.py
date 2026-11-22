@@ -43,11 +43,19 @@ STUDENTS = [
 ]
 
 # 레슨권: (수강생, 레슨명, 총 회차, 시작일 = 오늘 + 일수)
+# 라벨 (UC-16): (이름, 색). 한 레슨권은 라벨 없이 두어 회색 표시도 보이게 한다
+LABELS = [
+    ("피아노", "blue"),
+    ("기타", "green"),
+    ("보컬", "orange"),
+]
+
+# 레슨권: (수강생, 레슨명, 총 회차, 오늘 + 시작 일수, 라벨 이름 또는 None)
 ENROLLMENTS = [
-    ("김하늘", "피아노 개인 레슨", 8, -28),
-    ("이서준", "통기타 입문", 4, -21),
-    ("박지민", "보컬 트레이닝", 10, -10),
-    ("최유나", "드럼 기초", 4, -30),
+    ("김하늘", "피아노 개인 레슨", 8, -28, "피아노"),
+    ("이서준", "통기타 입문", 4, -21, "기타"),
+    ("박지민", "보컬 트레이닝", 10, -10, "보컬"),
+    ("최유나", "드럼 기초", 4, -30, None),
 ]
 
 # 회차: (수강생, 오늘 + 일수, 시작 시, 시작 분, 상태, 장소, 사유)
@@ -179,10 +187,13 @@ class Command(BaseCommand):
                 memo=memo,
             )
 
+        labels = {name: Label.objects.create(teacher=teacher, name=name, color=color) for name, color in LABELS}
+
         enrollments = {}
-        for name, title, total, start in ENROLLMENTS:
+        for name, title, total, start, label in ENROLLMENTS:
             enrollments[name] = Enrollment.objects.create(
                 student=students[name],
+                label=labels.get(label),
                 title=title,
                 total_count=total,
                 start_date=today + datetime.timedelta(days=start),
@@ -227,6 +238,7 @@ class Command(BaseCommand):
 
         return {
             "수강생": Student.objects.filter(teacher=teacher).count(),
+            "라벨": Label.objects.filter(teacher=teacher).count(),
             "레슨권": Enrollment.objects.filter(student__teacher=teacher).count(),
             "회차": LessonSession.objects.filter(enrollment__student__teacher=teacher).count(),
             "대화": Conversation.objects.filter(teacher=teacher).count(),

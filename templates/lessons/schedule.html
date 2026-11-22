@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}수업 일정{% endblock %}
 {% block page_title %}수업 일정{% endblock %}
-{% block page_desc %}<p class="page-desc">{% if view == "month" %}{{ selected|date:"Y년 n월" }}{% else %}{{ week_first|date:"n월 j일" }} – {{ week_last|date:"n월 j일" }}{% endif %}{% if student %} · {{ student.name }}{% endif %}</p>{% endblock %}
+{% block page_desc %}<p class="page-desc">{% if view == "month" %}{{ selected|date:"Y년 n월" }}{% else %}{{ week_first|date:"n월 j일" }} – {{ week_last|date:"n월 j일" }}{% endif %}{% if student %} · {{ student.name }}{% endif %}{% if label %} · 라벨 {{ label.name }}{% endif %}</p>{% endblock %}
 {% block page_actions %}<a class="btn btn-primary" href="{{ add_url }}">{% include "ui/icon.html" with name="plus" size="sm" %}일정 추가</a>{% endblock %}
 {% block content %}
 <div class="sched-toolbar">
@@ -21,6 +21,13 @@
       <option value="">전체</option>
       {% for st in students %}<option value="{{ st.pk }}"{% if student and st.pk == student.pk %} selected{% endif %}>{{ st.name }}</option>{% endfor %}
     </select>
+    {% if labels %}
+    <label for="sched-label" class="small muted">라벨</label>
+    <select id="sched-label" name="label" class="input" data-autosubmit>
+      <option value="">전체</option>
+      {% for lb in labels %}<option value="{{ lb.pk }}"{% if label and lb.pk == label.pk %} selected{% endif %}>{{ lb.name }}</option>{% endfor %}
+    </select>
+    {% endif %}
     <noscript><button type="submit" class="btn btn-secondary">보기</button></noscript>
   </form>
 </div>
@@ -28,7 +35,7 @@
 {% if view == "month" %}
 <div class="sched-grid-wrap card card-flush">
   <table class="month">
-    <caption class="sr-only">{{ selected|date:"Y년 n월" }} 달력. 회차가 있는 날은 점과 개수로 표시합니다.</caption>
+    <caption class="sr-only">{{ selected|date:"Y년 n월" }} 달력. 회차가 있는 날은 라벨 색 점(최대 3개)과 개수로 표시합니다.</caption>
     <thead><tr>{% for w in weekdays %}<th scope="col"{% if forloop.first %} class="is-sun"{% endif %}>{{ w }}</th>{% endfor %}</tr></thead>
     <tbody>
       {% for week in grid %}<tr>
@@ -37,7 +44,7 @@
              {% if c.is_selected %}aria-current="date"{% endif %}
              aria-label="{{ c.date|date:'n월 j일' }}{% if c.is_today %} 오늘{% endif %}{% if c.count %}, 회차 {{ c.count }}개{% else %}, 일정 없음{% endif %}">
             <span class="day-num">{{ c.date.day }}</span>
-            <span class="day-dots" aria-hidden="true">{% if c.count %}<span class="dot"></span>{% endif %}</span>
+            <span class="day-dots" aria-hidden="true">{% for color in c.dots %}<span class="dot{% if color %} lc-{{ color }}{% endif %}"></span>{% endfor %}</span>
           </a>
         </td>{% endfor %}
       </tr>{% endfor %}

@@ -55,7 +55,7 @@ class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
         from lessons.services import scheduled_sessions_of
 
         # 수강생은 이미 로그인한 강사 것으로 좁혀 찾았으므로 그 수강생의 레슨권·회차만 가져온다
-        enrollments = list(Enrollment.objects.filter(student=self.object).with_usage())
+        enrollments = list(Enrollment.objects.filter(student=self.object).select_related("label").with_usage())
         # 회차 이력: 레슨권별(최근 레슨권 먼저)로 묶고, 묶음 안은 최신순 (SCREENS S10)
         sessions = (
             LessonSession.objects.filter(enrollment__student=self.object)

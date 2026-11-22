@@ -4,14 +4,83 @@ from django import forms
 from django.utils import timezone
 
 from accounts.permissions import scope_to_teacher
-from lessons.models import Enrollment, LessonSession
+from lessons.models import Enrollment, Label, LessonSession
+
+
+class LabelChoiceField(forms.ModelChoiceField):
+    """레슨권의 라벨 선택. 선택지는 강사 본인의 라벨뿐이라 조작된 POST로 남의 라벨을 보내면 폼 오류 (UC-16)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            queryset=Label.objects.none(),
+            required=False,
+            empty_label="라벨 없음 (회색)",
+            label="라벨",
+            error_messages={"invalid_choice": "내 라벨만 선택할 수 있습니다."},
+            **kwargs,
+        )
+
+    def label_from_instance(self, label):
+        return f"{label.name} ({label.get_color_display()})"
+
+
+def scope_label_field(field, teacher):
+    field.queryset = Label.objects.filter(teacher=teacher).order_by("name", "id")
+
+
+class LabelForm(forms.ModelForm):
+    """S12 라벨 추가·수정 (UC-16). 강사는 폼이 아니라 로그인한 사용자로 정한다.
+
+    색은 모델의 8색 선택지에서만 받는다 (목록 밖 값은 폼 오류). 같은 강사 안에서 이름 중복은 폼 오류이고,
+    동시에 저장해 검증을 지나쳐도 DB 제약(label_unique_name_per_teacher)이 막는다 (뷰가 폼 오류로 바꿈).
+    """
+
+    class Meta:
+        model = Label
+        fields = ("name", "color")
+        widgets = {
+            "name": forms.TextInput(attrs={"autofocus": True, "placeholder": "예: 피아노, 출강, 체험"}),
+            "color": forms.RadioSelect(attrs={"class": "color-input"}),
+        }
+        error_messages = {"color": {"invalid_choice": "정해진 8색 중에서 고르세요.", "required": "색을 고르세요."}}
+
+    def __init__(self, *args, teacher, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.instance.teacher = teacher
+        self.fields["color"].choices = Label.Color.choices  # 빈 선택지(---------) 없이 8색만
+
+    def clean_name(self):
+        name = self.cleaned_data["name"].strip()
+        if not name:
+            raise forms.ValidationError("이름을 입력하세요.")
+        same = Label.objects.filter(teacher=self.instance.teacher, name=name).exclude(pk=self.instance.pk)
+        if same.exists():
+            raise forms.ValidationError("같은 이름의 라벨이 이미 있습니다.")
+        return name
+
+    def validate_unique(self):
+        pass  # 이름 중복은 clean_name에서 같은 문구로 검사한다 (모델 제약 문구가 영어로 섞이지 않게)
+
+
+class EnrollmentLabelForm(forms.ModelForm):
+    """등록된 레슨권의 라벨만 바꾸거나 비운다 (UC-16 '레슨권에 라벨을 하나 붙이거나 비울 수 있다')."""
+
+    label = LabelChoiceField()
+
+    class Meta:
+        model = Enrollment
+        fields = ("label",)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        scope_label_field(self.fields["label"], self.instance.student.teacher)
 
 
 class EnrollmentForm(forms.ModelForm):
     """S11 레슨권 등록 (UC-03).
 
     - 수강생은 폼에서 받지 않고 URL의 '내 수강생'으로 정한다 (조작 방지).
-    - 라벨 선택 칸은 UC-16(후속)에서 추가한다.
+    - 라벨 선택지는 이 수강생 강사의 라벨뿐이다 (UC-16). 저장 직전 모델 clean()이 한 번 더 확인한다.
     - 소진된 진행 중 레슨권이 있으면 '함께 종료' 체크박스를 보여 주고 기본으로 체크한다.
       선택지는 이 수강생의 소진된 진행 중 레슨권뿐이라, 조작된 POST로 다른 레슨권을 보내면 폼 오류가 된다.
       후보가 없어도 필드는 남겨 둔다. 지우면 조작된 값이나 다른 탭에서 이미 종료한 선택이 조용히 무시되고
@@ -30,9 +99,11 @@ class EnrollmentForm(forms.ModelForm):
         },
     )
 
+    label = LabelChoiceField(help_text="일정에서 이 레슨권의 회차를 라벨 색으로 구분합니다.")
+
     class Meta:
         model = Enrollment
-        fields = ("title", "total_count", "start_date")
+        fields = ("title", "total_count", "start_date", "label")
         widgets = {
             "title": forms.TextInput(attrs={"autofocus": True, "placeholder": "예: 피아노 개인 레슨"}),
             "total_count": forms.NumberInput(attrs={"min": 1, "inputmode": "numeric"}),
@@ -46,6 +117,7 @@ class EnrollmentForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.student = student
         self.instance.student = student
+        scope_label_field(self.fields["label"], student.teacher)
         if not self.is_bound:
             self.fields["start_date"].initial = timezone.localdate()
         exhausted = Enrollment.objects.filter(student=student).active().exhausted().order_by("start_date", "id")

@@ -11,6 +11,8 @@
     {% include "ui/field.html" with field=form.title %}
     {% include "ui/field.html" with field=form.total_count %}
     {% include "ui/field.html" with field=form.start_date %}
+    {% include "ui/field.html" with field=form.label %}
+    <p class="small"><a href="{% url 'lessons:label_create' %}?next={{ request.get_full_path|urlencode }}">{% include "ui/icon.html" with name="plus" size="sm" %}새 라벨 만들기</a> <span class="muted">(입력한 내용은 저장되지 않으니 먼저 라벨을 만들어 두세요)</span></p>
     {% if form.has_exhausted or form.end_exhausted.errors %}
     {# 도움말·오류를 묶음에 연결해 스크린 리더가 체크박스로 바로 이동해도 종료 효과를 읽게 한다 #}
     <fieldset class="field notice-field" aria-describedby="{% if form.has_exhausted %}{{ form.end_exhausted.auto_id }}_helptext{% endif %}{% if form.has_exhausted and form.end_exhausted.errors %} {% endif %}{% if form.end_exhausted.errors %}{{ form.end_exhausted.auto_id }}_error{% endif %}"{% if form.end_exhausted.errors %} aria-invalid="true"{% endif %}>

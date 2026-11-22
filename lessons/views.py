@@ -1,4 +1,4 @@
-"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07), UC-05 일정 조회 (S05).
+"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07), UC-05 일정 조회 (S05), UC-16 라벨 (S12).
 
 모든 동작은 **로그인한 강사의 수강생·레슨권**에서만 객체를 찾는다 (ERD 2-5). 다른 강사의 번호면 404.
 """
@@ -6,16 +6,18 @@
 import datetime
 
 from django.contrib import messages
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from accounts.permissions import get_owned_or_404, scope_to_teacher
 from lessons import services
-from lessons.forms import EnrollmentForm, SessionForm
-from lessons.models import Enrollment, LessonSession
+from lessons.forms import EnrollmentForm, EnrollmentLabelForm, LabelForm, SessionForm
+from lessons.models import Enrollment, Label, LessonSession
 from students.models import Student
 
 SESSION_OWNER = "enrollment__student__teacher"
@@ -322,7 +324,7 @@ def _back_to_session(session):
 
 
 def schedule(request):
-    """S05·S05-W 수업 일정 (UC-05). ?view=month|week&date=YYYY-MM-DD&student=<id>
+    """S05·S05-W 수업 일정 (UC-05). ?view=month|week&date=YYYY-MM-DD&student=<id>&label=<id>
 
     링크(GET)만으로 이동하므로 JS 없이 동작한다. 잘못된 값은 기본값(월간·오늘·전체)으로 바꿔 보여 준다.
     """
@@ -336,15 +338,20 @@ def schedule(request):
     students = Student.objects.for_teacher(request.user).active().order_by("name", "id")
     student_id = request.GET.get("student", "")
     student = students.filter(pk=student_id).first() if student_id.isdigit() else None
+    # 라벨별로 걸러 보기 (UC-16). 내 라벨만 찾으므로 남의 라벨 번호는 무시하고 전체를 보여 준다
+    labels = list(Label.objects.filter(teacher=request.user).order_by("name", "id"))
+    label_id = request.GET.get("label", "")
+    label = next((lb for lb in labels if str(lb.pk) == label_id), None)
+    filters = {**({"student": student.pk} if student else {}), **({"label": label.pk} if label else {})}
 
     def link(**changes):
-        params = {"view": view, "date": selected.isoformat(), **({"student": student.pk} if student else {})}
+        params = {"view": view, "date": selected.isoformat(), **filters}
         params.update(changes)
         return "?" + urlencode(params)
 
     if view == "month":
         weeks = sch.month_weeks(selected)
-        days = sch.sessions_by_day(request.user, weeks[0][0], weeks[-1][-1], student and student.pk)
+        days = sch.sessions_by_day(request.user, weeks[0][0], weeks[-1][-1], student and student.pk, label and label.pk)
         grid = [
             [
                 {
@@ -353,6 +360,7 @@ def schedule(request):
                     "is_today": d == today,
                     "is_selected": d == selected,
                     "count": len(days.get(d, [])),
+                    "dots": sch.day_dots(days.get(d, [])),
                     "url": link(date=d.isoformat()),
                 }
                 for d in week
@@ -364,7 +372,7 @@ def schedule(request):
     else:
         start = sch.week_start(selected)
         week = [start + datetime.timedelta(days=i) for i in range(7)]
-        days = sch.sessions_by_day(request.user, week[0], week[-1], student and student.pk)
+        days = sch.sessions_by_day(request.user, week[0], week[-1], student and student.pk, label and label.pk)
         context = {
             "week": [{"date": d, "is_today": d == today, "sessions": days.get(d, [])} for d in week],
             "week_first": week[0],
@@ -384,6 +392,8 @@ def schedule(request):
             "weekdays": sch.WEEKDAYS,
             "students": students,
             "student": student,
+            "labels": labels,
+            "label": label,
             "prev_url": link(date=prev_date.isoformat()),
             "next_url": link(date=next_date.isoformat()),
             "today_url": link(date=today.isoformat()),
@@ -392,3 +402,77 @@ def schedule(request):
             "add_url": reverse("lessons:session_create") + "?" + urlencode(add_params),
         },
     )
+
+
+# ---- UC-16 라벨 관리 (S12) ----
+
+
+def _safe_next(request, default):
+    """'+ 새 라벨'처럼 다른 화면에서 왔을 때 돌아갈 주소. 이 사이트 안의 주소만 허용한다 (열린 리다이렉트 방지)."""
+    target = request.POST.get("next") or request.GET.get("next") or ""
+    if url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+        return target
+    return default
+
+
+def label_list(request):
+    """S12 라벨 목록. 내 라벨만, 라벨마다 붙은 레슨권 수와 함께."""
+    labels = Label.objects.filter(teacher=request.user).annotate(enrollment_count=Count("enrollments"))
+    return render(request, "lessons/label_list.html", {"labels": labels})
+
+
+def _label_form(request, instance=None):
+    form = LabelForm(request.POST or None, instance=instance, teacher=request.user)
+    next_url = _safe_next(request, reverse("lessons:label_list"))
+    if request.method == "POST" and form.is_valid():
+        try:
+            with transaction.atomic():
+                label = form.save()
+        except IntegrityError:  # 검증과 저장 사이에 같은 이름이 먼저 저장됨 (DB 제약)
+            form.add_error("name", "같은 이름의 라벨이 이미 있습니다.")
+        else:
+            verb = "수정" if instance else "추가"
+            messages.success(request, f"'{label.name}' 라벨을 {verb}했습니다.")
+            return redirect(next_url)
+    context = {"form": form, "label": instance, "next": next_url}
+    if instance:
+        context["enrollment_count"] = instance.enrollments.count()
+    return render(request, "lessons/label_form.html", context)
+
+
+def label_create(request):
+    return _label_form(request)
+
+
+def label_edit(request, pk):
+    return _label_form(request, get_owned_or_404(Label, request.user, pk=pk))
+
+
+@require_POST
+def label_delete(request, pk):
+    """라벨 삭제. 붙어 있던 레슨권은 '라벨 없음'(회색)이 되고 레슨권·회차 기록은 그대로 (on_delete=SET_NULL)."""
+    label = get_owned_or_404(Label, request.user, pk=pk)
+    count = label.enrollments.count()
+    label.delete()
+    text = f"'{label.name}' 라벨을 삭제했습니다."
+    if count:
+        text += f" 레슨권 {count}개가 라벨 없음이 되었습니다."
+    messages.success(request, text)
+    return redirect("lessons:label_list")
+
+
+def enrollment_label(request, pk):
+    """등록된 레슨권의 라벨 바꾸기·비우기. 라벨 칸만 저장해 다른 탭에서 바꾼 상태(종료 등)를 되돌리지 않는다."""
+    enrollment = get_owned_or_404(
+        Enrollment.objects.select_related("student__teacher", "label"), request.user, "student__teacher", pk=pk
+    )
+    form = EnrollmentLabelForm(request.POST or None, instance=enrollment)
+    if request.method == "POST" and form.is_valid():
+        enrollment = form.save(commit=False)
+        enrollment.save(update_fields=["label", "updated_at"])
+        if enrollment.label:
+            messages.success(request, f"'{enrollment.title}' 레슨권에 '{enrollment.label.name}' 라벨을 붙였습니다.")
+        else:
+            messages.success(request, f"'{enrollment.title}' 레슨권의 라벨을 비웠습니다.")
+        return redirect("students:detail", pk=enrollment.student_id)
+    return render(request, "lessons/enrollment_label.html", {"form": form, "enrollment": enrollment})

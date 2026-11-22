@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}라벨 변경 · {{ enrollment.title }}{% endblock %}
+{% block back %}<a class="back-link" href="{% url 'students:detail' enrollment.student_id %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}{{ enrollment.student.name }}</a>{% endblock %}
+{% block page_title %}라벨 변경{% endblock %}
+{% block page_desc %}<p class="page-desc">'{{ enrollment.title }}' 레슨권의 회차가 일정에서 이 라벨 색으로 보여요.</p>{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% include "ui/field.html" with field=form.label %}
+    <p class="small"><a href="{% url 'lessons:label_create' %}?next={{ request.get_full_path|urlencode }}">{% include "ui/icon.html" with name="plus" size="sm" %}새 라벨 만들기</a></p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">저장</button>
+      <a class="btn btn-ghost" href="{% url 'students:detail' enrollment.student_id %}">취소</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

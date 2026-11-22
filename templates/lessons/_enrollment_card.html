@@ -3,6 +3,7 @@
 <li class="pass{% if not e.is_active %} is-ended{% endif %}">
   <div class="pass-head">
     <h3 class="pass-title">{{ e.title }}</h3>
+    {% if e.label %}<span class="label-chip"><span class="dot lc-{{ e.label.color }}" aria-hidden="true"></span>{{ e.label.name }}</span>{% endif %}
     {% if e.is_active %}<span class="badge badge-mint badge-dot">진행 중</span>{% else %}<span class="badge badge-neutral">종료</span>{% endif %}
     {% if e.is_active and e.remaining_state == "exhausted" %}<span class="badge badge-amber">{% include "ui/icon.html" with name="info" size="sm" %}소진</span>
     {% elif e.is_active and e.remaining_state == "low" %}<span class="badge badge-outline">{% include "ui/icon.html" with name="info" size="sm" %}잔여 적음</span>{% endif %}
@@ -14,6 +15,9 @@
   </dl>
   <div class="pass-foot">
     <span class="muted small">시작 {{ e.start_date|date:"Y.n.j" }}</span>
+    {% if not hide_actions %}<span class="pass-actions">
+    <a class="btn btn-ghost btn-sm" href="{% url 'lessons:enrollment_label' e.pk %}">{% if e.label %}라벨 변경{% else %}라벨 붙이기{% endif %}</a>
+    {% endif %}
     {% if e.is_active and not hide_actions %}
     <form method="post" action="{% url 'lessons:enrollment_end' e.pk %}"
           data-confirm="'{{ e.title }}' 레슨권을 종료할까요?{% if e.remaining_count > 0 %} 잔여 {{ e.remaining_count }}회가 남아 있습니다.{% endif %}">
@@ -21,5 +25,6 @@
       <button type="submit" class="btn btn-ghost btn-sm">종료</button>
     </form>
     {% endif %}
+    {% if not hide_actions %}</span>{% endif %}
   </div>
 </li>
