@@ -35,6 +35,22 @@
         <p class="muted small">강사 사정으로 열리지 않은 수업입니다. 레슨권은 차감하지 않고, 이후 보강을 등록할 수 있습니다.</p>
       </form>
     </details>
+    <details class="status-action cancel-box" id="absent-box"{% if absent_open %} open{% endif %}>
+      <summary class="btn btn-secondary btn-block">결석 처리</summary>
+      <form method="post" action="{% url 'lessons:session_absent' session.pk %}" class="form" novalidate>
+        {% csrf_token %}
+        {% with f=absent_form.deducted %}
+        <fieldset class="field choice-field"{% if f.errors %} aria-invalid="true" aria-describedby="{{ f.auto_id }}_error"{% endif %}>
+          <legend class="field-label">{{ f.label }}<span class="req" aria-hidden="true">*</span><span class="sr-only">(필수)</span></legend>
+          {% for choice in f %}<div class="check-field"><label>{{ choice.tag }} {{ choice.choice_label }}</label></div>{% endfor %}
+          {% if f.errors %}<ul class="errorlist" id="{{ f.auto_id }}_error" role="alert">{% for e in f.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </fieldset>
+        {% endwith %}
+        {% include "ui/field.html" with field=absent_form.reason %}
+        <button type="submit" class="btn btn-secondary btn-block">결석으로 기록</button>
+        <p class="muted small">수강생 사정으로 불참한 수업입니다. 차감 여부는 기본값이 없어 반드시 골라야 합니다.</p>
+      </form>
+    </details>
     {% elif needs_makeup %}
     <div class="status-action">
       {% if session.enrollment.student.is_active and session.enrollment.is_active %}
@@ -50,6 +66,12 @@
           data-confirm="휴강을 취소하고 예정으로 되돌릴까요?">
       {% csrf_token %}
       <button type="submit" class="btn btn-ghost btn-block">{% include "ui/icon.html" with name="restore" size="sm" %}휴강 취소</button>
+    </form>
+    {% elif session.status == "absent" and not session.makeup and session.enrollment.student.is_active %}
+    <form method="post" action="{% url 'lessons:session_unabsent' session.pk %}" class="status-action"
+          data-confirm="결석을 취소하고 예정으로 되돌릴까요?{% if session.absence_deducted %} 차감한 1회가 복구됩니다.{% endif %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-ghost btn-block">{% include "ui/icon.html" with name="restore" size="sm" %}결석 취소</button>
     </form>
     {% elif session.status == "completed" and session.enrollment.student.is_active %}
     <form method="post" action="{% url 'lessons:session_uncomplete' session.pk %}" class="status-action"

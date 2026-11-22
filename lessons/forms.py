@@ -241,3 +241,34 @@ class MakeupForm(forms.Form):
                 cleaned["start_at"] = timezone.make_aware(datetime.datetime.combine(date, start), tz)
                 cleaned["end_at"] = timezone.make_aware(datetime.datetime.combine(date, end), tz)
         return cleaned
+
+
+class AbsentForm(forms.Form):
+    """결석 처리 (UC-10). 차감 여부는 기본값 없이 반드시 고른다 (README 회차 규칙). 사유는 선택."""
+
+    DEDUCT_CHOICES = [
+        ("yes", "차감 (당일 취소 등, 레슨권에서 1회 뺌, 보강 불가)"),
+        ("no", "미차감 (레슨권 유지, 이후 보강 등록 가능)"),
+    ]
+
+    deducted = forms.ChoiceField(
+        label="레슨권 차감",
+        choices=DEDUCT_CHOICES,
+        widget=forms.RadioSelect,
+        error_messages={"required": "차감 여부를 고르세요.", "invalid_choice": "차감 여부를 다시 고르세요."},
+    )
+    reason = forms.CharField(
+        label="결석 사유",
+        required=False,
+        max_length=500,
+        widget=forms.Textarea(attrs={"rows": 2, "placeholder": "예: 수강생 감기 (선택)"}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        # 회차 상세에서 휴강 폼(CancelForm)과 같은 페이지에 렌더링된다. 기본 ID(id_reason)가 겹치면
+        # '결석 사유' 라벨이 휴강 사유 칸을 가리키므로 결석 폼 필드는 absent_ 접두사를 쓴다 (PR #72 리뷰)
+        kwargs.setdefault("auto_id", "absent_%s")
+        super().__init__(*args, **kwargs)
+
+    def clean_deducted(self):
+        return self.cleaned_data["deducted"] == "yes"

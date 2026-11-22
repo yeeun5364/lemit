@@ -22,5 +22,7 @@ urlpatterns = [
     path("sessions/<int:pk>/uncomplete/", views.session_uncomplete, name="session_uncomplete"),
     path("sessions/<int:pk>/cancel/", views.session_cancel, name="session_cancel"),
     path("sessions/<int:pk>/uncancel/", views.session_uncancel, name="session_uncancel"),
+    path("sessions/<int:pk>/absent/", views.session_absent, name="session_absent"),
+    path("sessions/<int:pk>/unabsent/", views.session_unabsent, name="session_unabsent"),
     path("sessions/<int:pk>/makeup/", views.session_makeup, name="session_makeup"),
 ]
