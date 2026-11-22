@@ -102,6 +102,17 @@ bash scripts/server_check.sh   # 운영 .env 사전 점검까지 다시 확인
 - **IP로 HTTP 시연할 때 주의:** 로그인 비밀번호가 암호화되지 않고 전송됩니다. 데모 계정에는 **시연 전용 비밀번호**만 쓰고, 실제 개인정보를 입력하지 않습니다(OPERATIONS §10). 실제 사용자를 받기 전에는 도메인 + HTTPS가 필수입니다.
 - 도메인을 쓴다면 DNS A 레코드를 고정 IP로 먼저 연결해야 Caddy가 인증서를 받을 수 있습니다.
 
+**비밀번호 재설정 메일 (UC-15, 선택)**
+
+- `EMAIL_HOST_USER`가 비어 있으면 메일을 보내지 않고 내용을 컨테이너 로그에 출력합니다(`docker compose logs web`). 재설정 링크도 로그에 남으므로, 실제 사용자를 받기 전에는 아래처럼 Gmail을 설정합니다.
+- Gmail 설정: 보낼 Google 계정에서 2단계 인증을 켜고 **앱 비밀번호**(16자리)를 만든 뒤 `.env`에 넣습니다. 계정의 원래 비밀번호는 넣지 않습니다.
+  - `EMAIL_HOST_USER=보낼주소@gmail.com`
+  - `EMAIL_HOST_PASSWORD=앱비밀번호16자리` (공백 없이)
+  - `DEFAULT_FROM_EMAIL=LEMIT <보낼주소@gmail.com>` (선택)
+- 값을 바꾼 뒤 `docker compose up -d web`으로 다시 띄우고, 로그인 화면의 "비밀번호를 잊으셨나요?"에서 자기 계정으로 메일이 오는지 확인합니다. 발송에 실패해도 화면은 같고, 오류는 `docker compose logs web`에 `django.contrib.auth` 로그로 남습니다.
+- 메일 링크의 주소는 요청한 Host(`DJANGO_ALLOWED_HOSTS`에 있는 값)로 만들어집니다. IP로 HTTP 시연 중이면 링크도 `http://고정IP/...`입니다.
+- 메일을 쓸 수 없을 때 비상용: 운영자가 `/admin/`에서 해당 강사의 비밀번호를 재설정합니다.
+
 ## 3. 배포
 
 > 서버에서 직접 실행하는 방법입니다. GitHub Actions로 배포하려면 [CD.md](CD.md)를 봅니다(같은 `deploy.sh`를 실행). 서버의 `flock` 잠금 때문에 수동 배포와 자동 배포는 동시에 실행되지 않습니다.

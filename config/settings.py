@@ -120,6 +120,24 @@ LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
 
+
+# 비밀번호 재설정 메일 (UC-15). 링크는 1회용이고 1시간 뒤 만료된다.
+PASSWORD_RESET_TIMEOUT = 3600
+
+# 메일 계정은 .env에만 둔다. EMAIL_HOST_USER가 비어 있으면(개발) 메일을 콘솔에 출력하고,
+# 채워져 있으면(운영) Gmail SMTP(앱 비밀번호, STARTTLS 587)로 보낸다.
+EMAIL_HOST_USER = env.str("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env.str("EMAIL_HOST_PASSWORD", default="")
+if EMAIL_HOST_USER:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = env.str("EMAIL_HOST", default="smtp.gmail.com")
+    EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+    EMAIL_USE_TLS = True
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_TIMEOUT = 10  # SMTP가 멈춰도 요청이 오래 묶이지 않게
+DEFAULT_FROM_EMAIL = env.str("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER or "LEMIT <noreply@lemit.local>")
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
