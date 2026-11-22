@@ -1,4 +1,5 @@
-"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07), UC-05 일정 조회 (S05), UC-16 라벨 (S12).
+"""UC-03 레슨권 등록·종료 (S11), UC-04 회차 등록·수정·삭제 (S06·S07), UC-05 일정 조회 (S05),
+UC-08 휴강·UC-09 보강, UC-16 라벨 (S12).
 
 모든 동작은 **로그인한 강사의 수강생·레슨권**에서만 객체를 찾는다 (ERD 2-5). 다른 강사의 번호면 404.
 """
@@ -16,7 +17,7 @@ from django.views.decorators.http import require_POST
 
 from accounts.permissions import get_owned_or_404, scope_to_teacher
 from lessons import services
-from lessons.forms import EnrollmentForm, EnrollmentLabelForm, LabelForm, SessionForm
+from lessons.forms import CancelForm, EnrollmentForm, EnrollmentLabelForm, LabelForm, MakeupForm, SessionForm
 from lessons.models import Enrollment, Label, LessonSession
 from students.models import Student
 
@@ -84,7 +85,7 @@ def enrollment_end(request, pk):
 
 
 def _owned_session(request, pk):
-    qs = LessonSession.objects.select_related("enrollment__student")
+    qs = LessonSession.objects.select_related("enrollment__student", "makeup", "makeup_for")
     return get_owned_or_404(qs, request.user, SESSION_OWNER, pk=pk)
 
 
@@ -191,6 +192,8 @@ def session_detail(request, pk):
             "enrollment": enrollment,
             "can_delete": services.deletable(session),
             "not_started": session.start_at > timezone.now(),  # 시작 전 회차는 완료 전에 확인창
+            "cancel_form": CancelForm(),
+            "needs_makeup": services.needs_makeup(session),
         },
     )
 
@@ -315,6 +318,94 @@ def session_uncomplete(request, pk):
         request, f"완료를 취소했습니다. '{e.title}' 진행 {e.used_count}회 / 잔여 {max(e.remaining_count, 0)}회"
     )
     return redirect("lessons:session_detail", pk=session.pk)
+
+
+@require_POST
+def session_cancel(request, pk):
+    """휴강 처리 (UC-08): 예정 → 휴강, 사유(선택) 저장. 레슨권은 차감하지 않는다.
+
+    완료 처리와 같은 수강생 행 잠금 안에서 최신 상태가 '예정'일 때만 바꾼다(두 번 눌러도 한 번).
+    """
+    session = _owned_session(request, pk)
+    form = CancelForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "휴강 사유는 500자 이내로 입력하세요.")
+        return redirect("lessons:session_detail", pk=session.pk)
+    with transaction.atomic():
+        services.lock_student(session.enrollment.student_id)
+        changed = LessonSession.objects.filter(pk=session.pk, status=LessonSession.Status.SCHEDULED).update(
+            status=LessonSession.Status.CANCELLED, reason=form.cleaned_data["reason"], updated_at=timezone.now()
+        )
+    if not changed:
+        messages.error(request, "예정 상태인 회차만 휴강 처리할 수 있습니다. 화면을 다시 확인하세요.")
+        return _back_to_session(session)
+    messages.success(
+        request, "휴강 처리했습니다. 레슨권은 차감하지 않습니다. 필요하면 '보강 등록'으로 보강 일정을 잡으세요."
+    )
+    return redirect("lessons:session_detail", pk=session.pk)
+
+
+@require_POST
+def session_uncancel(request, pk):
+    """휴강 취소: 휴강 → 예정 (잘못 누른 휴강 되돌리기). 보강이 연결돼 있거나 보관된 수강생이면 하지 않는다.
+
+    보강이 있는데 예정으로 되돌리면 원래 회차와 보강이 모두 열려 두 번 차감될 수 있다 (ERD §3).
+    """
+    session = _owned_session(request, pk)
+    with transaction.atomic():
+        student = services.lock_student(session.enrollment.student_id)
+        if not student.is_active:
+            messages.error(
+                request, "보관된 수강생의 회차는 휴강을 취소할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요."
+            )
+            return redirect("lessons:session_detail", pk=session.pk)
+        if LessonSession.objects.filter(makeup_for_id=session.pk).exists():
+            messages.error(request, "보강이 연결된 휴강은 취소할 수 없습니다. 보강 회차를 먼저 삭제하세요.")
+            return redirect("lessons:session_detail", pk=session.pk)
+        changed = LessonSession.objects.filter(pk=session.pk, status=LessonSession.Status.CANCELLED).update(
+            status=LessonSession.Status.SCHEDULED, reason="", updated_at=timezone.now()
+        )
+    if not changed:
+        messages.error(request, "휴강 상태인 회차만 휴강을 취소할 수 있습니다. 화면을 다시 확인하세요.")
+        return _back_to_session(session)
+    messages.success(request, "휴강을 취소하고 예정으로 되돌렸습니다.")
+    return redirect("lessons:session_detail", pk=session.pk)
+
+
+def session_makeup(request, pk):
+    """보강 등록 (UC-09): 휴강·미차감 결석 회차에 연결된 '예정' 보강 회차를 만든다.
+
+    - 한 회차에 보강은 하나 (makeup_for OneToOne + 잠금 안 재확인).
+    - 차감한 결석·완료·예정 회차에는 만들 수 없다 (중복 차감 방지, 모델 clean()도 재검증).
+    - 레슨권은 원래 회차의 것. 종료된 레슨권·보관된 수강생이면 만들지 않는다 (회차 등록과 같은 규칙).
+    """
+    original = _owned_session(request, pk)
+    refusal = services.makeup_refusal(original)
+    if refusal:
+        messages.error(request, refusal)
+        return redirect("lessons:session_detail", pk=original.pk)
+    form = MakeupForm(request.POST or None, original=original)
+    if request.method == "POST" and form.is_valid():
+        with transaction.atomic():
+            services.lock_student(original.enrollment.student_id)
+            fresh = LessonSession.objects.select_related("enrollment__student").get(pk=original.pk)
+            refusal = services.makeup_refusal(fresh)
+            if not refusal:
+                makeup = LessonSession(
+                    enrollment=fresh.enrollment,
+                    makeup_for=fresh,
+                    start_at=form.cleaned_data["start_at"],
+                    end_at=form.cleaned_data["end_at"],
+                    place=form.cleaned_data["place"],
+                )
+                makeup.full_clean()
+                makeup.save()
+        if refusal:
+            messages.error(request, refusal)
+            return redirect("lessons:session_detail", pk=original.pk)
+        return _after_save(request, makeup, "보강으로 등록")
+    back = {"back_url": reverse("lessons:session_detail", args=[original.pk]), "back_label": "원래 회차"}
+    return render(request, "lessons/makeup_form.html", {"form": form, "original": original, **back})
 
 
 def _back_to_session(session):

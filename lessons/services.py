@@ -1,5 +1,6 @@
 """회차 저장 후 경고 (UC-04). 경고는 저장을 막지 않고, 저장이 끝난 뒤 다음 화면 알림으로 보여 준다."""
 
+from django.db.models import Q
 from django.utils import timezone
 
 from lessons.models import Enrollment, LessonSession
@@ -65,3 +66,42 @@ def lock_student(student_id):
     레슨권 등록·종료, 수강생 보관, 회차 등록·수정·삭제. UC-06 완료 처리도 이것을 쓴다.
     """
     return Student.objects.select_for_update().get(pk=student_id)
+
+
+def needs_makeup(session):
+    """'보강 필요': 보강할 수 있는 회차(휴강·미차감 결석)인데 아직 보강이 없다 (UC-08).
+
+    session.makeup은 select_related("makeup")로 미리 불러 두면 추가 쿼리가 없다.
+    """
+    if not session.can_have_makeup():
+        return False
+    try:
+        return session.makeup is None
+    except LessonSession.makeup.RelatedObjectDoesNotExist:
+        return True
+
+
+def makeup_refusal(original):
+    """보강을 만들 수 없는 이유(문장). 만들 수 있으면 None (UC-09)."""
+    if not original.can_have_makeup():
+        if original.status == LessonSession.Status.ABSENT:
+            return "차감한 결석에는 보강을 등록할 수 없습니다. (중복 차감 방지)"
+        return "휴강이나 차감하지 않은 결석 회차만 보강을 등록할 수 있습니다."
+    if LessonSession.objects.filter(makeup_for_id=original.pk).exists():
+        return "이미 보강이 연결된 회차입니다. 보강은 하나만 등록할 수 있습니다."
+    if not original.enrollment.student.is_active:
+        return "보관된 수강생에게는 보강을 등록할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요."
+    if not Enrollment.objects.filter(pk=original.enrollment_id, status=Enrollment.Status.ACTIVE).exists():
+        return "종료된 레슨권의 회차에는 보강을 등록할 수 없습니다."
+    return None
+
+
+def makeup_needed_sessions(student):
+    """수강생 상세 '보강 필요' 모아 보기: 휴강·미차감 결석 중 보강이 없는 회차 (오래된 순)."""
+    cancelled = Q(status=LessonSession.Status.CANCELLED)
+    makeupable = cancelled | Q(status=LessonSession.Status.ABSENT, absence_deducted=False)
+    return (
+        LessonSession.objects.filter(makeupable, enrollment__student=student, makeup__isnull=True)
+        .select_related("enrollment")
+        .order_by("start_at", "id")
+    )

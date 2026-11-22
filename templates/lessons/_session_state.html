@@ -1,6 +1,8 @@
-{% comment %} 회차 상태 표시: 색이 아니라 모양으로 (SCREENS §4). s = LessonSession {% endcomment %}
+{% comment %} 회차 상태 표시: 색이 아니라 모양으로 (SCREENS §4). s = LessonSession
+   '보강 필요'(UC-08): 휴강·미차감 결석인데 보강이 없는 회차. s.makeup은 select_related("makeup")로 미리 불러 둔다. {% endcomment %}
 {% if s.status == "completed" %}<span class="state state-done">{% include "ui/icon.html" with name="check" size="sm" %}완료</span>
 {% elif s.status == "cancelled" %}<span class="state state-off">휴강</span>
 {% elif s.status == "absent" %}<span class="state state-off">결석·{% if s.absence_deducted %}차감{% else %}미차감{% endif %}</span>
 {% else %}<span class="state">예정</span>{% endif %}
 {% if s.makeup_for_id %}<span class="badge badge-outline">보강</span>{% endif %}
+{% if s.status == "cancelled" or s.status == "absent" and not s.absence_deducted %}{% if not s.makeup %}<span class="badge badge-amber">보강 필요</span>{% endif %}{% endif %}
