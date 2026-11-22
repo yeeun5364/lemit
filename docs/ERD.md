@@ -242,7 +242,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
 | `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함. 보강이 연결된 뒤 원래 회차를 다른 상태(차감 결석·완료 등)로 바꾸는 것도 거절 | 앱 검증 (모델 `clean`, PR #55 리뷰) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
-| `SessionChangeLog` | 예정 회차 수정에서 날짜·시간·장소 중 하나라도 바뀔 때만 1건 생성(레슨권만 옮기면 없음). 변경 전 값은 수강생 행·회차 행을 잠근 뒤 다시 읽은 값. 화면에서는 읽기만(관리자 화면도 추가·수정 불가) | 앱 (회차 수정 저장과 같은 트랜잭션, UC-11, 2026-11-22) |
+| `SessionChangeLog` | 예정 회차 수정에서 날짜·시간·장소 중 하나라도 바뀔 때만 1건 생성(레슨권만 옮기면 없음). 변경 전 값은 수강생 행·회차 행을 잠근 뒤 다시 읽은 값. 화면에서는 읽기만. 관리자 화면도 추가·수정·삭제(개별·일괄) 불가이고, 관리자가 예정 회차를 지울 때만 함께 지워짐(PR #73 리뷰) | 앱 (회차 수정 저장과 같은 트랜잭션, UC-11, 2026-11-22) |
 | `LessonRecord.session` | 회차당 일지 1개 | DB `OneToOneField` |
 | `LessonSession` 완료 취소 | `completed` → `scheduled`만 가능, `completed_at`을 비움. **수업일지(`LessonRecord`)가 있으면 불가**(일지 모델은 UC-14에서 추가, 그때 조건 추가). 보관된 수강생의 회차는 불가 | 앱 검증 (UC-06, 2026-11-20 구현: 수강생 행 잠금 안에서 `예정`/`완료`일 때만 조건부 갱신) |
 | `LessonSession` 결석 처리 | 차감 여부(`absence_deducted`)를 반드시 선택. 폼에 기본값 없음 | 폼 검증 (UC-10) |

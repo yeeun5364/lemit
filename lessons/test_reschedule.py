@@ -137,3 +137,66 @@ class RescheduleTests(TestCase):
         self.assertFalse(LessonSession.objects.exists())
         self.assertFalse(SessionChangeLog.objects.exists())
         self.assertTrue(Enrollment.objects.exists())
+
+
+class AdminChangeLogTests(TestCase):
+    """관리자 화면의 변경 이력은 읽기 전용 (PR #73 리뷰).
+
+    이력만 따로 지울 수 없고, 예정 회차를 지울 때만 함께 지워진다.
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        from lessons.tests import PASSWORD
+
+        admin_user = get_user_model().objects.create_superuser(
+            email="admin@example.com", password=PASSWORD, name="운영자"
+        )
+        teacher = make_teacher("a@example.com", "A강사")
+        self.enrollment = make_pass(Student.objects.create(teacher=teacher, name="박서연"))
+        self.session = add_session(self.enrollment, day=21)
+        self.log = SessionChangeLog.objects.create(
+            session=self.session,
+            old_start_at=local(20, 17),
+            old_end_at=local(20, 18),
+            new_start_at=local(21, 17),
+            new_end_at=local(21, 18),
+        )
+        self.client.force_login(admin_user)
+
+    def test_log_cannot_be_deleted_alone(self):
+        url = reverse("admin:lessons_sessionchangelog_delete", args=[self.log.pk])
+        self.assertEqual(self.client.get(url).status_code, 403)
+        self.assertEqual(self.client.post(url, {"post": "yes"}).status_code, 403)
+        self.assertTrue(SessionChangeLog.objects.filter(pk=self.log.pk).exists())
+
+    def test_log_bulk_delete_is_not_offered_or_accepted(self):
+        changelist = reverse("admin:lessons_sessionchangelog_changelist")
+        response = self.client.get(changelist)
+        self.assertEqual(response.status_code, 200)  # 목록은 볼 수 있다
+        self.assertNotContains(response, 'value="delete_selected"')
+        self.client.post(changelist, {"action": "delete_selected", "_selected_action": [self.log.pk], "post": "yes"})
+        self.assertTrue(SessionChangeLog.objects.filter(pk=self.log.pk).exists())
+
+    def test_log_detail_is_read_only(self):
+        url = reverse("admin:lessons_sessionchangelog_change", args=[self.log.pk])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'name="_save"')
+        self.assertEqual(self.client.get(reverse("admin:lessons_sessionchangelog_add")).status_code, 403)
+
+    def test_deleting_scheduled_session_in_admin_also_deletes_its_logs(self):
+        url = reverse("admin:lessons_lessonsession_delete", args=[self.session.pk])
+        confirm = self.client.get(url)
+        self.assertEqual(confirm.status_code, 200)
+        self.assertFalse(confirm.context["perms_lacking"])  # 이력 삭제 권한이 없다고 회차 삭제를 막지 않는다
+        self.client.post(url, {"post": "yes"})
+        self.assertFalse(LessonSession.objects.filter(pk=self.session.pk).exists())
+        self.assertFalse(SessionChangeLog.objects.exists())
+
+    def test_completed_session_with_logs_still_cannot_be_deleted(self):
+        LessonSession.objects.filter(pk=self.session.pk).update(status=LessonSession.Status.COMPLETED)
+        url = reverse("admin:lessons_lessonsession_delete", args=[self.session.pk])
+        self.assertEqual(self.client.post(url, {"post": "yes"}).status_code, 403)
+        self.assertTrue(SessionChangeLog.objects.filter(pk=self.log.pk).exists())
