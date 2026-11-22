@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import AdminUserCreationForm, UserChangeForm
 
-from .models import User
+from .models import LoginAttempt, User
 
 
 class UserCreationForm(AdminUserCreationForm):
@@ -36,3 +36,19 @@ class UserAdmin(BaseUserAdmin):
         ("기록", {"fields": ("last_login", "date_joined")}),
     )
     add_fieldsets = ((None, {"classes": ("wide",), "fields": ("email", "name", "password1", "password2")}),)
+
+
+@admin.register(LoginAttempt)
+class LoginAttemptAdmin(admin.ModelAdmin):
+    """시도 횟수 제한 기록 (#7). 운영자가 잘못 막힌 사용자를 풀어 줄 때 해당 행을 지운다. 직접 추가·수정은 막는다."""
+
+    list_display = ("created_at", "kind", "email", "ip")
+    list_filter = ("kind",)
+    search_fields = ("email", "ip")
+    readonly_fields = ("created_at", "kind", "email", "ip")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

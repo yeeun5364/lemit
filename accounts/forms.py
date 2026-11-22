@@ -38,3 +38,34 @@ class LoginForm(AuthenticationForm):
         super().__init__(request, *args, **kwargs)
         self.fields["username"].widget = forms.EmailInput(attrs={"autocomplete": "email", "autofocus": True})
         self.fields["username"].label = "이메일"
+
+    def clean(self):
+        """시도 횟수 제한 (#7): 막힌 상태면 비밀번호를 확인하지 않고 같은 안내를 보여 준다.
+
+        실패하면 기록하고, 성공하면 그 이메일의 실패 기록을 지운다. 비밀번호가 맞아도 막힌 동안에는
+        들어갈 수 없다(맞는 비밀번호를 찾았는지 알려 주지 않기 위해).
+        """
+        from accounts import throttle
+        from accounts.models import LoginAttempt
+
+        email = self.cleaned_data.get("username")
+        kind = LoginAttempt.Kind.LOGIN
+        # 비밀번호를 확인하기 전에 시도 한 칸을 예약한다. 확인·예약이 잠금 안에서 한 번에 일어나므로
+        # 여러 worker에 동시에 들어온 요청도 한도를 넘어 비밀번호 확인까지 가지 못한다 (PR #70 리뷰 P2)
+        attempt = throttle.reserve(kind, self.request, email, pending=True)
+        if attempt is None:
+            raise forms.ValidationError(throttle.BLOCKED_MESSAGE, code="throttled")
+        try:
+            cleaned = super().clean()
+        except forms.ValidationError as e:
+            if e.code == "invalid_login":
+                throttle.confirm(attempt)  # 확정된 실패: 이후의 성공만 이 기록을 이메일 집계에서 뺄 수 있다
+            else:  # 실패가 아닌 다른 오류(비활성 계정 등)는 세지 않는다
+                throttle.release(attempt)
+            raise
+        except Exception:
+            throttle.release(attempt)
+            raise
+        throttle.release(attempt)  # 성공은 실패가 아니므로 반납
+        throttle.clear_email(kind, email)
+        return cleaned
