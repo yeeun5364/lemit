@@ -59,8 +59,9 @@ ENROLLMENTS = [
 ]
 
 # 회차: (수강생, 오늘 + 일수, 시작 시, 시작 분, 상태, 장소, 사유)
-# 잔여 = 총 회차 − 완료 수. 김하늘 3(보통), 이서준 2(강조), 박지민 9, 최유나 0(소진)
+# 잔여 = 총 회차 − (완료 + 차감 결석). 김하늘 3(보통), 이서준 2(강조), 박지민 8(완료 1 + 차감 결석 1), 최유나 0(소진)
 S, C, X = LessonSession.Status.SCHEDULED, LessonSession.Status.COMPLETED, LessonSession.Status.CANCELLED
+A = LessonSession.Status.ABSENT  # 결석 (UC-10). 차감 여부는 DEDUCTED_ABSENCES로 정한다
 SESSIONS = [
     ("김하늘", -24, 19, 0, C, "강사 작업실", ""),
     ("김하늘", -21, 19, 0, C, "강사 작업실", ""),
@@ -73,7 +74,9 @@ SESSIONS = [
     ("이서준", -7, 17, 0, C, "수강생 집", ""),
     ("이서준", -2, 17, 0, X, "수강생 집", "학교 행사로 휴강. 보강 날짜 조율 중"),  # 보강 필요(보강 미연결)
     ("이서준", 5, 17, 0, S, "수강생 집", ""),
+    ("박지민", -11, 14, 0, A, "연습실 A", "당일 연락 없이 불참 (차감)"),  # 차감 결석: 잔여에서 1회 뺌, 보강 불가
     ("박지민", -8, 14, 0, C, "연습실 A", ""),
+    ("박지민", -3, 14, 0, A, "연습실 A", "가족 행사로 결석 (미차감)"),  # 미차감 결석: 보강 필요
     ("박지민", -5, 14, 0, X, "연습실 A", "감기로 휴강"),  # 아래 보강 회차와 연결
     ("박지민", 0, 15, 0, S, "연습실 A", ""),  # 오늘 수업
     ("박지민", 6, 14, 0, S, "연습실 A", ""),
@@ -82,6 +85,9 @@ SESSIONS = [
     ("최유나", -13, 20, 0, C, "합주실", ""),
     ("최유나", -6, 20, 0, C, "합주실", ""),
 ]
+
+# 차감한 결석 (수강생, 오늘 + 일수). 나머지 결석은 미차감
+DEDUCTED_ABSENCES = {("박지민", -11)}
 # 보강: (수강생, 원래 회차 일수, 보강 일수, 시, 분)
 MAKEUPS = [("박지민", -5, 2, 11, 0)]
 
@@ -211,6 +217,7 @@ class Command(BaseCommand):
                 place=place,
                 reason=reason,
                 completed_at=end if status == C else None,
+                absence_deducted=status == A and (name, days) in DEDUCTED_ABSENCES,
             )
         for name, original_days, days, hour, minute in MAKEUPS:
             start = at(days, hour, minute)
