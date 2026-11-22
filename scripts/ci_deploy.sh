@@ -11,8 +11,12 @@
 # 허용하는 요청 (SSH가 SSH_ORIGINAL_COMMAND로 넘겨줌). 그 밖의 요청은 모두 거부(종료 코드 2):
 #   deploy <커밋 SHA 40자리>       → (수동 배포) origin/main에 포함된 커밋인지 확인 후 scripts/deploy.sh <SHA>.
 #                                    배포가 **성공하면** 자동 배포 보류(아래)를 푼다. 실패하면 보류 유지
-#   deploy-auto <커밋 SHA 40자리>  → (자동 배포) 보류 중이거나 origin/main 최신 커밋이 아니면 아무것도 바꾸지 않고 끝낸다(0).
-#                                    아니면 deploy와 같다
+#   deploy-tag <태그> <커밋 SHA>   → (버전 태그 자동 배포) 태그 vMAJOR.MINOR.PATCH가 origin에서 정확히 그 커밋을 가리키고
+#                                    그 커밋이 origin/main에 포함됐는지 확인한다. 보류 중이거나 그 커밋이 이미 배포돼
+#                                    있으면 '[ci_deploy] 건너뜀:'을 출력하고 아무것도 바꾸지 않고 끝낸다(0). 아니면
+#                                    scripts/deploy.sh <SHA>. 보류는 풀지 않는다(수동 deploy만 품). main 최신이 아니어도 된다
+#   deploy-auto <커밋 SHA 40자리>  → (예전 main push 자동 배포. 지금 워크플로는 쓰지 않지만 갱신 순서와 무관하게 안전하도록
+#                                    남겨 둠) 보류 중이거나 origin/main 최신 커밋이 아니면 아무것도 바꾸지 않고 끝낸다(0)
 #   rollback <이미지 태그 12자리>   → 자동 배포 보류를 건 뒤 scripts/rollback.sh <태그>
 #   status                         → 현재 태그·자동 배포 보류(대기 중인 롤백 포함)·최근 배포 기록·컨테이너 상태·공개 경로·
 #                                    강제 명령 버전 (읽기 전용)
@@ -50,7 +54,7 @@ REQ="${SSH_ORIGINAL_COMMAND:-}"
 
 reject() {
     echo "[ci_deploy] 허용하지 않는 요청입니다: $1" >&2
-    echo "[ci_deploy] 사용: deploy <SHA 40자리> | deploy-auto <SHA 40자리> | rollback <태그 12자리> | status" >&2
+    echo "[ci_deploy] 사용: deploy <SHA 40자리> | deploy-tag <vX.Y.Z> <SHA 40자리> | rollback <태그 12자리> | status" >&2
     exit 2
 }
 fail() {
@@ -74,8 +78,18 @@ MAIN_REF="${CI_DEPLOY_MAIN_REF:-refs/remotes/origin/main}"
 
 [ "${#REQ}" -le 80 ] || reject "너무 깁니다"
 [[ "$REQ" != *$'\n'* && "$REQ" != *$'\r'* ]] || reject "여러 줄"
-read -r ACTION ARG EXTRA <<< "$REQ" || true
+read -r ACTION ARG ARG2 EXTRA <<< "$REQ" || true
 [ -z "${EXTRA:-}" ] || reject "인자가 너무 많습니다"
+# 두 번째 인자는 deploy-tag만 받는다 (deploy-tag <태그> <SHA>). 이후 ARG는 언제나 커밋 SHA(또는 롤백 태그)
+TAG_NAME=""
+if [ "${ACTION:-}" = "deploy-tag" ]; then
+    TAG_NAME="${ARG:-}"
+    ARG="${ARG2:-}"
+elif [ -n "${ARG2:-}" ]; then
+    reject "인자가 너무 많습니다"
+fi
+# 배포하는 버전 태그 형식: v<정수>.<정수>.<정수> (앞자리 0 없음, 각 6자리까지). 그 밖의 v* 태그는 배포하지 않는다
+TAG_RE='^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
 
 run() {
     if [ "${CI_DEPLOY_DRY_RUN:-0}" = "1" ]; then echo "DRY_RUN: $*"; exit 0; fi
@@ -159,7 +173,43 @@ check_main_commit() {
     fi
 }
 
+# 태그가 origin에서 정확히 이 커밋을 가리키는지 (주석 태그는 커밋까지 따라감). 서버의 태그를 origin 값으로 덮어쓴다
+check_tag_commit() {
+    if [ "${CI_DEPLOY_SKIP_FETCH:-0}" != "1" ]; then
+        git fetch --quiet --no-tags origin "+refs/tags/$TAG_NAME:refs/tags/$TAG_NAME" \
+            || reject "origin에 태그 $TAG_NAME 가 없습니다"
+    fi
+    local target
+    target="$(git rev-parse --verify --quiet "refs/tags/$TAG_NAME^{commit}" 2> /dev/null || true)"
+    [ "$target" = "$ARG" ] || reject "태그 $TAG_NAME 가 커밋 $ARG 를 가리키지 않습니다 (지금: ${target:-없음})"
+}
+
 case "${ACTION:-}" in
+    deploy-tag)
+        [[ "$TAG_NAME" =~ $TAG_RE ]] || reject "deploy-tag에는 vMAJOR.MINOR.PATCH 형식의 태그가 필요합니다"
+        [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy-tag에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
+        check_tag_commit
+        check_main_commit
+        lock_server
+        # 잠금을 잡은 뒤에 확인한다: 기다리는 사이에 롤백이 보류를 걸었거나 대기 중일 수 있다 (deploy-auto와 같음)
+        if [ -f "$HOLD" ]; then
+            echo "[ci_deploy] 건너뜀: 자동 배포 보류 중이라 태그 $TAG_NAME 를 배포하지 않습니다 ($(head -n 1 "$HOLD"))"
+            echo "[ci_deploy] 원인을 확인한 뒤 수동 배포(Actions → Deploy → deploy)로 보류를 푸세요 (docs/CD.md §5)"
+            exit 0
+        fi
+        if rollback_pending; then
+            echo "[ci_deploy] 건너뜀: 대기 중인 롤백이 있어 태그 $TAG_NAME 를 배포하지 않습니다"
+            exit 0
+        fi
+        # 기다리는 사이에 태그가 옮겨졌을 수 있으므로 잠금 안에서 한 번 더 본다
+        check_tag_commit
+        if [ "$(cat "$STATE_DIR/current_tag" 2> /dev/null || true)" = "${ARG:0:12}" ]; then
+            echo "[ci_deploy] 건너뜀: 태그 $TAG_NAME 의 커밋(${ARG:0:12})이 이미 배포돼 있습니다"
+            exit 0
+        fi
+        echo "[ci_deploy] 태그 $TAG_NAME (${ARG:0:12}) 배포를 시작합니다"
+        run_script scripts/deploy.sh "$ARG"
+        ;;
     deploy)
         [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
         check_main_commit

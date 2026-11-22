@@ -99,6 +99,42 @@ else fail=$((fail+1)); echo "[실패] 배포하지 않았는데 보류가 풀림
 rm -f "$HOLD"                                   # 성공 후 해제는 아래 '실제 실행' 시험에서 확인
 expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 보류가 없으면 다시 자동 배포 가능
 
+# 버전 태그 배포 (deploy-tag <태그> <SHA>). 지금 원격 main = c2 (c3는 되감겨 main 밖), c1은 main의 이전 커밋
+g -C "$T/src" tag v0.1.1 "$C2"                                     # 가벼운 태그 → main 최신 커밋
+g -C "$T/src" tag -a -m "release" v0.2.0 "$C1"                     # 주석 태그 → main의 이전 커밋
+g -C "$T/src" tag v9.9.9 "$FEATURE"                                # main 밖 커밋
+g -C "$T/src" push -q "$T/origin.git" v0.1.1 v0.2.0 v9.9.9
+CURRENT="$T/server/deploy/state/current_tag"
+rm -f "$HOLD" "$CURRENT"
+expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-tag v0.1.1 $C2"   # 정상 태그 → 그 커밋 배포
+expect "DRY_RUN: bash scripts/deploy.sh $C1"     "deploy-tag v0.2.0 $C1"   # 주석 태그·main 최신이 아니어도 그 커밋
+expect REJECT                                    "deploy-tag v0.1.1 $C1"   # 태그가 다른 커밋을 가리킴
+expect REJECT                                    "deploy-tag v9.9.9 $FEATURE"  # main 밖 커밋 (태그는 맞음)
+expect REJECT                                    "deploy-tag v7.7.7 $C2"   # origin에 없는 태그
+for bad in "0.1.1 $C2" "v0.1 $C2" "v01.1.1 $C2" "v0.1.1-rc1 $C2" "v0.1.1" "$C2 v0.1.1" "v0.1.1 ${C2:0:39}" \
+           "v0.1.1 $C2 extra" "v0.1.1;id $C2"; do
+    expect REJECT "deploy-tag $bad"
+done
+expect REJECT                                    "deploy $C2 v0.1.1"       # 두 번째 인자는 deploy-tag만
+expect REJECT                                    "rollback $TAG v0.1.1"
+printf '%s rollback %s 이후 자동 배포 보류 (요청 1)\n' "$(date '+%F %T')" "$TAG" > "$HOLD"
+expect "건너뜀: 자동 배포 보류 중"               "deploy-tag v0.1.1 $C2"   # 롤백 보류 중 → 배포하지 않음(0)
+if [ -f "$HOLD" ]; then pass=$((pass+1)); echo "[통과] 태그 배포는 보류를 풀지 않음"
+else fail=$((fail+1)); echo "[실패] 태그 배포가 보류를 지움"; fi
+rm -f "$HOLD"
+mkdir -p "$T/server/deploy/state/rollback_pending"
+echo "대기" > "$T/server/deploy/state/rollback_pending/$$"            # 살아 있는 PID(이 셸)의 롤백 대기 표시
+expect "건너뜀: 대기 중인 롤백"                  "deploy-tag v0.1.1 $C2"
+rm -rf "$T/server/deploy/state/rollback_pending"
+echo "${C2:0:12}" > "$CURRENT"
+expect "건너뜀: 태그 v0.1.1 의 커밋"             "deploy-tag v0.1.1 $C2"   # 이미 배포된 커밋 → 중복 배포 안 함
+rm -f "$CURRENT"
+# 원격에서 태그를 다른 커밋으로 옮기면 서버도 origin 값을 따른다
+g -C "$T/src" tag -f v0.1.1 "$C1" > /dev/null
+g -C "$T/src" push -q -f "$T/origin.git" v0.1.1
+expect REJECT                                    "deploy-tag v0.1.1 $C2"
+expect "DRY_RUN: bash scripts/deploy.sh $C1"     "deploy-tag v0.1.1 $C1"
+
 # 서버 잠금 대기: 다른 배포가 잠금을 잡고 있으면 기다렸다가 진행, 시간 안에 못 얻으면 실패
 LOCK="$T/server/deploy/state/deploy.lock"
 if command -v flock > /dev/null; then
@@ -180,8 +216,18 @@ if command -v flock > /dev/null; then
         if [ "$code" -eq 0 ] && grep -qF "$1" <<< "$out"; then pass=$((pass+1)); echo "[통과] (실행) $2 → $1"
         else fail=$((fail+1)); echo "[실패] (실행) $2: 기대 $1, 종료 $code, 출력: $out"; fi
     }
-    rm -f "$HOLD" "$ACTIONS"
+    rm -f "$HOLD" "$ACTIONS" "$CURRENT"
     make_stubs new
+    # 태그 배포가 실제로 deploy.sh를 실행하고, 보류 중이면 실행하지 않는지 (DRY_RUN이 아닌 실행)
+    real "태그 v0.2.0" "deploy-tag v0.2.0 $C1"
+    echo "보류 (요청 9)" > "$HOLD"
+    real "건너뜀: 자동 배포 보류 중" "deploy-tag v0.2.0 $C1"
+    if [ "$(cat "$ACTIONS")" = "deploy $C1" ] && [ -f "$HOLD" ]; then
+        pass=$((pass+1)); echo "[통과] (실행) 태그 배포 1번만 실행, 보류 중 요청은 실행 안 함, 보류 유지"
+    else
+        fail=$((fail+1)); echo "[실패] (실행) 태그 배포 기록: $(tr '\n' ' ' < "$ACTIONS"), 보류 $([ -f "$HOLD" ] && echo 있음 || echo 없음)"
+    fi
+    rm -f "$HOLD" "$ACTIONS"
     real "잡은 잠금으로 진행" "deploy $C2"
     real "잡은 잠금으로 진행" "rollback $TAG"
     rm -f "$HOLD"

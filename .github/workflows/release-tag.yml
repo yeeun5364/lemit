@@ -1,0 +1,113 @@
+name: Release tag
+
+# 버전 태그(v*) 푸시 → 배포 준비 확인 (GitHub-hosted 전용, Secret·배포 키 없음). docs/CD.md §0·§6-2
+#
+# 이 워크플로는 **판단 자료만 만들고 배포하지 않는다.** 성공하면 Deploy 워크플로가 workflow_run으로 이어받는다.
+# 왜 Deploy에 push: tags를 직접 걸지 않나:
+#   push로 실행되는 워크플로는 **태그가 가리키는 커밋 안의** 워크플로 파일을 쓴다. main 밖 커밋에 고친 deploy.yml을 넣고
+#   태그를 달면 그 파일이 Self-hosted 러너에서 돌 수 있다. workflow_run은 항상 **기본 브랜치(main)의** deploy.yml로
+#   실행되므로, 러너에서는 main의 배포 작업만 돈다. 이 파일(태그 커밋의 버전이 실행될 수 있음)은 GitHub-hosted이고
+#   읽기 권한만 있으며, Deploy는 이 결과를 믿지 않고 태그·main 포함·CI를 다시 확인한다.
+#
+# 하는 일
+#   1) 태그 형식 vMAJOR.MINOR.PATCH, 태그가 가리키는 커밋, 그 커밋이 main에 포함됐는지 확인
+#   2) 그 커밋의 main push CI(ci.yml) 결과를 기다린다. CI가 진행 중이면 최대 CI_WAIT_SECONDS 동안 기다리고,
+#      성공하면 이 워크플로도 성공(→ Deploy 시작), 실패·취소·시간 초과·CI 실행 없음이면 실패(→ 배포 안 함)
+#   CD_AUTO_DEPLOY가 'true'가 아니면 확인만 하고 Deploy는 시작되지 않는다 (요약에 표시).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    name: 태그 확인·CI 대기 (GitHub-hosted)
+    if: github.repository == 'yeeun5364/lemit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      PUSHED_SHA: ${{ github.sha }}
+      AUTO: ${{ vars.CD_AUTO_DEPLOY }}
+      # CI가 진행 중일 때 기다리는 최대 시간(초)과 확인 간격. CI 실행이 아예 보이지 않으면 NO_RUN_GRACE초 뒤 실패
+      CI_WAIT_SECONDS: "1800"
+      POLL_SECONDS: "30"
+      NO_RUN_GRACE: "300"
+    steps:
+      - name: 태그 형식·대상 커밋·main 포함 확인
+        id: tag
+        run: |
+          re='^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
+          [[ "$TAG" =~ $re ]] || { echo "::error::배포하는 태그는 vMAJOR.MINOR.PATCH 형식이어야 합니다 (받은 값: $TAG)"; exit 1; }
+          # 태그가 가리키는 커밋 (주석 태그는 커밋까지 따라간다)
+          read -r type sha < <(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '"\(.object.type) \(.object.sha)"') || true
+          for _ in 1 2 3; do
+            [ "$type" = "tag" ] || break
+            read -r type sha < <(gh api "repos/$REPO/git/tags/$sha" --jq '"\(.object.type) \(.object.sha)"') || true
+          done
+          [ "$type" = "commit" ] && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::태그 $TAG 의 커밋을 찾지 못했습니다"; exit 1; }
+          [ "$sha" = "$PUSHED_SHA" ] || { echo "::error::태그 $TAG 가 푸시된 커밋($PUSHED_SHA)이 아니라 $sha 를 가리킵니다 (그사이 옮겨짐)"; exit 1; }
+          status="$(gh api "repos/$REPO/compare/$sha...main" --jq .status)"
+          case "$status" in
+            identical|ahead) ;;
+            *) echo "::error::태그 $TAG 의 커밋 $sha 는 main에 포함된 커밋이 아닙니다 ($status). main에 병합된 커밋에 태그를 다세요"; exit 1 ;;
+          esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "태그 $TAG → $sha (main에 포함)"
+
+      - name: main push CI 결과 기다리기
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          start=$SECONDS
+          while :; do
+            # 그 커밋의 main push CI 실행들: 상태·결과 (가장 최근 것부터)
+            runs="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&per_page=20" \
+              --jq '.workflow_runs[] | "\(.id) \(.status) \(.conclusion // "-")"')"
+            if grep -q ' completed success$' <<< "$runs"; then
+              echo "CI 성공: $(grep ' completed success$' <<< "$runs" | head -n 1 | cut -d' ' -f1)"
+              break
+            fi
+            elapsed=$((SECONDS - start))
+            if [ -z "$runs" ]; then
+              if [ "$elapsed" -ge "$NO_RUN_GRACE" ]; then
+                echo "::error::커밋 $SHA 의 main push CI 실행이 없습니다. main에 push된(병합된) 커밋에 태그를 달았는지 확인하세요 (docs/CD.md §6-2)"
+                exit 1
+              fi
+            elif ! grep -qv ' completed ' <<< "$runs"; then
+              # 모두 끝났는데 성공이 없음 (실패·취소)
+              echo "::error::커밋 $SHA 의 main push CI가 성공하지 않았습니다:"; echo "$runs"
+              echo "::error::CI를 고쳐 새 커밋으로 병합한 뒤 그 커밋에 새 태그를 다세요. 취소된 실행이면 CI를 다시 실행한 뒤 이 워크플로를 다시 실행하세요"
+              exit 1
+            fi
+            if [ "$elapsed" -ge "$CI_WAIT_SECONDS" ]; then
+              echo "::error::${CI_WAIT_SECONDS}초 동안 CI가 끝나지 않았습니다. CI가 끝난 뒤 이 워크플로(Release tag)를 다시 실행하세요 (Re-run jobs)"
+              exit 1
+            fi
+            echo "CI 진행 중 또는 아직 시작 전 (${elapsed}초 경과). ${POLL_SECONDS}초 뒤 다시 확인합니다"
+            sleep "$POLL_SECONDS"
+          done
+
+      - name: 요약
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          {
+            echo "### 태그 확인: $STATUS"
+            echo "- 태그: \`$TAG\`"
+            if [ -n "$SHA" ]; then echo "- 커밋: \`$SHA\`"; fi
+            if [ "$STATUS" != "success" ]; then
+              echo "- 배포하지 않습니다 (위 오류 확인)"
+            elif [ "$AUTO" = "true" ]; then
+              echo "- 자동 배포 켜짐(CD_AUTO_DEPLOY=true): Deploy 워크플로가 이어서 실행됩니다. 결과는 Actions → Deploy"
+            else
+              echo "- 자동 배포 꺼짐(CD_AUTO_DEPLOY≠true): 배포하지 않습니다. 배포하려면 Actions → Deploy → deploy에 이 커밋을 넣어 수동 실행"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

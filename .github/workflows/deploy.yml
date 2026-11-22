@@ -1,11 +1,16 @@
 name: Deploy
 
-# Lightsail 배포 (#42 → #56 Self-hosted Runner). 사용자가 직접 할 설정과 남는 위험은 docs/CD.md.
-# - 자동: main에 push된 커밋의 CI가 성공하면 배포한다. 저장소 변수 CD_AUTO_DEPLOY가 "true"일 때만 (처음엔 꺼 둠).
+# Lightsail 배포 (#42 → #56 Self-hosted Runner → 버전 태그 배포). 사용자가 직접 할 설정과 남는 위험은 docs/CD.md.
+# - PR·main push는 CI만 실행하고 배포하지 않는다.
+# - 자동: 버전 태그(vX.Y.Z)를 push하면 Release tag 워크플로(GitHub-hosted)가 태그·main 포함·CI 완료를 확인하고,
+#   성공하면 이 워크플로가 workflow_run으로 이어받아 **태그가 가리키는 커밋**을 배포한다.
+#   저장소 변수 CD_AUTO_DEPLOY가 "true"일 때만 (처음엔 꺼 둠). 롤백 뒤 보류 중이면 서버가 건너뛴다 (deploy-tag).
+#   workflow_run은 항상 main의 이 파일로 실행되므로, 태그 커밋 안의 (고쳐졌을 수 있는) deploy.yml은 러너에서 돌지 않는다.
 # - 수동: Actions → Deploy → Run workflow (main에서만). check(연결만 확인) / deploy / rollback
 #
 # 두 작업으로 나눈다:
-#   1) plan   (GitHub-hosted): 요청 검증, 그 커밋의 실제 CI 실행(ci.yml, main push)과 3개 작업 성공 확인. 판단은 여기서.
+#   1) plan   (GitHub-hosted): 요청 검증(태그 → 커밋, 최신 버전 태그인지), 그 커밋의 실제 CI 실행(ci.yml, main push)과
+#      3개 작업 성공, main 포함 확인. Release tag의 결과는 믿지 않고 여기서 다시 확인한다. 판단은 여기서.
 #   2) deploy (Self-hosted, 러너 전용 WSL 배포판): 러너 격리 확인 → SSH 요청 한 줄. 저장소 코드·외부 액션은 받지 않는다.
 #      서버는 배포 전용 키의 강제 명령(/usr/local/bin/lemit-ci-deploy = scripts/ci_deploy.sh 설치본)만 실행한다.
 #
@@ -16,9 +21,8 @@ name: Deploy
 # - 공개 로그에 키·.env·방화벽 규칙을 출력하지 않는다.
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [Release tag]
     types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       action:
@@ -48,7 +52,7 @@ jobs:
         vars.CD_AUTO_DEPLOY == 'true' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.path == '.github/workflows/release-tag.yml' &&
         github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -58,38 +62,63 @@ jobs:
     outputs:
       action: ${{ steps.req.outputs.action }}
       sha: ${{ steps.req.outputs.sha }}
+      tag: ${{ steps.req.outputs.tag }}
       remote: ${{ steps.req.outputs.remote }}
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
+      # 태그 자동 배포의 판정 (scripts/test_deploy_workflow.py가 이 run 본문을 가짜 gh로 실행해 시험한다):
+      # - 태그 형식 vMAJOR.MINOR.PATCH, 태그가 지금도 Release tag가 본 커밋(head_sha)을 가리키는지 (그사이 옮겨지면 중단)
+      # - 이 태그가 저장소의 가장 높은 버전 태그인지. 더 높은 태그가 있으면 그 태그의 배포에 맡기고 건너뛴다
+      #   (태그를 여러 개 연달아 올렸거나 예전 태그의 Release tag를 다시 실행한 경우에 예전 버전으로 덮어쓰지 않게)
       - name: 요청 정하기 (동작·대상 검증)
         id: req
         env:
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          AUTO: ${{ vars.CD_AUTO_DEPLOY }}
           IN_ACTION: ${{ inputs.action }}
           IN_SHA: ${{ inputs.sha }}
           IN_TAG: ${{ inputs.rollback_tag }}
         run: |
-          if [ "$EVENT" = "workflow_run" ]; then ACTION=deploy; SHA="$RUN_SHA"; TAG=""
-          else ACTION="$IN_ACTION"; SHA="$IN_SHA"; TAG="$IN_TAG"; fi
-          # 자동 배포인데 그사이 main에 더 새 커밋이 있으면 여기서 끝낸다 (deploy 작업이 대기열에 들어가
-          # 기다리던 rollback 등을 밀어내지 않게, PR #58 리뷰 P2). 러너도 실행 직전에 한 번 더 확인한다.
+          skip() {
+            echo "::notice::$1"
+            { echo "action=skip"; echo "sha="; echo "tag="; echo "remote="; } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          VERSION_TAG=""
           if [ "$EVENT" = "workflow_run" ]; then
-            head="$(gh api "repos/$REPO/commits/main" --jq .sha)"
-            if [ "$head" != "$SHA" ]; then
-              echo "::notice::main에 더 새 커밋이 있어 이 자동 배포는 건너뜁니다. 새 커밋의 CI가 성공하면 배포됩니다."
-              { echo "action=skip"; echo "sha="; echo "remote="; } >> "$GITHUB_OUTPUT"
-              exit 0
+            ACTION=deploy; SHA="$RUN_SHA"; TAG=""; VERSION_TAG="$RUN_TAG"
+            # 작업 조건(if)에도 있지만, 이 본문만 따로 실행해도 같은 결론이 나도록 한 번 더 본다
+            [ "$AUTO" = "true" ] || skip "자동 배포가 꺼져 있어(CD_AUTO_DEPLOY≠true) 태그 $VERSION_TAG 를 배포하지 않습니다."
+            re='^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
+            [[ "$VERSION_TAG" =~ $re ]] || { echo "::error::버전 태그 형식(vMAJOR.MINOR.PATCH)이 아닙니다: $VERSION_TAG"; exit 1; }
+            [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Release tag 실행의 커밋 SHA가 올바르지 않습니다"; exit 1; }
+            # 태그 → 커밋 (주석 태그는 커밋까지 따라간다)
+            read -r type target < <(gh api "repos/$REPO/git/ref/tags/$VERSION_TAG" --jq '"\(.object.type) \(.object.sha)"') || true
+            for _ in 1 2 3; do
+              [ "$type" = "tag" ] || break
+              read -r type target < <(gh api "repos/$REPO/git/tags/$target" --jq '"\(.object.type) \(.object.sha)"') || true
+            done
+            if [ "$type" != "commit" ] || [ "$target" != "$SHA" ]; then
+              echo "::error::태그 $VERSION_TAG 가 커밋 $SHA 를 가리키지 않습니다 (지금: ${target:-없음}). 태그를 옮겼다면 새 버전 태그를 올리세요"
+              exit 1
             fi
+            newest="$(gh api "repos/$REPO/git/matching-refs/tags/v" --jq '.[].ref | ltrimstr("refs/tags/")' \
+              | grep -E "$re" | sort -V | tail -n 1)"
+            [ "$newest" = "$VERSION_TAG" ] || skip "더 높은 버전 태그($newest)가 있어 $VERSION_TAG 는 배포하지 않습니다 ($newest 의 배포에 맡김)."
+          else
+            ACTION="$IN_ACTION"; SHA="$IN_SHA"; TAG="$IN_TAG"
           fi
           case "$ACTION" in
             deploy)
               [ -n "$SHA" ] || SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
               [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::SHA는 소문자 40자리여야 합니다"; exit 1; }
-              # 자동 배포는 deploy-auto: 서버가 롤백 뒤 보류 중이면 배포하지 않는다 (scripts/ci_deploy.sh)
-              if [ "$EVENT" = "workflow_run" ]; then REMOTE="deploy-auto $SHA"; else REMOTE="deploy $SHA"; fi ;;
+              # 태그 자동 배포는 deploy-tag: 서버가 태그·main 포함을 다시 확인하고, 롤백 뒤 보류 중이면 배포하지 않는다
+              # (scripts/ci_deploy.sh). 수동 배포는 deploy: 성공하면 보류를 푼다
+              if [ "$EVENT" = "workflow_run" ]; then REMOTE="deploy-tag $VERSION_TAG $SHA"; else REMOTE="deploy $SHA"; fi ;;
             rollback)
               [[ "$TAG" =~ ^[0-9a-f]{12}$ ]] || { echo "::error::rollback_tag는 소문자 12자리여야 합니다"; exit 1; }
               SHA=""; REMOTE="rollback $TAG" ;;
@@ -97,7 +126,7 @@ jobs:
             *) echo "::error::알 수 없는 동작"; exit 1 ;;
           esac
           # 출력에는 검증을 통과한 값만 쓴다 (deploy가 아니면 SHA는 비움)
-          { echo "action=$ACTION"; echo "sha=$SHA"; echo "remote=$REMOTE"; } >> "$GITHUB_OUTPUT"
+          { echo "action=$ACTION"; echo "sha=$SHA"; echo "tag=$VERSION_TAG"; echo "remote=$REMOTE"; } >> "$GITHUB_OUTPUT"
           echo "동작: $ACTION / 서버 요청: $REMOTE"
 
       # 테스트를 통과한 main의 커밋만 배포한다. 체크 이름이 아니라 그 커밋의 실제 CI 실행(ci.yml, main push)을 찾아
@@ -107,17 +136,12 @@ jobs:
         if: steps.req.outputs.action == 'deploy'
         env:
           SHA: ${{ steps.req.outputs.sha }}
-          EVENT: ${{ github.event_name }}
-          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           status="$(gh api "repos/$REPO/compare/$SHA...main" --jq .status)"
           case "$status" in identical|ahead) ;; *) echo "::error::$SHA 는 main에 포함된 커밋이 아닙니다 ($status)"; exit 1 ;; esac
-          if [ "$EVENT" = "workflow_run" ]; then
-            RUN_ID="$TRIGGER_RUN_ID"
-          else
-            RUN_ID="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=completed&per_page=50" \
-              --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
-          fi
+          # 태그 자동 배포·수동 배포 모두 그 커밋의 main push CI 성공 실행을 직접 찾는다 (Release tag 결과를 믿지 않음)
+          RUN_ID="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=completed&per_page=50" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::$SHA 의 성공한 CI 실행(ci.yml, main push)을 찾지 못했습니다"; exit 1; }
           run="$(gh api "repos/$REPO/actions/runs/$RUN_ID" \
             --jq '[.path, .event, .head_branch, .head_sha, .conclusion, .head_repository.full_name] | @tsv')"
@@ -159,6 +183,7 @@ jobs:
       SSH_USER: ${{ vars.LIGHTSAIL_USER }}
       ACTION: ${{ needs.plan.outputs.action }}
       SHA: ${{ needs.plan.outputs.sha }}
+      VERSION_TAG: ${{ needs.plan.outputs.tag }}
       REMOTE: ${{ needs.plan.outputs.remote }}
       EVENT: ${{ github.event_name }}
       REPO: ${{ github.repository }}
@@ -234,16 +259,25 @@ jobs:
             command -v "$t" > /dev/null || { echo "::error::러너에 $t 가 없습니다 (docs/CD.md §2)"; exit 1; }
           done
 
-      # 러너 PC가 꺼져 있다가 늦게 켜진 경우: 그사이 main에 더 새 커밋이 들어왔으면 이 (오래된) 자동 배포는 건너뛴다.
-      # 새 커밋의 CI가 성공하면 그 배포가 따로 실행된다. 수동 배포(workflow_dispatch)는 지정한 커밋을 그대로 배포한다.
-      - name: 최신 main인지 확인 (자동 배포만)
+      # 러너 PC가 꺼져 있다가 늦게 켜진 경우: 그사이 태그가 옮겨졌거나 더 높은 버전 태그가 올라왔으면 이 (오래된) 태그
+      # 배포는 건너뛴다. 더 높은 태그의 배포가 따로 실행된다. 수동 배포(workflow_dispatch)는 지정한 커밋을 그대로 배포한다.
+      # (scripts/test_deploy_workflow.py가 가짜 git으로 이 run 본문을 시험한다)
+      - name: 태그가 그대로이고 최신 버전인지 확인 (태그 배포만)
         id: fresh
         run: |
           if [ "$EVENT" != "workflow_run" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          head="$(git ls-remote "https://github.com/$REPO.git" refs/heads/main | cut -f1)"
-          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::main 최신 커밋을 확인하지 못했습니다"; exit 1; }
-          if [ "$head" != "$SHA" ]; then
-            echo "::notice::main에 더 새 커밋($head)이 있어 이 자동 배포($SHA)는 건너뜁니다. 새 커밋의 CI가 성공하면 배포됩니다."
+          re='^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
+          refs="$(git ls-remote --tags "https://github.com/$REPO.git" 'refs/tags/v*')" \
+            || { echo "::error::원격 태그를 확인하지 못했습니다"; exit 1; }
+          # 주석 태그는 ^{} 줄(가리키는 커밋)을 쓴다
+          target="$(awk -v t="refs/tags/$VERSION_TAG" '$2 == t && !p { s = $1 } $2 == t "^{}" { s = $1; p = 1 } END { print s }' <<< "$refs")"
+          newest="$(awk '{ sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2 }' <<< "$refs" \
+            | grep -E "$re" | sort -uV | tail -n 1)"
+          if [ "$target" != "$SHA" ]; then
+            echo "::notice::태그 $VERSION_TAG 가 더는 $SHA 를 가리키지 않아(지금: ${target:-없음}) 이 배포는 건너뜁니다."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$newest" != "$VERSION_TAG" ]; then
+            echo "::notice::더 높은 버전 태그($newest)가 있어 $VERSION_TAG 배포는 건너뜁니다 ($newest 의 배포가 따로 실행됨)."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -275,7 +309,9 @@ jobs:
             fi
             sleep 5
           done
-          "${SSH[@]}" "$REMOTE"
+          # 서버 출력은 로그에 그대로 보이고, 요약에서 '건너뜀'(보류·이미 배포됨)을 알리려고 파일에도 남긴다
+          set -o pipefail
+          "${SSH[@]}" "$REMOTE" 2>&1 | tee "$RUNNER_TEMP/lemit-remote.log"
 
       - name: 정리 (임시 키 폴더가 남았으면 삭제)
         if: always()
@@ -287,10 +323,14 @@ jobs:
           STATUS: ${{ job.status }}
           SKIPPED: ${{ steps.fresh.outputs.skip }}
         run: |
+          server_skip="$(grep -m 1 -F '[ci_deploy] 건너뜀:' "$RUNNER_TEMP/lemit-remote.log" 2> /dev/null | sed 's/^\[ci_deploy\] 건너뜀: *//' || true)"
+          rm -f "$RUNNER_TEMP/lemit-remote.log"
           {
             echo "### 배포 결과: $STATUS"
-            if [ "$SKIPPED" = "true" ]; then echo "- **건너뜀:** main에 더 새 커밋이 있음 (새 커밋의 배포가 따로 실행됨)"; fi
+            if [ "$SKIPPED" = "true" ]; then echo "- **건너뜀:** 태그가 옮겨졌거나 더 높은 버전 태그가 있음 (위 알림 참고)"; fi
+            if [ -n "$server_skip" ]; then echo "- **건너뜀(서버):** $server_skip"; fi
             echo "- 동작: \`$ACTION\`"
+            if [ -n "$VERSION_TAG" ]; then echo "- 버전 태그: \`$VERSION_TAG\`"; fi
             echo "- 서버 요청: \`$REMOTE\`"
             if [ -n "$SHA" ]; then echo "- 커밋: \`$SHA\`"; fi
             echo "- 서버 기록: \`deploy/state/history.log\` (check 동작으로 확인 가능)"
