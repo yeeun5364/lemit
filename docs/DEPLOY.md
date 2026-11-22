@@ -104,7 +104,7 @@ bash scripts/server_check.sh   # 운영 .env 사전 점검까지 다시 확인
 
 **비밀번호 재설정 메일 (UC-15, 선택)**
 
-- `EMAIL_HOST_USER`가 비어 있으면 메일을 보내지 않고 내용을 컨테이너 로그에 출력합니다(`docker compose logs web`). 재설정 링크도 로그에 남으므로, 실제 사용자를 받기 전에는 아래처럼 Gmail을 설정합니다.
+- `EMAIL_HOST_USER`가 비어 있으면 운영(`DJANGO_DEBUG=False`)에서는 **메일을 보내지 않습니다.** 재설정 링크는 일회용 인증 정보라 로그에도 남기지 않고, `docker compose logs web`에 "메일 발송이 꺼져 있어 N건을 보내지 않았습니다" 경고만 남깁니다(PR #68 리뷰). 화면은 같은 안내가 나오므로, 비밀번호 찾기를 쓰려면 아래처럼 Gmail을 설정합니다. (개발 `DJANGO_DEBUG=True`에서만 메일 내용을 콘솔에 출력합니다.)
 - Gmail 설정: 보낼 Google 계정에서 2단계 인증을 켜고 **앱 비밀번호**(16자리)를 만든 뒤 `.env`에 넣습니다. 계정의 원래 비밀번호는 넣지 않습니다.
   - `EMAIL_HOST_USER=보낼주소@gmail.com`
   - `EMAIL_HOST_PASSWORD=앱비밀번호16자리` (공백 없이)

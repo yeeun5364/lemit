@@ -156,7 +156,7 @@ class EmailSettingsTests(TestCase):
         self.assertIn('env.str("EMAIL_HOST_PASSWORD"', settings_src)
 
     def test_backend_depends_on_env(self):
-        """EMAIL_HOST_USER가 없으면 콘솔, 있으면 Gmail SMTP(TLS 587)."""
+        """SMTP 설정이 있으면 Gmail SMTP(TLS 587), 없으면 개발은 콘솔·운영은 발송 안 함 (PR #68 리뷰 P1)."""
         import importlib
         import os
 
@@ -172,11 +172,62 @@ class EmailSettingsTests(TestCase):
                     return importlib.reload(conf)
 
         try:
-            dev = load({})
+            dev = load({"DJANGO_DEBUG": "True"})
             self.assertEqual(dev.EMAIL_BACKEND, "django.core.mail.backends.console.EmailBackend")
-            prod = load({"EMAIL_HOST_USER": "lemit@gmail.com", "EMAIL_HOST_PASSWORD": "app-pass"})
-            self.assertEqual(prod.EMAIL_BACKEND, "django.core.mail.backends.smtp.EmailBackend")
-            self.assertEqual((prod.EMAIL_HOST, prod.EMAIL_PORT, prod.EMAIL_USE_TLS), ("smtp.gmail.com", 587, True))
-            self.assertEqual(prod.DEFAULT_FROM_EMAIL, "lemit@gmail.com")
+            prod_no_smtp = load({"DJANGO_DEBUG": "False"})
+            self.assertEqual(prod_no_smtp.EMAIL_BACKEND, "accounts.mail.DisabledEmailBackend")
+            smtp = {"EMAIL_HOST_USER": "lemit@gmail.com", "EMAIL_HOST_PASSWORD": "app-pass"}
+            for debug in ("True", "False"):
+                with self.subTest(debug=debug):
+                    prod = load({"DJANGO_DEBUG": debug, **smtp})
+                    self.assertEqual(prod.EMAIL_BACKEND, "django.core.mail.backends.smtp.EmailBackend")
+                    self.assertEqual(
+                        (prod.EMAIL_HOST, prod.EMAIL_PORT, prod.EMAIL_USE_TLS), ("smtp.gmail.com", 587, True)
+                    )
+                    self.assertEqual(prod.DEFAULT_FROM_EMAIL, "lemit@gmail.com")
         finally:
             importlib.reload(conf)
+
+
+@override_settings(DEBUG=False, EMAIL_BACKEND="accounts.mail.DisabledEmailBackend")
+class ProductionWithoutSmtpTests(TestCase):
+    """PR #68 리뷰 P1: 운영에서 SMTP가 없으면 재설정 링크가 로그·stdout 어디에도 나오지 않는다."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(email="teacher@example.com", password=OLD, name="강사")
+
+    def capture_reset(self, email):
+        import io
+        import logging
+        from contextlib import redirect_stderr, redirect_stdout
+
+        out, err, logs = io.StringIO(), io.StringIO(), io.StringIO()
+        handler = logging.StreamHandler(logs)
+        root = logging.getLogger()
+        root.addHandler(handler)
+        old_level = root.level
+        root.setLevel(logging.DEBUG)
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                response = self.client.post(reverse("password_reset"), {"email": email})
+        finally:
+            root.removeHandler(handler)
+            root.setLevel(old_level)
+        return response, out.getvalue() + err.getvalue() + logs.getvalue()
+
+    def test_reset_link_is_not_printed_or_logged(self):
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        response, captured = self.capture_reset("teacher@example.com")
+        self.assertRedirects(response, reverse("password_reset_done"))
+        self.assertNotIn("/accounts/password-reset/" + uid, captured)
+        self.assertNotIn(uid + "/", captured)
+        self.assertNotIn("teacher@example.com", captured)  # 받는 사람도 남기지 않음
+        self.assertNotIn("비밀번호 재설정 안내", captured)  # 메일 제목·본문도
+        self.assertIn("보내지 않았습니다", captured)  # 운영자가 알 수 있는 경고만
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_same_response_for_unknown_email(self):
+        known, _ = self.capture_reset("teacher@example.com")
+        unknown, captured = self.capture_reset("nobody@example.com")
+        self.assertEqual((known.status_code, known["Location"]), (unknown.status_code, unknown["Location"]))
+        self.assertNotIn("nobody@example.com", captured)
