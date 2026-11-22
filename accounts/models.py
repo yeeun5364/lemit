@@ -68,3 +68,31 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.name} <{self.email}>"
+
+
+class LoginAttempt(models.Model):
+    """로그인 실패·비밀번호 재설정 요청 기록 (시도 횟수 제한, accounts/throttle.py, #7).
+
+    계정과 연결하지 않고 입력한 이메일(소문자)과 접속 IP만 남긴다. 없는 이메일도 같은 방식으로 세어
+    가입 여부가 드러나지 않게 한다. 하루가 지난 기록은 새 기록을 남길 때 지운다.
+    """
+
+    class Kind(models.TextChoices):
+        LOGIN = "login", "로그인 실패"
+        RESET = "reset", "비밀번호 재설정 요청"
+
+    kind = models.CharField("종류", max_length=10, choices=Kind.choices)
+    email = models.CharField("입력한 이메일", max_length=254, blank=True)
+    ip = models.GenericIPAddressField("IP", null=True, blank=True)
+    created_at = models.DateTimeField("시각", auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "로그인 시도"
+        verbose_name_plural = "로그인 시도"
+        indexes = [
+            models.Index(fields=["kind", "email", "created_at"], name="attempt_kind_email"),
+            models.Index(fields=["kind", "ip", "created_at"], name="attempt_kind_ip"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} {self.email or '-'} {self.created_at:%Y-%m-%d %H:%M}"

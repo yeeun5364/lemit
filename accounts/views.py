@@ -54,6 +54,20 @@ class PasswordResetView(auth_views.PasswordResetView):
     subject_template_name = "accounts/password_reset_subject.txt"
     success_url = reverse_lazy("password_reset_done")
 
+    def form_valid(self, form):
+        """요청 횟수 제한 (#7, PR #68 '재설정 요청 횟수 제한 없음'): 같은 이메일·IP로 너무 자주 요청하면
+        메일을 보내지 않는다. 화면은 같은 안내로 보내 가입 여부도, 막혔다는 사실도 드러내지 않는다."""
+        from accounts import throttle
+        from accounts.models import LoginAttempt
+
+        email = form.cleaned_data.get("email")
+        kind = LoginAttempt.Kind.RESET
+        blocked = throttle.is_blocked(kind, self.request, email)
+        throttle.record(kind, self.request, email)
+        if blocked:
+            return redirect(self.get_success_url())
+        return super().form_valid(form)
+
 
 class PasswordResetDoneView(auth_views.PasswordResetDoneView):
     template_name = "accounts/password_reset_done.html"
