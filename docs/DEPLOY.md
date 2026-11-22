@@ -129,7 +129,7 @@ scripts/deploy.sh <커밋SHA>   # 특정 커밋
    - 도메인 모드(`SITE_ADDRESS`가 도메인): `DJANGO_BEHIND_PROXY=True`, `DJANGO_SECURE_HTTPS=True`, `DJANGO_ALLOWED_HOSTS` **첫 값 = 도메인**, `DJANGO_CSRF_TRUSTED_ORIGINS`에 `https://도메인`
    - IP 모드(`SITE_ADDRESS=:80`): `DJANGO_SECURE_HTTPS=False`(HTTPS가 없어서 켜면 리다이렉트가 반복됨), `DJANGO_ALLOWED_HOSTS` 첫 값은 서버 IP(`localhost` 아님)
 2. **코드 받기:** `git fetch`와 `checkout`을 합니다. 서버 작업 폴더에 수정한 내용이 있으면 중단합니다.
-3. **이미지 빌드:** 태그는 커밋 SHA 12자리입니다.
+3. **이미지 준비:** 태그는 커밋 SHA 12자리입니다. 서버에서 직접 실행하거나 수동 `deploy`면 서버에서 빌드합니다. **태그 배포 파이프라인**(CD.md §0)은 `DEPLOY_IMAGE=ghcr.io/yeeun5364/lemit-web@sha256:…`로 실행되어 **빌드하지 않고** 그 digest의 이미지를 받아 `lemit-web:<12자리>` 태그를 붙입니다. 받지 못하면 빌드로 대신하지 않고 `FAILED_PULL`, 이미지 라벨의 커밋이 배포할 커밋과 다르면 `FAILED_IMAGE_REVISION`으로 멈춥니다.
 4. **`manage.py check --deploy`:** 운영 `.env`로 새 이미지에서 실행합니다. **모드별로 의도적으로 받아들이는 경고만 허용**하고, 그 밖의 경고나 오류가 나오면 중단합니다.
    - IP 모드: `W004`(HSTS), `W008`(SSL 리다이렉트), `W012`(세션 쿠키 secure), `W016`(CSRF 쿠키 secure). HTTP 시연이므로 HTTPS 관련 경고는 피할 수 없습니다.
    - 도메인 모드: `W004`(HSTS)만. 인증서가 안정된 뒤 `DJANGO_HSTS_SECONDS`로 켭니다.
@@ -140,13 +140,15 @@ scripts/deploy.sh <커밋SHA>   # 특정 커밋
    - IP 모드: Caddy(80)를 거쳐 `/healthz/`를 호출합니다.
    - 도메인 모드: `curl --resolve`로 `https://도메인/healthz/`를 호출해 **인증서까지 검증**합니다.
    - 인증서를 처음 발급받는 시간을 고려해 기본 10초 × 12회 재시도합니다.
-9. **결과 처리:** 1~8을 모두 통과해야 `deploy/state/current_tag`를 바꾸고 `history.log`에 `OK`를 남깁니다.
+9. **실행 이미지 확인:** 실행 중인 web 컨테이너의 이미지 ID가 3번에서 준비한 이미지와 같은지 확인합니다. 다르면 직전 이미지로 되돌립니다.
+10. **결과 처리:** 1~9를 모두 통과해야 `deploy/state/current_tag`를 바꾸고 `history.log`에 `OK`를 남깁니다. 레지스트리 이미지면 `deploy/state/current_image`에 digest를 남기고, 서버에서 빌드했으면 지웁니다. 마지막 줄 `[deploy-result] …`는 GitHub 실행 요약이 읽습니다.
 
 **실패했을 때 처리와 복구 범위**
 
 | 실패 지점 | 기록 | 처리 |
 |---|---|---|
 | 사전 점검, `check --deploy` | 사전 점검은 화면에만, `check --deploy`는 `FAILED_CHECK_DEPLOY` | 아무것도 바꾸지 않고 중단. `.env`를 고친 뒤 다시 실행 |
+| 레지스트리 이미지 받기 실패, 라벨 커밋 불일치 (태그 파이프라인) | `FAILED_PULL`, `FAILED_IMAGE_REVISION` | web은 바꾸지 않고 중단. GHCR 공개 설정·서버 외부 연결(CD.md §5-4·§5-5), Release 기록 확인 |
 | web이 healthy가 안 됨, 스모크 실패 | `FAILED_ROLLED_BACK_TO_<직전 태그>` | **직전 성공 이미지로 web 자동 롤백**(앱+모델). 롤백 후에도 스모크로 확인 |
 | 공개 경로 확인만 실패 | `FAILED_PUBLIC_CHECK` | web은 스모크를 통과했으므로 되돌리지 않음. **`current_tag`는 바꾸지 않음.** 프록시 로그·DNS·인증서·방화벽을 고친 뒤 다시 실행 |
 
@@ -193,6 +195,7 @@ scripts/rollback.sh <이미지 태그>  # 해당 태그로 web 교체 + 스모�
 ```
 
 - 앱과 모델이 이미지 단위로 함께 돌아갑니다. 모델만 따로 바꾸거나 되돌리지 않습니다.
+- 태그 파이프라인으로 받은 레지스트리 이미지도 서버에 `lemit-web:<커밋 12자리>` 태그가 붙어 있어, 서버에서 빌드한 예전 이미지와 같은 방법으로 롤백합니다. `deploy/state/current_image`는 롤백한 이미지가 레지스트리 이미지면 그 digest로, 서버 빌드 이미지면 지워집니다.
 - **DB 스키마는 되돌리지 않습니다.** 되돌릴 이미지 이후에 마이그레이션이 있었다면 그 이미지가 현재 스키마와 맞는지 먼저 확인합니다. 파괴적 마이그레이션은 배포 전에 따로 계획합니다(OPERATIONS §5).
 - 자동 롤백에는 한계가 있습니다. 실패한 새 이미지가 스모크 테스트 전 약 20~30초 동안 요청을 받을 수 있습니다. 시연 직전에는 배포하지 않습니다.
 

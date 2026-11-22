@@ -135,6 +135,54 @@ g -C "$T/src" push -q -f "$T/origin.git" v0.1.1
 expect REJECT                                    "deploy-tag v0.1.1 $C2"
 expect "DRY_RUN: bash scripts/deploy.sh $C1"     "deploy-tag v0.1.1 $C1"
 
+# 태그 배포 파이프라인 (deploy-image <태그> <SHA> <digest>). GitHub Release 응답은 파일로 흉내 낸다.
+# 지금: v0.2.0(주석 태그) → c1(main), v9.9.9 → feature(main 밖)
+D="sha256:$(printf 'd%.0s' $(seq 1 64))"
+D2="sha256:$(printf 'e%.0s' $(seq 1 64))"
+IMG="ghcr.io/yeeun5364/lemit-web"
+REL="$T/release.json"
+release_json() {  # release_json <태그> <커밋> <digest> [draft true|false] [블록 없음이면 noblock]
+    local block="<!-- lemit-release\\r\\ntag=$1\\r\\ncommit=$2\\r\\nmodel_sha256=$(printf 'f%.0s' $(seq 1 64))\\r\\nimage=$IMG@$3\\r\\n-->"
+    [ "${5:-}" != noblock ] || block="손으로 쓴 노트"
+    printf '{"tag_name": "%s", "draft": %s, "prerelease": false, "body": "## %s\\r\\n| 항목 | 값 |\\r\\n%s"}' \
+        "$1" "${4:-false}" "$1" "$block" > "$REL"
+}
+export CI_DEPLOY_RELEASE_JSON="$REL"
+CURRENT_IMAGE="$T/server/deploy/state/current_image"
+rm -f "$HOLD" "$CURRENT" "$CURRENT_IMAGE"
+release_json v0.2.0 "$C1" "$D"
+expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "deploy-image v0.2.0 $C1 $D"   # 정상: 기록된 digest로
+expect "서버에서 빌드하지 않음"                                    "deploy-image v0.2.0 $C1 $D"
+expect REJECT                                    "deploy-image v0.2.0 $C1 $D2"    # Release에 기록되지 않은 digest
+expect REJECT                                    "deploy-image v0.1.1 $C1 $D"     # Release의 태그와 다름
+release_json v0.2.0 "$C2" "$D"; expect REJECT    "deploy-image v0.2.0 $C1 $D"     # Release의 커밋과 다름
+release_json v0.2.0 "$C1" "$D" true; expect REJECT "deploy-image v0.2.0 $C1 $D"   # 초안 Release
+release_json v0.2.0 "$C1" "$D" false noblock; expect REJECT "deploy-image v0.2.0 $C1 $D"  # 파이프라인 기록 없음
+echo "not json" > "$REL"; expect REJECT          "deploy-image v0.2.0 $C1 $D"
+release_json v9.9.9 "$FEATURE" "$D"; expect REJECT "deploy-image v9.9.9 $FEATURE $D"   # main 밖 커밋 (기록은 맞음)
+release_json v0.2.0 "$C1" "$D"
+expect REJECT                                    "deploy-image v0.2.0 $C2 $D"     # 태그가 다른 커밋을 가리킴
+for bad in "v0.2.0 $C1" "v0.2.0 $C1 sha256:abc" "v0.2.0 $C1 ${D^^}" "v0.2.0 $C1 ${D#sha256:}" "v0.2.0 $C1 $D extra" \
+           "v0.2 $C1 $D" "v0.2.0 ${C1:0:39} $D" "v0.2.0 $C1 $D;id"; do
+    expect REJECT "deploy-image $bad"
+done
+expect REJECT                                    "deploy-tag v0.2.0 $C1 $D"       # 세 번째 인자는 deploy-image만
+expect REJECT                                    "deploy $C1 v0.2.0 $D"
+expect REJECT                                    "deploy-image v0.2.0 $C1 $D$(printf 'a%.0s' $(seq 1 40))"  # 너무 김
+printf '%s rollback %s 이후 자동 배포 보류 (요청 1)\n' "$(date '+%F %T')" "$TAG" > "$HOLD"
+expect "건너뜀: 자동 배포 보류 중"               "deploy-image v0.2.0 $C1 $D"     # 롤백 보류 중 → 배포 안 함(0)
+rm -f "$HOLD"
+mkdir -p "$T/server/deploy/state/rollback_pending"
+echo "대기" > "$T/server/deploy/state/rollback_pending/$$"
+expect "건너뜀: 대기 중인 롤백"                  "deploy-image v0.2.0 $C1 $D"
+rm -rf "$T/server/deploy/state/rollback_pending"
+echo "${C1:0:12}" > "$CURRENT"; echo "$IMG@$D" > "$CURRENT_IMAGE"
+expect "이미 배포돼 있습니다"                    "deploy-image v0.2.0 $C1 $D"     # 같은 커밋·digest → 중복 배포 안 함
+rm -f "$CURRENT_IMAGE"                                                          # 같은 커밋을 서버에서 빌드해 배포한 상태
+expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "deploy-image v0.2.0 $C1 $D"   # → 검증된 이미지로 교체
+rm -f "$CURRENT"
+unset CI_DEPLOY_RELEASE_JSON
+
 # 서버 잠금 대기: 다른 배포가 잠금을 잡고 있으면 기다렸다가 진행, 시간 안에 못 얻으면 실패
 LOCK="$T/server/deploy/state/deploy.lock"
 if command -v flock > /dev/null; then
@@ -228,6 +276,26 @@ if command -v flock > /dev/null; then
         fail=$((fail+1)); echo "[실패] (실행) 태그 배포 기록: $(tr '\n' ' ' < "$ACTIONS"), 보류 $([ -f "$HOLD" ] && echo 있음 || echo 없음)"
     fi
     rm -f "$HOLD" "$ACTIONS"
+    # 이미지 배포 (DRY_RUN 아님): 작업 트리를 대상 커밋으로 바꾼 뒤 그 커밋의 deploy.sh를 DEPLOY_IMAGE와 함께 실행.
+    # 그 deploy.sh가 이미지 배포를 모르면(이 기능 이전 커밋) 빌드로 대신하지 않고 실패해야 한다
+    export CI_DEPLOY_RELEASE_JSON="$REL"
+    release_json v0.2.0 "$C1" "$D"
+    git -C "$T/server" checkout -q --detach "$C2"
+    out="$(SSH_ORIGINAL_COMMAND="deploy-image v0.2.0 $C1 $D" CI_DEPLOY_DRY_RUN=0 bash "$T/lemit-ci-deploy" 2>&1)"; code=$?
+    if [ "$code" -eq 1 ] && grep -qF "이미지 배포를 지원하지 않습니다" <<< "$out" && [ ! -s "$ACTIONS" ]; then
+        pass=$((pass+1)); echo "[통과] (실행) 이미지 배포를 모르는 deploy.sh는 실행하지 않음"
+    else fail=$((fail+1)); echo "[실패] (실행) 예전 deploy.sh: 종료 $code, 출력: $out"; fi
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'cd "$(dirname "$0")/.."' 'STATE_DIR=deploy/state' \
+        "$(sed -n '/^take_lock() {/,/^}/p' scripts/rollback.sh)" 'take_lock' \
+        "echo \"deploy-image \$1 image=\${DEPLOY_IMAGE:-} head=\$(git rev-parse HEAD)\" >> \"$ACTIONS\"" > "$T/server/scripts/deploy.sh"
+    git -C "$T/server" checkout -q --detach "$C2"
+    real "잡은 잠금으로 진행" "deploy-image v0.2.0 $C1 $D"
+    if [ "$(cat "$ACTIONS")" = "deploy-image $C1 image=$IMG@$D head=$C1" ]; then
+        pass=$((pass+1)); echo "[통과] (실행) 대상 커밋으로 바꾼 뒤 DEPLOY_IMAGE=<기록된 digest>로 deploy.sh 실행"
+    else fail=$((fail+1)); echo "[실패] (실행) 이미지 배포 기록: $(cat "$ACTIONS")"; fi
+    unset CI_DEPLOY_RELEASE_JSON
+    rm -f "$HOLD" "$ACTIONS"
+    make_stubs new
     real "잡은 잠금으로 진행" "deploy $C2"
     real "잡은 잠금으로 진행" "rollback $TAG"
     rm -f "$HOLD"

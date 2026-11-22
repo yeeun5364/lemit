@@ -15,6 +15,12 @@
 #                                    그 커밋이 origin/main에 포함됐는지 확인한다. 보류 중이거나 그 커밋이 이미 배포돼
 #                                    있으면 '[ci_deploy] 건너뜀:'을 출력하고 아무것도 바꾸지 않고 끝낸다(0). 아니면
 #                                    scripts/deploy.sh <SHA>. 보류는 풀지 않는다(수동 deploy만 품). main 최신이 아니어도 된다
+#   deploy-image <태그> <커밋 SHA> <sha256:이미지 digest>
+#                                  → (태그 배포 파이프라인. 지금 워크플로가 태그에 쓰는 요청) deploy-tag와 같은 태그·main
+#                                    포함·보류 확인에 더해, GitHub Release <태그>의 기록(커밋·이미지 digest)이 요청과
+#                                    같은지 확인한다. 작업 트리를 그 커밋으로 바꾼 뒤 그 커밋의 scripts/deploy.sh를
+#                                    DEPLOY_IMAGE=<저장소>@<digest>로 실행한다: 레지스트리에서 정확히 그 digest를 받아
+#                                    실행하고 **서버에서 이미지를 빌드하지 않는다.** 그 커밋·digest가 이미 배포돼 있으면 건너뜀
 #   deploy-auto <커밋 SHA 40자리>  → (예전 main push 자동 배포. 지금 워크플로는 쓰지 않지만 갱신 순서와 무관하게 안전하도록
 #                                    남겨 둠) 보류 중이거나 origin/main 최신 커밋이 아니면 아무것도 바꾸지 않고 끝낸다(0)
 #   rollback <이미지 태그 12자리>   → 자동 배포 보류를 건 뒤 scripts/rollback.sh <태그>
@@ -47,6 +53,7 @@
 #   CI_DEPLOY_SKIP_FETCH=1 main 포함 확인 전에 git fetch를 하지 않는다
 #   CI_DEPLOY_MAIN_REF     main 포함 확인 기준 (기본 refs/remotes/origin/main)
 #   CI_DEPLOY_LOCK_WAIT    서버 잠금을 기다리는 최대 초 (기본 1200)
+#   CI_DEPLOY_RELEASE_JSON GitHub Release API 응답 대신 읽을 파일 (테스트용)
 set -euo pipefail
 
 REPO="${CI_DEPLOY_REPO:-/home/ec2-user/lemit}"
@@ -54,7 +61,8 @@ REQ="${SSH_ORIGINAL_COMMAND:-}"
 
 reject() {
     echo "[ci_deploy] 허용하지 않는 요청입니다: $1" >&2
-    echo "[ci_deploy] 사용: deploy <SHA 40자리> | deploy-tag <vX.Y.Z> <SHA 40자리> | rollback <태그 12자리> | status" >&2
+    echo "[ci_deploy] 사용: deploy <SHA 40자리> | deploy-tag <vX.Y.Z> <SHA 40자리> |" \
+        "deploy-image <vX.Y.Z> <SHA 40자리> <sha256:digest> | rollback <태그 12자리> | status" >&2
     exit 2
 }
 fail() {
@@ -75,17 +83,27 @@ STATE_DIR="deploy/state"
 HOLD="$STATE_DIR/auto_deploy_hold"
 PENDING_DIR="$STATE_DIR/rollback_pending"
 MAIN_REF="${CI_DEPLOY_MAIN_REF:-refs/remotes/origin/main}"
+# 태그 배포 이미지를 받는 레지스트리 저장소와 Release를 확인할 GitHub 저장소 (고정. 요청으로 바꿀 수 없음)
+IMAGE_REPO="ghcr.io/yeeun5364/lemit-web"
+GITHUB_REPO="yeeun5364/lemit"
 
-[ "${#REQ}" -le 80 ] || reject "너무 깁니다"
+[ "${#REQ}" -le 140 ] || reject "너무 깁니다"
 [[ "$REQ" != *$'\n'* && "$REQ" != *$'\r'* ]] || reject "여러 줄"
-read -r ACTION ARG ARG2 EXTRA <<< "$REQ" || true
+read -r ACTION ARG ARG2 ARG3 EXTRA <<< "$REQ" || true
 [ -z "${EXTRA:-}" ] || reject "인자가 너무 많습니다"
-# 두 번째 인자는 deploy-tag만 받는다 (deploy-tag <태그> <SHA>). 이후 ARG는 언제나 커밋 SHA(또는 롤백 태그)
+# 두 번째 인자는 deploy-tag·deploy-image만, 세 번째 인자는 deploy-image만 받는다.
+# 이후 ARG는 언제나 커밋 SHA(또는 롤백 태그), TAG_NAME은 버전 태그, DIGEST는 이미지 digest
 TAG_NAME=""
-if [ "${ACTION:-}" = "deploy-tag" ]; then
+DIGEST=""
+if [ "${ACTION:-}" = "deploy-tag" ] || [ "${ACTION:-}" = "deploy-image" ]; then
     TAG_NAME="${ARG:-}"
     ARG="${ARG2:-}"
-elif [ -n "${ARG2:-}" ]; then
+    if [ "$ACTION" = "deploy-image" ]; then
+        DIGEST="${ARG3:-}"
+    elif [ -n "${ARG3:-}" ]; then
+        reject "인자가 너무 많습니다"
+    fi
+elif [ -n "${ARG2:-}" ] || [ -n "${ARG3:-}" ]; then
     reject "인자가 너무 많습니다"
 fi
 # 배포하는 버전 태그 형식: v<정수>.<정수>.<정수> (앞자리 0 없음, 각 6자리까지). 그 밖의 v* 태그는 배포하지 않는다
@@ -184,7 +202,81 @@ check_tag_commit() {
     [ "$target" = "$ARG" ] || reject "태그 $TAG_NAME 가 커밋 $ARG 를 가리키지 않습니다 (지금: ${target:-없음})"
 }
 
+# GitHub Release <태그>에 파이프라인이 남긴 기록(커밋·이미지)이 이 요청과 같은지 (공개 API, 인증 없음).
+# 배포 키가 새도 Release에 기록되지 않은 이미지(파이프라인이 검증하지 않은 digest)는 배포되지 않게 한다.
+# Release 본문의 기계용 블록 (.github/workflows/deploy.yml의 release 작업이 만든다):
+#   <!-- lemit-release ... tag=<태그> ... commit=<SHA> ... image=<저장소>@sha256:<digest> ... -->
+check_release_record() {
+    local json why
+    if [ -n "${CI_DEPLOY_RELEASE_JSON:-}" ]; then
+        json="$(cat "$CI_DEPLOY_RELEASE_JSON")" || fail "Release 응답 파일을 읽지 못했습니다"
+    else
+        command -v curl > /dev/null 2>&1 || fail "curl이 없습니다 (Release 확인 필요)"
+        json="$(curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/$GITHUB_REPO/releases/tags/$TAG_NAME")" \
+            || reject "GitHub Release $TAG_NAME 를 찾지 못했습니다 (파이프라인 release 단계가 끝났는지 확인)"
+    fi
+    command -v python3 > /dev/null 2>&1 || fail "python3가 없습니다 (Release 확인 필요)"
+    why="$(printf '%s' "$json" | python3 -c '
+import json, sys
+tag, sha, image = sys.argv[1:4]
+try:
+    r = json.load(sys.stdin)
+except ValueError:
+    sys.exit("Release 응답이 JSON이 아닙니다")
+if r.get("tag_name") != tag or r.get("draft") or r.get("prerelease"):
+    sys.exit("Release가 이 태그의 정식 릴리즈가 아닙니다")
+body = r.get("body") or ""
+start = body.find("<!-- lemit-release")
+end = body.find("-->", start + 1) if start >= 0 else -1
+if start < 0 or end < 0:
+    sys.exit("Release에 파이프라인 기록(lemit-release)이 없습니다")
+rec = dict(line.strip().split("=", 1) for line in body[start:end].splitlines() if "=" in line)
+if rec.get("tag") != tag or rec.get("commit") != sha:
+    sys.exit("Release에 기록된 태그·커밋이 요청과 다릅니다")
+if rec.get("image") != image:
+    sys.exit("Release에 기록된 이미지 digest가 요청과 다릅니다")
+' "$TAG_NAME" "$ARG" "$IMAGE_REPO@$DIGEST" 2>&1)" || reject "${why:-Release 기록 확인 실패}"
+}
+
 case "${ACTION:-}" in
+    deploy-image)
+        [[ "$TAG_NAME" =~ $TAG_RE ]] || reject "deploy-image에는 vMAJOR.MINOR.PATCH 형식의 태그가 필요합니다"
+        [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy-image에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
+        [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || reject "deploy-image에는 이미지 digest(sha256:64자리)가 필요합니다"
+        check_tag_commit
+        check_main_commit
+        check_release_record
+        IMAGE_REF="$IMAGE_REPO@$DIGEST"
+        lock_server
+        # 잠금을 잡은 뒤에 확인한다 (deploy-tag와 같음): 기다리는 사이에 롤백이 보류를 걸었거나 대기 중일 수 있다
+        if [ -f "$HOLD" ]; then
+            echo "[ci_deploy] 건너뜀: 자동 배포 보류 중이라 태그 $TAG_NAME 를 배포하지 않습니다 ($(head -n 1 "$HOLD"))"
+            echo "[ci_deploy] 원인을 확인한 뒤 수동 배포(Actions → Deploy → deploy)로 보류를 푸세요 (docs/CD.md §5)"
+            exit 0
+        fi
+        if rollback_pending; then
+            echo "[ci_deploy] 건너뜀: 대기 중인 롤백이 있어 태그 $TAG_NAME 를 배포하지 않습니다"
+            exit 0
+        fi
+        check_tag_commit
+        if [ "$(cat "$STATE_DIR/current_tag" 2> /dev/null || true)" = "${ARG:0:12}" ] \
+            && [ "$(cat "$STATE_DIR/current_image" 2> /dev/null || true)" = "$IMAGE_REF" ]; then
+            echo "[ci_deploy] 건너뜀: 태그 $TAG_NAME 의 이미지($DIGEST)가 이미 배포돼 있습니다"
+            exit 0
+        fi
+        echo "[ci_deploy] 태그 $TAG_NAME (${ARG:0:12}) 이미지 $IMAGE_REF 배포를 시작합니다 (서버에서 빌드하지 않음)"
+        if [ "${CI_DEPLOY_DRY_RUN:-0}" = "1" ]; then echo "DRY_RUN: DEPLOY_IMAGE=$IMAGE_REF bash scripts/deploy.sh $ARG"; exit 0; fi
+        # 배포할 커밋의 deploy.sh로 실행한다 (지금 작업 트리의 예전 deploy.sh는 이미지 배포를 모를 수 있음)
+        if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            fail "서버 작업 폴더에 커밋되지 않은 변경이 있습니다. 관리자가 확인한 뒤 다시 실행하세요"
+        fi
+        git checkout --quiet --detach "$ARG" || fail "작업 트리를 ${ARG:0:12} 로 바꾸지 못했습니다"
+        grep -q 'DEPLOY_IMAGE' scripts/deploy.sh \
+            || fail "커밋 ${ARG:0:12} 의 scripts/deploy.sh는 이미지 배포를 지원하지 않습니다 (이 기능 이후의 커밋에 태그를 다세요)"
+        export DEPLOY_IMAGE="$IMAGE_REF"
+        run_script scripts/deploy.sh "$ARG"
+        ;;
     deploy-tag)
         [[ "$TAG_NAME" =~ $TAG_RE ]] || reject "deploy-tag에는 vMAJOR.MINOR.PATCH 형식의 태그가 필요합니다"
         [[ "${ARG:-}" =~ ^[0-9a-f]{40}$ ]] || reject "deploy-tag에는 커밋 SHA 40자리(소문자 16진수)가 필요합니다"
@@ -272,6 +364,7 @@ case "${ACTION:-}" in
         [ -z "${ARG:-}" ] || reject "status에는 인자가 없습니다"
         if [ "${CI_DEPLOY_DRY_RUN:-0}" = "1" ]; then echo "DRY_RUN: status"; exit 0; fi
         echo "== 현재 배포 태그: $(cat deploy/state/current_tag 2> /dev/null || echo 없음)"
+        echo "== 현재 레지스트리 이미지: $(cat deploy/state/current_image 2> /dev/null || echo '없음 (서버에서 빌드한 이미지)')"
         if [ -f "$HOLD" ]; then echo "== 자동 배포: 보류 중 ($(head -n 1 "$HOLD"))"
         elif rollback_pending; then echo "== 자동 배포: 보류 중 (대기 중인 롤백 있음)"
         else echo "== 자동 배포: 보류 없음"; fi

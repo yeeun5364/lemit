@@ -35,5 +35,9 @@ IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d --wait --no-build web
 IMAGE_TAG="$TAG" "${COMPOSE[@]}" exec -T web python scripts/smoke_test.py
 
 echo "$TAG" > "$STATE_DIR/current_tag"
+# 레지스트리에서 받은 이미지(태그 배포 파이프라인)면 그 digest를, 서버에서 빌드한 이미지면 지운다 (ci_deploy.sh status 표시용).
+# 레지스트리 주소(/)가 있는 digest만 본다: containerd 이미지 저장소는 로컬 빌드에도 lemit-web@sha256:… 를 붙인다
+DIGEST_REF="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "lemit-web:$TAG" | grep -m 1 '^[^@]*/[^@]*@sha256:' || true)"
+if [ -n "$DIGEST_REF" ]; then echo "$DIGEST_REF" > "$STATE_DIR/current_image"; else rm -f "$STATE_DIR/current_image"; fi
 printf '%s\t%s\t%s\n' "$(date '+%F %T %Z')" "$TAG" "MANUAL_ROLLBACK_OK" >> "$STATE_DIR/history.log"
 echo "[rollback] 완료: $TAG"

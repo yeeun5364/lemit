@@ -13,6 +13,7 @@
 # - docker compose down -v 는 DB 볼륨을 지우므로 절대 쓰지 않는다.
 # - compose.dev.yaml을 지정하지 않는다 (docker compose = compose.yaml만).
 # - 연습용: DEPLOY_SKIP_GIT=1 이면 git을 건드리지 않고 현재 HEAD로 배포한다.
+# - 태그 배포 파이프라인: DEPLOY_IMAGE=<저장소>@sha256:<digest> 이면 빌드하지 않고 그 이미지를 받아 배포한다 (2번 단계).
 # - 이 스크립트는 실행 중 git checkout으로 자기 자신이 바뀔 수 있다. bash는 파일을 조금씩 읽으므로
 #   본문 전체를 main()으로 감싸 먼저 다 읽은 뒤 실행하고, 마지막 줄에서 바로 끝낸다 (#42).
 set -euo pipefail
@@ -69,8 +70,34 @@ main() {
     PREV_TAG="$(cat "$CURRENT" 2>/dev/null || true)"
     log "배포 대상 $NEW_TAG (직전 성공 ${PREV_TAG:-없음})"
 
-    # 2) 이미지 빌드 (태그 = 커밋 SHA)
-    IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" build web
+    # 2) 이미지 준비 (태그 = 커밋 SHA)
+    #   - 기본(수동 배포): 서버에서 빌드
+    #   - DEPLOY_IMAGE=<저장소>@sha256:<digest> (태그 배포 파이프라인, ci_deploy.sh deploy-image): 레지스트리에서 정확히
+    #     그 digest를 받아 lemit-web:<커밋 12자리>로 태그만 붙인다. **빌드하지 않는다.** 받지 못하면 빌드로 대신하지 않고 중단.
+    #     이미지 라벨의 커밋(org.opencontainers.image.revision)이 배포할 커밋과 같아야 한다.
+    #     로컬 태그 lemit-web:<12자리>를 붙이므로 롤백(rollback.sh <12자리>)은 전환 전에 빌드한 이미지와 같은 방식으로 된다.
+    OLD_SAME_ID=""   # 같은 커밋 태그에 이미 붙어 있던 이미지 (레지스트리 이미지로 바꾸기 전, 자동 롤백용)
+    if [ -n "${DEPLOY_IMAGE:-}" ]; then
+        OLD_SAME_ID="$(docker image inspect --format '{{.Id}}' "lemit-web:$NEW_TAG" 2> /dev/null || true)"
+        [[ "$DEPLOY_IMAGE" =~ ^[a-z0-9.:/_-]+@sha256:[0-9a-f]{64}$ ]] || { log "DEPLOY_IMAGE 형식 오류: $DEPLOY_IMAGE"; exit 1; }
+        log "레지스트리 이미지 받기: $DEPLOY_IMAGE (서버에서 빌드하지 않음)"
+        docker pull --quiet "$DEPLOY_IMAGE" || {
+            log "이미지를 받지 못했습니다 (레지스트리 공개 여부·네트워크, docs/CD.md §5-4)"; record "$NEW_TAG" "FAILED_PULL"; exit 1; }
+        REVISION="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$DEPLOY_IMAGE")"
+        if [ "$REVISION" != "$(git rev-parse HEAD)" ]; then
+            log "이미지 라벨의 커밋($REVISION)이 배포할 커밋($(git rev-parse HEAD))과 다릅니다"
+            record "$NEW_TAG" "FAILED_IMAGE_REVISION"; exit 1
+        fi
+        docker tag "$DEPLOY_IMAGE" "lemit-web:$NEW_TAG"
+        if [ -n "$OLD_SAME_ID" ]; then
+            # 성공하지 못하고 끝나면(check --deploy·마이그레이션 실패 등) 같은 커밋 태그를 원래 이미지로 되돌린다 (롤백 대상 보존)
+            trap '[ "${DEPLOY_DONE:-0}" = 1 ] || docker tag "$OLD_SAME_ID" "lemit-web:$NEW_TAG" > /dev/null 2>&1 || true' EXIT
+        fi
+    else
+        IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" build web
+    fi
+    IMAGE_ID="$(docker image inspect --format '{{.Id}}' "lemit-web:$NEW_TAG")"
+    log "실행할 이미지 lemit-web:$NEW_TAG (이미지 ID $IMAGE_ID)"
 
     # 2-1) Django 배포 점검 (운영 .env로, 새 이미지에서). 모드별로 의도적으로 받아들이는 경고만 허용한다.
     #   ip    : HTTP 시연이라 W004(HSTS) W008(SSL 리다이렉트) W012(세션 쿠키 secure) W016(CSRF 쿠키 secure)
@@ -94,7 +121,13 @@ main() {
 
     # 4) web 교체 + 헬스체크(healthy) 대기, 프록시 기동
     rollback() {
-        if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$NEW_TAG" ]; then
+        # 같은 커밋을 레지스트리 이미지로 다시 배포하다 실패한 경우: 태그 lemit-web:<12자리>를 원래 이미지로 되돌린 뒤 실행
+        local same=0
+        if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" = "$NEW_TAG" ] && [ -n "$OLD_SAME_ID" ] && [ "$OLD_SAME_ID" != "$IMAGE_ID" ]; then
+            log "같은 커밋의 이전 이미지($OLD_SAME_ID)로 태그 lemit-web:$PREV_TAG 를 되돌립니다"
+            docker tag "$OLD_SAME_ID" "lemit-web:$PREV_TAG" && same=1
+        fi
+        if [ -n "$PREV_TAG" ] && { [ "$PREV_TAG" != "$NEW_TAG" ] || [ "$same" = 1 ]; }; then
             log "실패 → 직전 이미지 $PREV_TAG 로 되돌립니다"
             IMAGE_TAG="$PREV_TAG" "${COMPOSE[@]}" up -d --wait --no-build web \
                 && IMAGE_TAG="$PREV_TAG" "${COMPOSE[@]}" exec -T web python scripts/smoke_test.py \
@@ -105,7 +138,8 @@ main() {
         fi
     }
 
-    if ! IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d --wait; then
+    # 이미지는 2)에서 준비했으므로 여기서는 빌드하지 않는다 (--no-build)
+    if ! IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d --wait --no-build; then
         log "컨테이너가 healthy가 되지 않았습니다."
         "${COMPOSE[@]}" logs --no-color --tail 100 web || true
         rollback; exit 1
@@ -127,9 +161,20 @@ main() {
         fi
     fi
 
-    # 7) 성공 기록
+    # 6-1) 실행 중인 web 컨테이너가 준비한 바로 그 이미지인지 (이미지 ID 비교)
+    RUNNING_ID="$(docker inspect --format '{{.Image}}' "$("${COMPOSE[@]}" ps -q web)" 2> /dev/null || true)"
+    if [ "$RUNNING_ID" != "$IMAGE_ID" ]; then
+        log "실행 중인 web 컨테이너의 이미지(${RUNNING_ID:-없음})가 준비한 이미지($IMAGE_ID)와 다릅니다"
+        rollback; exit 1
+    fi
+
+    # 7) 성공 기록. current_image: 레지스트리에서 받은 이미지면 그 digest, 서버에서 빌드했으면 지움
+    DEPLOY_DONE=1
     echo "$NEW_TAG" > "$CURRENT"
+    if [ -n "${DEPLOY_IMAGE:-}" ]; then echo "$DEPLOY_IMAGE" > "$STATE_DIR/current_image"; else rm -f "$STATE_DIR/current_image"; fi
     record "$NEW_TAG" "OK"
+    # 워크플로 요약이 읽는 줄 (ci_deploy.sh → .github/workflows/deploy.yml deploy 작업)
+    echo "[deploy-result] tag=$NEW_TAG image=${DEPLOY_IMAGE:-local-build} image_id=$IMAGE_ID running_image_id=$RUNNING_ID"
     log "배포 완료: $NEW_TAG. PC 브라우저로 로그인 → 수강생 메시지 등록 → 분류 배지까지 확인하세요 (docs/DEPLOY.md §4)."
 }
 
