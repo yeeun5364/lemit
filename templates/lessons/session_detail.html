@@ -87,6 +87,25 @@
     <ul class="passes">{% include "lessons/_enrollment_card.html" with e=enrollment hide_actions=True %}</ul>
   </section>
 </div>
+{% if change_logs %}
+<section class="card section" aria-labelledby="changes-title">
+  <h2 id="changes-title" class="card-title">일정 변경 이력</h2>
+  <p class="muted small">날짜·시간·장소를 바꿀 때마다 바꾸기 전 일정을 남깁니다. 최신 변경이 위에 있습니다.</p>
+  <ol class="change-log">
+    {% for log in change_logs %}
+    <li>
+      <dl class="info">
+        <dt>변경 전</dt>
+        <dd>{{ log.old_start_at|date:"n/j (D)" }} {{ log.old_start_at|time:"H:i" }} – {{ log.old_end_at|time:"H:i" }}{% if log.place_changed or log.old_place %} · {{ log.old_place|default:"장소 없음" }}{% endif %}</dd>
+        <dt>변경 후</dt>
+        <dd>{{ log.new_start_at|date:"n/j (D)" }} {{ log.new_start_at|time:"H:i" }} – {{ log.new_end_at|time:"H:i" }}{% if log.place_changed or log.new_place %} · {{ log.new_place|default:"장소 없음" }}{% endif %}</dd>
+      </dl>
+      <p class="muted small">{{ log.changed_at|date:"n/j H:i" }}에 변경{% if not log.time_changed %} · 장소만 바뀜{% endif %}</p>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
 {% if can_delete %}
 <section class="card section danger-zone" aria-labelledby="delete-title">
   <div>

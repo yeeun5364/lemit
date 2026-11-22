@@ -14,6 +14,7 @@ erDiagram
     Enrollment ||--o{ LessonSession : "포함"
     LessonSession |o--o| LessonSession : "보강 대상"
     LessonSession ||--o| LessonRecord : "수업일지"
+    LessonSession ||--o{ SessionChangeLog : "일정 변경 이력"
     User ||--o{ Conversation : "메시지함"
     Student ||--o{ Conversation : "대화 상대"
     Conversation ||--|{ Message : "포함"
@@ -64,6 +65,17 @@ erDiagram
         datetime created_at
         datetime updated_at
     }
+    SessionChangeLog {
+        bigint id PK
+        bigint session_id FK
+        datetime old_start_at "변경 전 시작"
+        datetime old_end_at "변경 전 종료"
+        varchar old_place "변경 전 장소"
+        datetime new_start_at "변경 후 시작"
+        datetime new_end_at "변경 후 종료"
+        varchar new_place "변경 후 장소"
+        datetime changed_at
+    }
     Label {
         bigint id PK
         bigint teacher_id FK
@@ -109,6 +121,7 @@ erDiagram
 | `Enrollment` | 레슨권 (예: 피아노 8회) | MVP | UC-03, UC-07 |
 | `LessonSession` | 수업 1회 (회차) | MVP | UC-04~06, UC-08~11 |
 | `LessonRecord` | 회차별 수업일지 | 확장 | UC-14 |
+| `SessionChangeLog` | 회차 일정 변경 이력 (바꾸기 전·후 날짜·시간·장소) | 확장 | UC-11 |
 | `Label` | 레슨권 색 구분 라벨 (수업 형태·사람) | MVP 후속 | UC-16 |
 | `Conversation` | 강사와 수강생 한 명의 대화 스레드 | MVP | UC-17 |
 | `Message` | 메시지 1건 + 수강생 메시지의 AI 분류 결과 | MVP | UC-17 |
@@ -229,6 +242,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `LessonSession.makeup_for` | 유일 (보강 1:1) | DB `OneToOneField` |
 | `LessonSession.makeup_for` | 원래 회차는 `cancelled` 또는 미차감 `absent`(`absence_deducted = false`)여야 함. 보강이 연결된 뒤 원래 회차를 다른 상태(차감 결석·완료 등)로 바꾸는 것도 거절 | 앱 검증 (모델 `clean`, PR #55 리뷰) |
 | `LessonSession` 삭제 | `scheduled` 상태만 가능 | 앱 검증 (UC-04) |
+| `SessionChangeLog` | 예정 회차 수정에서 날짜·시간·장소 중 하나라도 바뀔 때만 1건 생성(레슨권만 옮기면 없음). 변경 전 값은 수강생 행·회차 행을 잠근 뒤 다시 읽은 값. 화면에서는 읽기만. 관리자 화면도 추가·수정·삭제(개별·일괄) 불가이고, 관리자가 예정 회차를 지울 때만 함께 지워짐(PR #73 리뷰) | 앱 (회차 수정 저장과 같은 트랜잭션, UC-11, 2026-11-22) |
 | `LessonRecord.session` | 회차당 일지 1개 | DB `OneToOneField` |
 | `LessonSession` 완료 취소 | `completed` → `scheduled`만 가능, `completed_at`을 비움. **수업일지(`LessonRecord`)가 있으면 불가**(일지 모델은 UC-14에서 추가, 그때 조건 추가). 보관된 수강생의 회차는 불가 | 앱 검증 (UC-06, 2026-11-20 구현: 수강생 행 잠금 안에서 `예정`/`완료`일 때만 조건부 갱신) |
 | `LessonSession` 결석 처리 | 차감 여부(`absence_deducted`)를 반드시 선택. 폼에 기본값 없음 | 폼 검증 (UC-10) |
@@ -265,6 +279,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | Label → Enrollment | `SET_NULL` | 라벨을 지우면 레슨권은 "라벨 없음"(회색), 기록은 유지 |
 | Enrollment → LessonSession | `PROTECT` | 진행 이력이 사라지지 않게 |
 | LessonSession → LessonRecord | `CASCADE` | 회차와 일지는 운명을 같이함 |
+| LessonSession → SessionChangeLog | `CASCADE` | 이력은 회차에 딸린 기록. 삭제할 수 있는 회차는 예정뿐이라 완료·휴강·결석 회차의 이력은 남음 |
 | LessonSession → makeup_for | `SET_NULL` | 원래 회차가 없어져도 보강 기록은 유지 |
 | User → Conversation | `PROTECT` | 강사 계정을 지워도 대화 기록이 함께 지워지지 않게 (UC-17) |
 | Student → Conversation | `PROTECT` | 수강생은 보관(`is_active=false`)만 하므로 대화 기록 유지 |
@@ -273,6 +288,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 **인덱스**
 - `LessonSession(enrollment_id, start_at)`: 레슨권별 회차 이력
 - `LessonSession(start_at)`: 주간 일정 조회 (UC-05)
+- `SessionChangeLog(session_id, changed_at)`: 회차 상세의 변경 이력 최신순
 - `Student(teacher_id, is_active, name)`: 수강생 목록·검색 (UC-02)
 - `Conversation(teacher_id, last_message_at)`: 메시지함 목록 (UC-17)
 - `Message(conversation_id, sent_at)`: 대화 상세
@@ -285,8 +301,8 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 |---|---|---|
 | **MVP 핵심** (먼저) | UC-01~07, UC-17 | `User`, `Student`, `Enrollment`, `LessonSession`(상태는 `scheduled`/`completed`만 사용해도 동작), `Conversation`·`Message`(과제 조건인 ML 추론 기능) |
 | MVP 후속 (핵심 완료 후) | UC-08·09, UC-15, UC-16 | `LessonSession`의 `cancelled`·`makeup_for` 사용(휴강·보강), 비밀번호 찾기(모델 변경 없음), `Label` 화면 |
-| 확장 | UC-10, UC-14 | `absent` + `absence_deducted`, `LessonRecord` |
-| 이후 | 일정 변경 이력 `SessionChangeLog`(UC-11), 반복 규칙 `RecurrenceRule`(UC-12), 그룹 수업 `Class`, 장소 `Location` + 지도 연동(UC-13, 프로젝트 이후) |
+| 확장 | UC-10, UC-11, UC-14 | `absent` + `absence_deducted`, 일정 변경 이력 `SessionChangeLog`(2026-11-22 추가), `LessonRecord` |
+| 이후 | 반복 규칙 `RecurrenceRule`(UC-12), 그룹 수업 `Class`, 장소 `Location` + 지도 연동(UC-13, 프로젝트 이후) |
 
 필드는 MVP 핵심 때 미리 만들어 두고(`place`, `makeup_for`, `label` 등은 비워둘 수 있게, `Label` 모델 포함), 화면 기능만 단계적으로 붙입니다. 마이그레이션 횟수를 줄이기 위해서입니다. 라벨이 없으면 회차는 회색으로 보일 뿐 핵심 흐름은 그대로 동작합니다.
 

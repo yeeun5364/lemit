@@ -339,6 +339,11 @@ a.nav-item:hover { background: var(--neutral-soft); color: var(--text); text-dec
 .info { display: grid; grid-template-columns: 120px 1fr; gap: var(--space-3) var(--space-4); margin: 0; }
 .info dt { color: var(--text-muted); font-size: var(--fs-sm); padding-top: 1px; }
 .info dd { margin: 0; overflow-wrap: anywhere; }
+/* 회차 일정 변경 이력 (UC-11): 한 건 = 변경 전·후 + 변경 시각 */
+.change-log { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.change-log li { padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.change-log li:first-child { border-top: 0; }
+.change-log .muted { margin: var(--space-2) 0 0; }
 
 /* 목록 행 (카드 안) */
 .rows { list-style: none; margin: 0; padding: 0; }

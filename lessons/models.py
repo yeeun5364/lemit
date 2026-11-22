@@ -233,3 +233,41 @@ class LessonSession(models.Model):
             raise ValidationError({"makeup_for": "내 회차만 보강 대상으로 지정할 수 있습니다."})
         if not original.can_have_makeup():
             raise ValidationError({"makeup_for": "휴강이나 차감하지 않은 결석 회차만 보강할 수 있습니다."})
+
+
+class SessionChangeLog(models.Model):
+    """회차 일정 변경 이력 (UC-11, ERD §1). 예정 회차의 날짜·시간·장소를 바꿀 때 바꾸기 전·후 값을 남긴다.
+
+    레슨권만 옮긴 수정은 일정이 바뀐 것이 아니므로 남기지 않는다. 회차를 지우면 이력도 함께 지운다.
+    """
+
+    session = models.ForeignKey(
+        LessonSession,
+        verbose_name="회차",
+        on_delete=models.CASCADE,  # 회차와 이력은 운명을 같이함 (예정 회차만 삭제 가능)
+        related_name="change_logs",
+    )
+    old_start_at = models.DateTimeField("변경 전 시작")
+    old_end_at = models.DateTimeField("변경 전 종료")
+    old_place = models.CharField("변경 전 장소", max_length=100, blank=True)
+    new_start_at = models.DateTimeField("변경 후 시작")
+    new_end_at = models.DateTimeField("변경 후 종료")
+    new_place = models.CharField("변경 후 장소", max_length=100, blank=True)
+    changed_at = models.DateTimeField("변경 시각", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "회차 일정 변경 이력"
+        verbose_name_plural = "회차 일정 변경 이력"
+        ordering = ["-changed_at", "-id"]
+        indexes = [models.Index(fields=["session", "-changed_at"], name="changelog_session_changed")]
+
+    def __str__(self):
+        return f"{self.session_id}: {self.old_start_at:%Y-%m-%d %H:%M} → {self.new_start_at:%Y-%m-%d %H:%M}"
+
+    @property
+    def time_changed(self):
+        return (self.old_start_at, self.old_end_at) != (self.new_start_at, self.new_end_at)
+
+    @property
+    def place_changed(self):
+        return self.old_place != self.new_place
