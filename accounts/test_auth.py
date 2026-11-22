@@ -9,7 +9,15 @@ User = get_user_model()
 PASSWORD = "lesson-time-2026!"
 
 # 로그인 없이 열리는 화면 (SCREENS §1 접근 정책). 여기 없는 화면은 모두 로그인 필수여야 한다.
-PUBLIC_URL_NAMES = {"login", "signup", "healthz"}
+PUBLIC_URL_NAMES = {
+    "login",
+    "signup",
+    "healthz",
+    # S03 비밀번호 찾기 (UC-15)
+    "password_reset",
+    "password_reset_done",
+    "password_reset_complete",
+}
 
 
 def make_teacher(email="teacher@example.com", name="김강사", **extra):

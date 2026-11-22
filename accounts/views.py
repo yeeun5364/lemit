@@ -2,6 +2,7 @@ from collections import Counter
 
 from django.contrib import messages
 from django.contrib.auth import login
+from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_not_required
 from django.contrib.auth.views import LoginView
 from django.shortcuts import redirect, render
@@ -38,6 +39,45 @@ class SignupView(FormView):
         login(self.request, user)
         messages.success(self.request, f"{user.name}님, 가입을 환영합니다.")
         return super().form_valid(form)
+
+
+# ---- UC-15 비밀번호 찾기(S03)·변경(S04): Django 기본 뷰에 템플릿·문구만 붙인다 ----
+# 재설정 뷰 4개는 Django가 이미 공개(login_not_required)로 표시해 두었다 (SCREENS §1).
+
+
+class PasswordResetView(auth_views.PasswordResetView):
+    """메일 발송이 실패해도 Django 기본 폼이 예외를 잡아 로그만 남기므로(django.contrib.auth 로거),
+    가입 여부와 관계없이 같은 안내 화면으로 간다. 비상시에는 운영자가 /admin/에서 재설정한다."""
+
+    template_name = "accounts/password_reset_form.html"
+    email_template_name = "accounts/password_reset_email.txt"
+    subject_template_name = "accounts/password_reset_subject.txt"
+    success_url = reverse_lazy("password_reset_done")
+
+
+class PasswordResetDoneView(auth_views.PasswordResetDoneView):
+    template_name = "accounts/password_reset_done.html"
+
+
+class PasswordResetConfirmView(auth_views.PasswordResetConfirmView):
+    template_name = "accounts/password_reset_confirm.html"
+    success_url = reverse_lazy("password_reset_complete")
+
+
+class PasswordResetCompleteView(auth_views.PasswordResetCompleteView):
+    template_name = "accounts/password_reset_complete.html"
+
+
+class PasswordChangeView(auth_views.PasswordChangeView):
+    """S04 비밀번호 변경. 바꾼 뒤에도 로그인은 유지된다(Django가 세션 해시를 갱신)."""
+
+    template_name = "accounts/password_change_form.html"
+    success_url = reverse_lazy("home")
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        messages.success(self.request, "비밀번호를 변경했습니다.")
+        return response
 
 
 DASHBOARD_MESSAGES = 5  # 대시보드 '확인할 메시지'에 보여 줄 대화 수

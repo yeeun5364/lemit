@@ -31,6 +31,13 @@
           {% endwith %}
         </ul>
       </nav>
+      <nav aria-label="설정" class="nav-secondary">
+        <p class="nav-heading">설정</p>
+        <ul class="nav">
+          <li><a href="{% url 'lessons:label_list' %}" class="nav-item{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" %}라벨</a></li>
+          <li><a href="{% url 'password_change' %}" class="nav-item{% if url_name == 'password_change' %} is-active{% endif %}"{% if url_name == 'password_change' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="lock" %}비밀번호 변경</a></li>
+        </ul>
+      </nav>
       <div class="sidebar-foot">
         <p class="ai-note">{% include "ui/icon.html" with name="sparkle" size="sm" %}AI 분류는 참고용 정보입니다</p>
       </div>
