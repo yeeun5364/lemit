@@ -17,7 +17,15 @@ from django.views.decorators.http import require_POST
 
 from accounts.permissions import get_owned_or_404, scope_to_teacher
 from lessons import services
-from lessons.forms import CancelForm, EnrollmentForm, EnrollmentLabelForm, LabelForm, MakeupForm, SessionForm
+from lessons.forms import (
+    AbsentForm,
+    CancelForm,
+    EnrollmentForm,
+    EnrollmentLabelForm,
+    LabelForm,
+    MakeupForm,
+    SessionForm,
+)
 from lessons.models import Enrollment, Label, LessonSession
 from students.models import Student
 
@@ -180,9 +188,7 @@ def session_create(request):
     return render(request, "lessons/session_form.html", {"form": form, **back})
 
 
-def session_detail(request, pk):
-    """S06 회차 상세. 예정이면 '완료 처리', 완료면 '완료 취소' (UC-06)."""
-    session = _owned_session(request, pk)
+def _render_session_detail(request, session, absent_form=None, status=200):
     enrollment = Enrollment.objects.with_usage().get(pk=session.enrollment_id)
     return render(
         request,
@@ -193,9 +199,17 @@ def session_detail(request, pk):
             "can_delete": services.deletable(session),
             "not_started": session.start_at > timezone.now(),  # 시작 전 회차는 완료 전에 확인창
             "cancel_form": CancelForm(),
+            "absent_form": absent_form or AbsentForm(),
+            "absent_open": absent_form is not None,  # 결석 폼 오류가 있으면 펼친 채로
             "needs_makeup": services.needs_makeup(session),
         },
+        status=status,
     )
+
+
+def session_detail(request, pk):
+    """S06 회차 상세. 예정이면 '완료 처리'·'휴강 처리'·'결석 처리', 완료면 '완료 취소' (UC-06·08·10)."""
+    return _render_session_detail(request, _owned_session(request, pk))
 
 
 def session_edit(request, pk):
@@ -345,31 +359,86 @@ def session_cancel(request, pk):
     return redirect("lessons:session_detail", pk=session.pk)
 
 
-@require_POST
-def session_uncancel(request, pk):
-    """휴강 취소: 휴강 → 예정 (잘못 누른 휴강 되돌리기). 보강이 연결돼 있거나 보관된 수강생이면 하지 않는다.
+def _revert_to_scheduled(request, pk, from_status, label):
+    """휴강·결석 취소: 잘못 누른 상태를 예정으로 되돌린다 (사유·결석 차감도 지움, 차감한 결석이면 차감 복구).
 
-    보강이 있는데 예정으로 되돌리면 원래 회차와 보강이 모두 열려 두 번 차감될 수 있다 (ERD §3).
+    보강이 연결돼 있거나 보관된 수강생이면 하지 않는다. 보강이 있는데 예정으로 되돌리면 원래 회차와 보강이
+    모두 열려 두 번 차감될 수 있다 (ERD §3). 수강생 행 잠금 안에서 최신 상태가 from_status일 때만 바꾼다.
     """
     session = _owned_session(request, pk)
     with transaction.atomic():
         student = services.lock_student(session.enrollment.student_id)
         if not student.is_active:
             messages.error(
-                request, "보관된 수강생의 회차는 휴강을 취소할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요."
+                request, f"보관된 수강생의 회차는 {label}을 취소할 수 없습니다. 보관을 해제한 뒤 다시 시도하세요."
             )
             return redirect("lessons:session_detail", pk=session.pk)
         if LessonSession.objects.filter(makeup_for_id=session.pk).exists():
-            messages.error(request, "보강이 연결된 휴강은 취소할 수 없습니다. 보강 회차를 먼저 삭제하세요.")
+            messages.error(request, f"보강이 연결된 {label}은 취소할 수 없습니다. 보강 회차를 먼저 삭제하세요.")
             return redirect("lessons:session_detail", pk=session.pk)
-        changed = LessonSession.objects.filter(pk=session.pk, status=LessonSession.Status.CANCELLED).update(
-            status=LessonSession.Status.SCHEDULED, reason="", updated_at=timezone.now()
+        changed = LessonSession.objects.filter(pk=session.pk, status=from_status).update(
+            status=LessonSession.Status.SCHEDULED, reason="", absence_deducted=False, updated_at=timezone.now()
         )
     if not changed:
-        messages.error(request, "휴강 상태인 회차만 휴강을 취소할 수 있습니다. 화면을 다시 확인하세요.")
+        messages.error(request, f"{label} 상태인 회차만 {label}을 취소할 수 있습니다. 화면을 다시 확인하세요.")
         return _back_to_session(session)
-    messages.success(request, "휴강을 취소하고 예정으로 되돌렸습니다.")
+    messages.success(request, f"{label}을 취소하고 예정으로 되돌렸습니다.")
     return redirect("lessons:session_detail", pk=session.pk)
+
+
+@require_POST
+def session_uncancel(request, pk):
+    """휴강 취소: 휴강 → 예정 (UC-08)."""
+    return _revert_to_scheduled(request, pk, LessonSession.Status.CANCELLED, "휴강")
+
+
+@require_POST
+def session_absent(request, pk):
+    """결석 처리 (UC-10): 예정 → 결석. 차감 여부는 기본값 없이 강사가 반드시 고른다.
+
+    - 고르지 않으면 저장하지 않고 회차 상세에 폼 오류를 보여 준다.
+    - 차감하면 레슨권에서 1회 빠지고(잔여 계산 DEDUCTED) 보강할 수 없다. 미차감이면 '보강 필요'로 이어진다(UC-09).
+    - 완료 처리와 같은 수강생 행 잠금 안에서 최신 상태가 '예정'일 때만 바꾼다(두 번 눌러도 한 번).
+    """
+    session = _owned_session(request, pk)
+    form = AbsentForm(request.POST)
+    if not form.is_valid():
+        return _render_session_detail(request, session, absent_form=form, status=400)
+    deducted = form.cleaned_data["deducted"]
+    with transaction.atomic():
+        services.lock_student(session.enrollment.student_id)
+        changed = LessonSession.objects.filter(pk=session.pk, status=LessonSession.Status.SCHEDULED).update(
+            status=LessonSession.Status.ABSENT,
+            absence_deducted=deducted,
+            reason=form.cleaned_data["reason"],
+            updated_at=timezone.now(),
+        )
+    if not changed:
+        messages.error(request, "예정 상태인 회차만 결석 처리할 수 있습니다. 화면을 다시 확인하세요.")
+        return _back_to_session(session)
+    e = Enrollment.objects.with_usage().get(pk=session.enrollment_id)
+    if deducted:
+        messages.success(
+            request,
+            f"결석(차감)으로 처리했습니다. '{e.title}' 진행 {e.used_count}회 / 잔여 {max(e.remaining_count, 0)}회",
+        )
+        if e.remaining_count < 0:
+            messages.warning(
+                request,
+                f"회차 초과: 총 {e.total_count}회를 넘어 {-e.remaining_count}회 더 차감했습니다. "
+                "새 레슨권 등록을 확인하세요.",
+            )
+    else:
+        messages.success(
+            request, "결석(미차감)으로 처리했습니다. 레슨권은 그대로이고, 필요하면 '보강 등록'으로 보강을 잡으세요."
+        )
+    return redirect("lessons:session_detail", pk=session.pk)
+
+
+@require_POST
+def session_unabsent(request, pk):
+    """결석 취소: 결석 → 예정. 차감한 결석이었으면 차감도 함께 복구된다."""
+    return _revert_to_scheduled(request, pk, LessonSession.Status.ABSENT, "결석")
 
 
 def session_makeup(request, pk):
