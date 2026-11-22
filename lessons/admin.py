@@ -5,7 +5,7 @@
 
 from django.contrib import admin
 
-from lessons.models import Enrollment, Label, LessonSession
+from lessons.models import Enrollment, Label, LessonSession, SessionChangeLog
 
 
 @admin.register(Label)
@@ -41,3 +41,17 @@ class LessonSessionAdmin(admin.ModelAdmin):
         actions = super().get_actions(request)
         actions.pop("delete_selected", None)  # 일괄 삭제는 상태를 하나씩 확인하지 않으므로 막는다
         return actions
+
+
+@admin.register(SessionChangeLog)
+class SessionChangeLogAdmin(admin.ModelAdmin):
+    """일정 변경 이력은 기록이므로 관리자 화면에서도 읽기만 한다 (UC-11)."""
+
+    list_display = ("session", "old_start_at", "new_start_at", "changed_at")
+    raw_id_fields = ("session",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
