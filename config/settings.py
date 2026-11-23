@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "students",
     "lessons",
     "inbox",
+    "portal",
 ]
 
 MIDDLEWARE = [
@@ -52,6 +53,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     # 기본 로그인 필수(기본 거부). 공개 화면만 @login_not_required (SCREENS §1 접근 정책, UC-01)
     "django.contrib.auth.middleware.LoginRequiredMiddleware",
+    # 수강생 계정은 수강생 화면(/me/)과 로그아웃·비밀번호만 쓴다. 강사 화면은 서버에서 막는다 (#80)
+    "portal.middleware.StudentPortalMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -69,6 +72,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "inbox.context_processors.unread",
+                "portal.context_processors.student_profile",
             ],
         },
     },

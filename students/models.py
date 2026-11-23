@@ -49,6 +49,16 @@ class Student(models.Model):
     guardian_phone = models.CharField("보호자 연락처", max_length=20, blank=True, validators=[validate_phone])
     memo = models.TextField("메모", blank=True, max_length=1000)
     is_active = models.BooleanField("수강 중", default=True)  # False = 보관(수강 종료)
+    # 수강생 화면(#80)에 로그인하는 계정. 비어 있으면 강사만 관리하는 기록이다(지금까지와 같음).
+    # 한 계정은 수강생 기록 하나에만 연결된다(1:1). 계정을 지워도 수강 기록은 남는다(SET_NULL).
+    account = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        verbose_name="수강생 계정",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="student_profile",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -70,3 +80,12 @@ class Student(models.Model):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        # 수강생 계정은 강사 계정과 섞지 않는다 (#80): 수강생을 가진 강사 계정·관리자 계정·담당 강사 본인은 연결 불가
+        super().clean()
+        account = self.account
+        if account is None:
+            return
+        if account.pk == self.teacher_id or account.is_staff or account.is_superuser or account.students.exists():
+            raise ValidationError({"account": "강사·관리자 계정은 수강생 계정으로 연결할 수 없습니다."})

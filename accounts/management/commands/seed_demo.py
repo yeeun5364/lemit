@@ -11,6 +11,8 @@
 - 이름은 가짜, 번호는 010-0000-XXXX 형식만 쓴다 (실제 개인정보 없음).
 - 비밀번호: --password > 환경변수 LEMIT_DEMO_PASSWORD > (새 계정이면) 무작위 생성 후 한 번 출력.
   공개 저장소이므로 비밀번호를 코드에 두지 않는다.
+- 데모 수강생 계정(DEMO_STUDENT_EMAIL, #80)도 만들어 수강생 '김하늘' 기록에 연결한다. 같은 그룹 표시로 확인하고,
+  비밀번호는 --student-password > LEMIT_DEMO_STUDENT_PASSWORD > (새 계정이면) 무작위 생성 후 한 번 출력.
 - 수강생 메시지는 화면과 같은 경로(inbox.services.add_student_message)로 저장해 **실제 모델(v2)의 분류**를 쓴다.
   모델을 쓸 수 없으면 메시지는 '분류 불가'로 저장된다(UC-17 예외 흐름과 같음).
 """
@@ -25,13 +27,14 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import DEMO_EMAIL
+from accounts.models import DEMO_EMAIL, DEMO_STUDENT_EMAIL
 from inbox import services
 from inbox.models import Conversation, Message
 from lessons.models import Enrollment, Label, LessonSession
 from students.models import Student
 
 DEMO_NAME = "데모 강사"
+DEMO_STUDENT_OF = "김하늘"  # 데모 수강생 계정을 연결할 수강생 기록 (#80)
 DEMO_GROUP = "lemit-demo"  # seed_demo가 만든 계정 표시. 일반 사용자는 화면에서 바꿀 수 없다
 
 # (이름, 연락처, 미성년자, 보호자 이름, 보호자 연락처, 메모)
@@ -126,6 +129,10 @@ class Command(BaseCommand):
             "--password",
             help="데모 계정 비밀번호 (없으면 LEMIT_DEMO_PASSWORD, 그것도 없으면 기존 유지/새로 생성)",
         )
+        parser.add_argument(
+            "--student-password",
+            help="데모 수강생 계정 비밀번호 (없으면 LEMIT_DEMO_STUDENT_PASSWORD, 그것도 없으면 기존 유지/새로 생성)",
+        )
 
     def handle(self, *args, **options):
         password = options.get("password") or os.environ.get("LEMIT_DEMO_PASSWORD") or ""
@@ -139,7 +146,10 @@ class Command(BaseCommand):
                 "기존 데이터와 비밀번호를 바꾸지 않고 멈춥니다. 그 계정을 확인한 뒤 관리자가 정리하세요."
             )
 
-        generated = ""
+        student_password = options.get("student_password") or os.environ.get("LEMIT_DEMO_STUDENT_PASSWORD") or ""
+        student_user = self._check_account(User, DEMO_STUDENT_EMAIL)
+
+        generated = student_generated = ""
         with transaction.atomic():
             if user is None:
                 if not password:
@@ -154,6 +164,23 @@ class Command(BaseCommand):
                     user.set_password(password)
                 user.save()
             counts = self._create(user)
+            if student_user is None:
+                if not student_password:
+                    student_password = student_generated = secrets.token_urlsafe(12)
+                student_user = User.objects.create_user(
+                    email=DEMO_STUDENT_EMAIL, password=student_password, name=DEMO_STUDENT_OF
+                )
+                student_user.groups.add(Group.objects.get_or_create(name=DEMO_GROUP)[0])
+            else:
+                student_user.name = DEMO_STUDENT_OF
+                student_user.is_active = True
+                if student_password:
+                    student_user.set_password(student_password)
+                student_user.save()
+            profile = Student.objects.get(teacher=user, name=DEMO_STUDENT_OF)
+            profile.account = student_user
+            profile.full_clean()  # 강사·관리자 계정은 연결하지 않는다 (Student.clean)
+            profile.save(update_fields=["account", "updated_at"])
 
         self.stdout.write(self.style.SUCCESS("데모 데이터를 만들었습니다."))
         self.stdout.write(f"  계정: {DEMO_EMAIL}")
@@ -163,7 +190,28 @@ class Command(BaseCommand):
             self.stdout.write("  비밀번호: 지정한 값으로 설정")
         else:
             self.stdout.write("  비밀번호: 기존 값 유지")
+        self.stdout.write(
+            f"  수강생 계정: {DEMO_STUDENT_EMAIL} → 수강생 '{DEMO_STUDENT_OF}' 기록에 연결 (수강생 화면 /me/)"
+        )
+        if student_generated:
+            self.stdout.write(f"  수강생 비밀번호(새로 생성, 지금만 표시): {student_generated}")
+        elif student_password:
+            self.stdout.write("  수강생 비밀번호: 지정한 값으로 설정")
+        else:
+            self.stdout.write("  수강생 비밀번호: 기존 값 유지")
         self.stdout.write("  " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+
+    def _check_account(self, User, email):
+        """seed_demo가 만든 데모 계정만 다룬다. 관리자이거나 표시(그룹) 없는 같은 이메일 계정이면 멈춘다."""
+        account = User.objects.filter(email__iexact=email).first()
+        if account is not None and (account.is_staff or account.is_superuser):
+            raise CommandError(f"{email} 은 관리자 계정이라 데모 데이터로 덮어쓰지 않습니다.")
+        if account is not None and not account.groups.filter(name=DEMO_GROUP).exists():
+            raise CommandError(
+                f"{email} 계정이 이미 있지만 seed_demo가 만든 데모 계정이 아닙니다(그룹 {DEMO_GROUP} 없음). "
+                "기존 데이터와 비밀번호를 바꾸지 않고 멈춥니다. 그 계정을 확인한 뒤 관리자가 정리하세요."
+            )
+        return account
 
     def _clear(self, teacher):
         """데모 강사의 데이터만 지운다. PROTECT 관계 때문에 메시지·대화 → 회차 → 레슨권 → 수강생 → 라벨 순서."""

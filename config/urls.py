@@ -27,6 +27,7 @@ urlpatterns = [
     path("students/", include("students.urls")),
     path("", include("lessons.urls")),
     path("inbox/", include("inbox.urls")),
+    path("me/", include("portal.urls")),  # 수강생 화면 (#80)
     path("healthz/", healthz, name="healthz"),
     path("admin/", admin.site.urls),
 ]

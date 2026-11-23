@@ -212,3 +212,58 @@ class SeedDemoRerunTests(TestCase):
         msgs = Message.objects.filter(conversation__teacher__email=DEMO_EMAIL, sender=Message.Sender.STUDENT)
         self.assertTrue(msgs.exists())
         self.assertFalse(msgs.exclude(predicted_label="").exists())  # '분류 불가'로 저장
+
+
+class SeedDemoStudentAccountTests(TestCase):
+    """#80: 데모 수강생 계정을 만들어 '김하늘' 기록에 연결한다. 다시 실행해도 연결이 유지된다."""
+
+    def test_student_account_linked_to_haneul_and_relinked_on_rerun(self):
+        from accounts.models import DEMO_STUDENT_EMAIL
+
+        out = seed(password="demo-pass-1234", student_password="student-pass-1234")
+        account = User.objects.get(email=DEMO_STUDENT_EMAIL)
+        self.assertTrue(account.check_password("student-pass-1234"))
+        self.assertTrue(account.groups.filter(name=DEMO_GROUP).exists())
+        self.assertFalse(account.is_staff)
+        profile = Student.objects.get(account=account)
+        self.assertEqual((profile.name, profile.teacher.email), ("김하늘", DEMO_EMAIL))
+        self.assertIn(DEMO_STUDENT_EMAIL, out)
+        seed()  # 다시 실행: 기록은 새로 만들어지고 같은 계정이 다시 연결, 비밀번호 유지
+        account.refresh_from_db()
+        self.assertTrue(account.check_password("student-pass-1234"))
+        self.assertEqual(Student.objects.get(account=account).name, "김하늘")
+        self.assertEqual(User.objects.filter(email=DEMO_STUDENT_EMAIL).count(), 1)
+
+    def test_student_password_generated_or_from_environment(self):
+        from accounts.models import DEMO_STUDENT_EMAIL
+
+        out = seed(password="demo-pass-1234")
+        m = re.search(r"수강생 비밀번호\(새로 생성, 지금만 표시\): (\S+)", out)
+        self.assertIsNotNone(m, out)
+        self.assertTrue(User.objects.get(email=DEMO_STUDENT_EMAIL).check_password(m.group(1)))
+        with mock.patch.dict("os.environ", {"LEMIT_DEMO_STUDENT_PASSWORD": "env-student-1234"}):
+            seed()
+        self.assertTrue(User.objects.get(email=DEMO_STUDENT_EMAIL).check_password("env-student-1234"))
+
+    def test_existing_unmarked_student_email_is_not_taken_over(self):
+        from accounts.models import DEMO_STUDENT_EMAIL
+
+        User.objects.create_user(email=DEMO_STUDENT_EMAIL, password="mine-1234", name="실제 사용자")
+        with self.assertRaises(CommandError):
+            seed(password="demo-pass-1234")
+        self.assertTrue(User.objects.get(email=DEMO_STUDENT_EMAIL).check_password("mine-1234"))
+        self.assertFalse(Student.objects.filter(account__email=DEMO_STUDENT_EMAIL).exists())
+
+    def test_signup_rejects_demo_student_email(self):
+        from accounts.models import DEMO_STUDENT_EMAIL
+
+        form = SignupForm(
+            data={
+                "email": DEMO_STUDENT_EMAIL,
+                "name": "가짜",
+                "password1": "Strong-pass-9876",
+                "password2": "Strong-pass-9876",
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("email", form.errors)

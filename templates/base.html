@@ -17,11 +17,12 @@
     {# 사이드바: PC는 왼쪽 고정, 1023px 이하는 접이식 메뉴 (static/js/app.js) #}
     <aside class="sidebar" id="sidebar" aria-label="주 메뉴 영역">
       <div class="sidebar-head">
-        <a class="logo" href="{% url 'home' %}" aria-label="LEMIT 대시보드">lemit<span class="logo-dot">.</span></a>
+        <a class="logo" href="{% if portal_student %}{% url 'portal:lessons' %}{% else %}{% url 'home' %}{% endif %}" aria-label="LEMIT {% if portal_student %}내 수업{% else %}대시보드{% endif %}">lemit<span class="logo-dot">.</span></a>
         <button type="button" class="btn btn-ghost btn-icon sidebar-close" data-nav-close aria-label="메뉴 닫기">{% include "ui/icon.html" with name="close" %}</button>
       </div>
       <nav aria-label="주 메뉴">
         <ul class="nav">
+          {% if portal_student %}{% include "portal/_nav.html" %}{% else %}
           <li><a href="{% url 'home' %}" class="nav-item{% if url_name == 'home' %} is-active{% endif %}"{% if url_name == 'home' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="dashboard" %}대시보드</a></li>
           {# 수업 일정(UC-05): 일정 화면과 회차 화면(상세·추가·수정)에서 활성. 레슨권 추가는 수강생 메뉴 쪽 #}
           {% if app_name == 'lessons' and 'enrollment' not in url_name and 'label' not in url_name %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item is-active" aria-current="page">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% else %}<li><a href="{% url 'lessons:schedule' %}" class="nav-item">{% include "ui/icon.html" with name="calendar" %}수업 일정</a></li>{% endif %}
@@ -29,17 +30,18 @@
           {% with unread=inbox_unread %}
           <li><a href="{% url 'inbox:list' %}" class="nav-item{% if app_name == 'inbox' %} is-active{% endif %}"{% if app_name == 'inbox' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="inbox" %}메시지함{% if unread %}<span class="nav-count" aria-label="안 읽은 메시지 {{ unread }}개">{{ unread }}</span>{% endif %}</a></li>
           {% endwith %}
+          {% endif %}
         </ul>
       </nav>
       <nav aria-label="설정" class="nav-secondary">
         <p class="nav-heading">설정</p>
         <ul class="nav">
-          <li><a href="{% url 'lessons:label_list' %}" class="nav-item{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" %}라벨</a></li>
+          {% if not portal_student %}<li><a href="{% url 'lessons:label_list' %}" class="nav-item{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" %}라벨</a></li>{% endif %}
           <li><a href="{% url 'password_change' %}" class="nav-item{% if url_name == 'password_change' %} is-active{% endif %}"{% if url_name == 'password_change' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="lock" %}비밀번호 변경</a></li>
         </ul>
       </nav>
       <div class="sidebar-foot">
-        <p class="ai-note">{% include "ui/icon.html" with name="sparkle" size="sm" %}AI 분류는 참고용 정보입니다</p>
+        {% if not portal_student %}<p class="ai-note">{% include "ui/icon.html" with name="sparkle" size="sm" %}AI 분류는 참고용 정보입니다</p>{% endif %}
       </div>
     </aside>
     <div class="nav-backdrop" data-nav-close hidden></div>
@@ -47,13 +49,13 @@
     <div class="main-col">
       <header class="topbar">
         <button type="button" class="btn btn-ghost btn-icon menu-toggle" data-nav-toggle aria-controls="sidebar" aria-expanded="false" aria-label="메뉴 열기">{% include "ui/icon.html" with name="menu" %}</button>
-        <a class="logo topbar-logo" href="{% url 'home' %}" aria-label="LEMIT 대시보드">lemit<span class="logo-dot">.</span></a>
+        <a class="logo topbar-logo" href="{% if portal_student %}{% url 'portal:lessons' %}{% else %}{% url 'home' %}{% endif %}" aria-label="LEMIT {% if portal_student %}내 수업{% else %}대시보드{% endif %}">lemit<span class="logo-dot">.</span></a>
         <div class="user-menu">
           <div class="user-chip">
             <span class="avatar" aria-hidden="true">{{ user.name|slice:":1" }}</span>
             <span class="user-text"><span class="user-name">{{ user.name }}</span><span class="user-email">{{ user.email }}</span></span>
           </div>
-          <a class="btn btn-ghost btn-sm{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}" href="{% url 'lessons:label_list' %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" size="sm" %}라벨</a>
+          {% if not portal_student %}<a class="btn btn-ghost btn-sm{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}" href="{% url 'lessons:label_list' %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" size="sm" %}라벨</a>{% endif %}
           <form method="post" action="{% url 'logout' %}">
             {% csrf_token %}
             <button type="submit" class="btn btn-ghost btn-sm">{% include "ui/icon.html" with name="logout" size="sm" %}로그아웃</button>

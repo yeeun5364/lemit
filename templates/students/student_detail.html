@@ -5,6 +5,7 @@
 {% block page_desc %}<p class="page-desc">
   {% if student.is_active %}<span class="badge badge-mint badge-dot">수강 중</span>{% else %}<span class="badge badge-neutral">보관</span>{% endif %}
   {% if student.is_minor %}<span class="badge badge-amber">미성년자</span>{% endif %}
+  {% if student.account_id %}<span class="badge badge-blue" title="수강생이 자기 계정으로 내 수업·메시지를 봅니다 (#80)">수강생 계정 연결됨</span>{% endif %}
 </p>{% endblock %}
 {% block page_actions %}
 {% if student.is_active %}<a class="btn btn-secondary" href="{% url 'inbox:new' %}?student={{ student.pk }}">{% include "ui/icon.html" with name="message" size="sm" %}수강생 메시지 추가</a>{% endif %}
