@@ -137,21 +137,21 @@ class EnrollmentForm(forms.ModelForm):
         """이전 레슨권의 레슨명(최근 것부터, 중복 없이 최대 5개)을 고르게 하고 가장 최근 것을 기본으로 둔다 (#75).
         '직접 입력'을 고르면 새 레슨명 칸에 입력한 값을 쓴다. 이전 레슨명이 없으면 지금처럼 바로 입력한다.
         title_choice를 보내지 않은 요청(예전 화면·직접 POST)은 '직접 입력'과 같게 처리해 입력한 레슨명을 쓴다."""
-        previous = []
-        for title in (
-            Enrollment.objects.filter(student=student).order_by("-start_date", "-id").values_list("title", flat=True)
-        ):
-            if title not in previous:
-                previous.append(title)
-            if len(previous) == self.MAX_PREVIOUS_TITLES:
+        # 선택지 값은 레슨명이 아니라 그 레슨명을 쓴 가장 최근 레슨권의 PK다 (PR #86 리뷰 P3).
+        # 레슨명 자체를 값으로 쓰면 실제 레슨명이 '직접 입력' 값(__custom__)과 같을 때 구분할 수 없다.
+        self.previous_titles = {}  # {레슨권 PK 문자열: 레슨명}, 최근 것부터
+        rows = Enrollment.objects.filter(student=student).order_by("-start_date", "-id").values_list("pk", "title")
+        for pk, title in rows:
+            if title not in self.previous_titles.values():
+                self.previous_titles[str(pk)] = title
+            if len(self.previous_titles) == self.MAX_PREVIOUS_TITLES:
                 break
-        self.previous_titles = previous
-        if not previous:
+        if not self.previous_titles:
             del self.fields["title_choice"]
             return
         choice = self.fields["title_choice"]
-        choice.choices = [(t, t) for t in previous] + [(self.CUSTOM_TITLE, "직접 입력")]
-        choice.initial = previous[0]
+        choice.choices = [*self.previous_titles.items(), (self.CUSTOM_TITLE, "직접 입력")]
+        choice.initial = next(iter(self.previous_titles))
         choice.help_text = "이전 레슨권의 레슨명입니다. 새 이름이면 '직접 입력'을 고르세요."
         title = self.fields["title"]
         title.required = False  # 고른 레슨명을 쓸 때는 비어 있어도 된다. 직접 입력이면 clean_title이 확인
@@ -164,7 +164,7 @@ class EnrollmentForm(forms.ModelForm):
     def clean_title(self):
         choice = self.cleaned_data.get("title_choice")
         if choice and choice != self.CUSTOM_TITLE:  # 선택지 밖 값은 title_choice 필드 오류로 이미 걸러짐
-            return choice
+            return self.previous_titles[choice]
         title = (self.cleaned_data.get("title") or "").strip()
         if not title:
             raise forms.ValidationError("레슨명을 입력하세요.")
