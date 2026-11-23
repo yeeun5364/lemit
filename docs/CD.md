@@ -2,7 +2,8 @@
 
 > **현재 운영 검증 상태 (2026-11-23):** 아래 날짜별 기록 중 "아직"이던 항목의 현재 상태입니다(README 구현 현황과 같음).
 > - **검증됨: 서버 빌드 방식의 버전 태그 자동 배포(#71).** 러너 격리, 서버 강제 명령 설치, GitHub 설정(production 승인자·`CD_AUTO_DEPLOY`)을 거쳐 `v0.1.1`에서 SSH `check`, `v0.1.2`(`598b525`)에서 자동 배포가 성공했습니다(Deploy [run 45088524424](https://github.com/yeeun5364/lemit/actions/runs/45088524424), 서버 로그 `배포 완료: 598b525e9320`, 마이그레이션 `lessons.0002` 적용).
-> - **첫 운영 검증 전: PR #74의 GHCR 이미지 기반 태그 파이프라인.** GitHub에서의 실제 실행, GHCR 공개 설정, 서버 강제 명령 갱신(`deploy-image`), 이미지 digest 배포가 남았습니다. 다음 버전 태그가 첫 실행입니다(§5-4, §5-5, §6-2).
+> - **검증됨 (2026-11-23): PR #74의 GHCR 이미지 기반 태그 파이프라인.** 서버 강제 명령을 다시 설치(`5d1db4001f65`, `deploy-image` 지원, check "저장소 버전과 같음")한 뒤 `v0.1.3`(`4887c11`)으로 첫 실행. Deploy [run 45101961237](https://github.com/yeeun5364/lemit/actions/runs/45101961237) attempt 2에서 7개 작업 모두 성공. Release 기록 digest `sha256:fe6870f9…aa9f6` = 서버 `current_image` = 실행 중인 web 컨테이너의 이미지(ID `sha256:96eaab0c…`), 이미지 라벨 커밋 = 태그 커밋, 이미지 안 모델 SHA-256 = Release `model_sha256`(`a2ed9cd8…`), 공개 `/healthz/` 모델 버전 `v2+v0.1.3`. GHCR 익명 매니페스트 조회 200, 이미지 안에 `.env`·`.git`·키 파일 없음(환경변수도 Python 기본값만).
+>   - 첫 시도(attempt 1)는 `4. image`의 GHCR 게시가 `denied`로 실패: `lemit-web` 패키지가 이미 있었는데(공개, 태그 없음) 저장소의 Actions 접근 권한이 없었음. 사용자가 패키지 설정에서 저장소를 Write로 연결한 뒤 Re-run failed jobs로 이어서 성공(§5-4). 실패 시점에는 Release가 만들어지지 않아 digest 충돌 없음.
 >
 > **상태 (2026-11-20):** CD를 **Self-hosted Runner**(개인 PC의 러너 전용 WSL2 배포판) 방식으로 바꿨습니다(#56). 워크플로 규칙 검사, 서버 강제 명령의 입력·main 포함 검증, 설치 스크립트, 러너 격리 확인 단계는 **자동 테스트·컨테이너에서 검증**했습니다. **러너 PC 격리, 서버 강제 명령 설치, GitHub 설정, 실제 배포 시험은 아직 안 했습니다.** 이 문서의 "직접" 단계는 사용자가 합니다.
 > **버전 태그 배포 (2026-11-22):** 자동 배포를 main push에서 **버전 태그(`vX.Y.Z`) push**로 바꿨습니다. PR·main push는 CI만 실행합니다. 태그 판정(워크플로)과 서버 `deploy-tag`는 **자동 테스트로 검증**했고, 실제 태그 배포는 PR 검토 후 새 태그로 시험합니다(§6-2). 기존 `v0.1.0` 태그는 그대로 둡니다.
@@ -231,7 +232,7 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 
 1. **첫 태그 실행의 `4. image`가 끝난 뒤**(패키지가 처음 만들어진 뒤) GitHub → 프로필 → **Packages → lemit-web → Package settings**
    - **Danger Zone → Change visibility → Public.** 이미지에는 공개 저장소의 코드와 모델 파일만 들어 있습니다(`.env`·`.git`은 `.dockerignore`로 제외). `4. image` 요약의 "인증 없이 받기"가 `no`면 아직 비공개입니다(경고만 하고 계속 진행, 서버가 받지 못하면 `FAILED_PULL`로 멈춤).
-   - **Manage Actions access**에 저장소 `yeeun5364/lemit`이 **Write**로 있는지 확인합니다(처음 게시한 저장소는 보통 자동으로 연결됨). 같은 이름의 패키지가 이미 다른 곳에서 만들어져 있으면 게시가 `permission_denied`로 실패하므로 여기서 연결합니다.
+   - **Manage Actions access**에 저장소 `yeeun5364/lemit`이 **Write**로 있는지 확인합니다(처음 게시한 저장소는 보통 자동으로 연결됨). 같은 이름의 패키지가 이미 다른 곳에서 만들어져 있으면 게시가 `permission_denied` 또는 `error from registry: denied`로 실패하므로 여기서 연결합니다(2026-11-23 `v0.1.3` 첫 실행에서 실제로 발생, 연결 후 Re-run failed jobs로 해결).
 2. `6. deploy`의 production 승인은 공개로 바꾼 **뒤에** 누릅니다(첫 실행만).
 3. 비공개로 두고 싶다면(권장하지 않음): 서버에 `read:packages`만 있는 토큰으로 `docker login ghcr.io`를 한 번 해야 하고, 그 토큰이 서버 `~/.docker/config.json`에 남습니다. 이 PR은 이 방식을 쓰지 않습니다.
 - 게시 태그는 `<버전 태그>-run<실행 ID>.<시도>`(예: `v0.1.2-run123456789.1`)라 이전 실행의 이미지를 덮어쓰지 않습니다. 배포는 태그가 아니라 **digest**로만 합니다. 오래된 이미지는 Packages 화면에서 직접 지웁니다(롤백에 쓸 수 있는 버전은 남겨 둠).
