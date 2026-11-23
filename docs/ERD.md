@@ -9,6 +9,7 @@
 erDiagram
     User ||--o{ Student : "등록"
     User |o--o| Student : "수강생 계정 (#80)"
+    Student ||--o{ StudentInvite : "연결 초대 (#84)"
     Student ||--o{ Enrollment : "보유"
     User ||--o{ Label : "등록"
     Label |o--o{ Enrollment : "색 구분"
@@ -40,6 +41,17 @@ erDiagram
         bigint account_id FK "수강생 계정, 선택, 1:1 (#80)"
         datetime created_at
         datetime updated_at
+    }
+    StudentInvite {
+        bigint id PK
+        bigint student_id FK
+        varchar token UK "일회용, 추측 불가"
+        varchar status "issued, requested, approved, cancelled"
+        datetime expires_at "발급 후 10분"
+        bigint requested_by_id FK "요청 계정, 선택"
+        datetime requested_at
+        datetime decided_at
+        datetime created_at
     }
     Enrollment {
         bigint id PK
@@ -120,6 +132,7 @@ erDiagram
 |---|---|---|---|
 | `User` | 강사 계정 | MVP | UC-01 |
 | `Student` | 수강생 | MVP | UC-02 |
+| `StudentInvite` | 수강생 계정 연결 초대(QR) | 확장 | UC-19 (#84) |
 | `Enrollment` | 레슨권 (예: 피아노 8회) | MVP | UC-03, UC-07 |
 | `LessonSession` | 수업 1회 (회차) | MVP | UC-04~06, UC-08~11 |
 | `LessonRecord` | 회차별 수업일지 | 확장 | UC-14 |
@@ -232,9 +245,11 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 
 ### 2-12. 수강생 계정은 수강생 기록에 1:1로 연결 (2026-11-23, #80)
 - `Student.account`(`User`, 선택, `OneToOneField`)가 있으면 그 계정은 **수강생 계정**입니다. 로그인하면 수강생 화면(`/me/`)으로 가고, 연결된 기록의 회차·대화만 봅니다.
-- 별도 역할 필드는 두지 않았습니다(발표 범위). 강사·관리자 계정을 연결하지 않도록 `Student.clean()`이 **수강생을 가진 계정, 관리자, 담당 강사 본인**을 거부합니다. 수강생이 아직 없는 강사 계정은 이 검사로 구분하지 못하므로, 연결은 관리자 화면과 `seed_demo`만 합니다. 역할별 가입·초대는 #83·#84.
+- 별도 역할 필드는 두지 않았습니다(발표 범위). 강사·관리자 계정을 연결하지 않도록 `Student.clean()`이 **수강생을 가진 계정, 관리자, 담당 강사 본인**을 거부합니다. 수강생이 아직 없는 강사 계정은 이 검사로 구분하지 못하므로, 연결은 강사 승인이 필요한 QR 초대(#84)·관리자 화면·`seed_demo`로만 합니다. 역할별 가입·초대는 #83·#84.
 - 접근 범위는 `portal.middleware.StudentPortalMiddleware`가 서버에서 제한합니다. 수강생 계정은 수강생 화면, 로그아웃, 비밀번호 변경·재설정만 쓸 수 있습니다. 강사 화면은 GET이면 `/me/`로 보내고, POST 등은 403입니다.
 - 계정을 지워도 수강 기록은 남습니다(`SET_NULL`).
+- 연결은 강사가 수강생 상세에서 만든 **일회용 QR 초대**(`StudentInvite`, #84)로 한다: 발급(10분, `issued`) → 수강생 계정이 스캔·로그인 후 요청(`requested`) → 강사가 요청 계정을 확인하고 승인(`approved`, 이때 `Student.account` 저장) 또는 거절·취소(`cancelled`). 재발급하면 이전 대기 초대는 취소된다. 만료는 `issued`인데 `expires_at`이 지난 경우로 판단한다(값을 바꾸지 않음). 강사는 연결을 해제할 수 있다(`account=NULL`, 대기 초대 취소).
+- 발급·승인·해제는 수강생 행 잠금(`lock_student`) 뒤 초대 행도 잠그고 다시 확인한다. 승인은 요청 뒤에 보관된 기록을 거부하고, 같은 계정을 두 기록에 동시에 승인하는 경우를 막으려고 요청 계정(User) 행도 잠근 뒤 '이미 연결됨'을 다시 본다. 연결은 `Student.account`(UNIQUE)에만 저장하므로 중복 요청·승인에도 연결은 하나이고, 남은 UNIQUE 충돌도 500이 아니라 연결 오류로 바꾼다 (PR #94 리뷰).
 
 ## 3. 제약 조건
 
@@ -244,6 +259,8 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `User.email` = `demo@example.com` | 시연용 데모 계정(`seed_demo`) 전용. 일반 회원가입 불가. `seed_demo`는 Django 그룹 `lemit-demo`가 있는 계정만 데모로 다루고, 표시 없는 같은 이메일 계정이 있으면 아무것도 바꾸지 않고 멈춤 | 회원가입 폼 검증 + 명령의 그룹 확인 (#24, PR #65 리뷰) |
 | `Student` | `is_minor`이면 `guardian_phone` 필수 | DB `CheckConstraint` + 폼 검증 |
 | `Student.account` | 한 계정은 수강생 기록 하나에만(1:1). 수강생을 가진 강사 계정·관리자·담당 강사 본인은 연결 불가 | DB `UNIQUE`(OneToOne) + 모델 `clean()` (#80) |
+| `StudentInvite.token` | 추측할 수 없는 일회용 토큰(`secrets.token_urlsafe(24)`), 유일 | DB `UNIQUE` (#84) |
+| `StudentInvite` | 요청은 `issued`이고 10분 안일 때만, 연결 가능한 계정(강사·관리자·이미 연결된 계정 제외)만. 승인은 `requested`이고 수강생 기록이 비어 있을 때만 | 앱 `portal/invites.py` + 행 잠금 (#84) |
 | `Student.phone`, `guardian_phone` | 숫자 9~15자리. 숫자·공백·`-`·`()`만, `+`는 맨 앞(국제번호 허용). 성인이면 보호자 정보는 저장하지 않음 | 모델 검증 `validate_phone` + 폼 (UC-02, PR #37 리뷰, 2026-11-19) |
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
@@ -293,6 +310,8 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | User → Conversation | `PROTECT` | 강사 계정을 지워도 대화 기록이 함께 지워지지 않게 (UC-17) |
 | Student → Conversation | `PROTECT` | 수강생은 보관(`is_active=false`)만 하므로 대화 기록 유지 |
 | User → Student.account | `SET_NULL` | 수강생 계정을 지워도 수강 기록·대화는 남고 연결만 끊김 (#80) |
+| Student → StudentInvite | `CASCADE` | 초대는 연결 절차의 기록일 뿐이라 수강생과 함께 정리 (#84) |
+| User → StudentInvite.requested_by | `SET_NULL` | 요청 계정을 지워도 초대 기록은 남음 (#84) |
 | Conversation → Message | `CASCADE` | 대화와 메시지는 운명을 같이함 |
 
 **인덱스**

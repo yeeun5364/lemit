@@ -295,3 +295,14 @@ class MyCalendarTests(PortalTestCase):
         self.assertNotIn("일정 추가", html)
         self.assertNotIn(reverse("lessons:session_create"), html)
         self.assertNotIn("<form", html.split('id="calendar"')[1].split("</section>")[0])
+
+    def test_navigation_stops_at_allowed_date_range(self):
+        """PR #93 리뷰 P3: 1900~2999년 밖으로 가는 링크는 만들지 않는다(눌러도 오늘로 돌아가는 뜻밖의 이동 방지)."""
+        self.login(self.me_account)
+        first = self.client.get(reverse("portal:lessons"), {"date": "1900-01-15"})
+        self.assertIsNone(first.context["prev_url"])
+        self.assertEqual(first.context["next_url"], "?date=1900-02-15#calendar")
+        self.assertNotContains(first, 'aria-label="이전 달"')
+        last = self.client.get(reverse("portal:lessons"), {"date": "2999-12-10"})
+        self.assertIsNone(last.context["next_url"])
+        self.assertNotContains(last, 'aria-label="다음 달"')

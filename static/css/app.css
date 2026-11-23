@@ -661,6 +661,15 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .my-day { margin-top: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
 .my-day-title { font-size: var(--fs-md); font-weight: 700; margin: 0; }
 .my-day-empty { margin: 0; }
+.account-link { display: flex; flex-direction: column; gap: var(--space-3); }  /* 수강생 계정 연결·QR (#84) */
+.account-link p { margin: 0; }
+.link-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.link-actions form { margin: 0; }
+.qr-box { display: flex; flex-wrap: wrap; gap: var(--space-5); align-items: flex-start; }
+.qr-img { flex: 0 0 auto; background: #fff; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); line-height: 0; }
+.qr-img svg { width: 200px; height: 200px; }
+.qr-text { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.qr-url, .mono-sm { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .color-field { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
 .color-field legend { padding: 0; }
 .title-choice { border: 0; padding: 0; margin: 0; min-inline-size: 0; }  /* 이전 레슨명 고르기 (#75) */

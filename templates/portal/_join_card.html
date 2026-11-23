@@ -1,0 +1,24 @@
+{% comment %} S19 QR 연결 요청 카드 (#84). 로그인 전(auth_content)·로그인 후(content) 두 레이아웃에서 같은 내용을 쓴다. {% endcomment %}
+<section class="card auth-card" aria-labelledby="join-title">
+  <h1 id="join-title" class="auth-title">수강생 계정 연결</h1>
+  {% if error %}
+  <p>{{ error }}</p>
+  {% else %}
+  <p><strong>{{ invite.student.teacher.name }}</strong> 강사의 수강생 <strong>{{ invite.student.name }}</strong> 기록에 내 계정을 연결해요. 연결되면 내 수업 일정과 강사 메시지를 볼 수 있어요.</p>
+  {% if requested %}
+  <p class="notice">{% include "ui/icon.html" with name="info" size="sm" %}<span>연결을 요청했어요. 강사가 계정을 확인하고 승인하면 '내 수업'이 열려요. 승인 후 이 화면을 새로고침하거나 다시 로그인하세요.</span></p>
+  <a class="btn btn-secondary btn-block" href="{{ next }}">새로고침</a>
+  {% elif refusal %}
+  <p class="errorlist nonfield" role="alert">{{ refusal }}</p>
+  {% if user.is_authenticated %}<form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit" class="btn btn-secondary btn-block">다른 계정으로 로그인</button></form>{% endif %}
+  {% elif user.is_authenticated %}
+  <p class="muted small">로그인한 계정: {{ user.name }} ({{ user.email }})</p>
+  <form method="post" class="form" data-once>{% csrf_token %}<button type="submit" class="btn btn-primary btn-block">연결 요청</button></form>
+  <p class="muted small">요청만으로는 아무것도 열리지 않아요. 강사가 승인해야 연결돼요. QR은 {{ invite.expires_at|date:"H:i" }}까지 유효해요.</p>
+  {% else %}
+  <p class="muted small">먼저 로그인하세요. 계정이 없으면 가입한 뒤 이 화면으로 돌아와요.</p>
+  <a class="btn btn-primary btn-block" href="{% url 'login' %}?next={{ next|urlencode }}">로그인</a>
+  <a class="btn btn-secondary btn-block" href="{% url 'signup' %}?next={{ next|urlencode }}">회원가입</a>
+  {% endif %}
+  {% endif %}
+</section>

@@ -24,9 +24,9 @@
   <div class="card-head">
     <h2 id="cal-title" class="card-title">{{ selected|date:"Y년 n월" }}</h2>
     <nav class="sched-nav" aria-label="달 이동">
-      <a class="btn btn-secondary btn-icon" href="{{ prev_url }}" aria-label="이전 달">{% include "ui/icon.html" with name="chevron-left" size="sm" %}</a>
+      {% if prev_url %}<a class="btn btn-secondary btn-icon" href="{{ prev_url }}" aria-label="이전 달">{% include "ui/icon.html" with name="chevron-left" size="sm" %}</a>{% endif %}
       <a class="btn btn-secondary" href="{{ today_url }}">오늘</a>
-      <a class="btn btn-secondary btn-icon" href="{{ next_url }}" aria-label="다음 달">{% include "ui/icon.html" with name="chevron-right" size="sm" %}</a>
+      {% if next_url %}<a class="btn btn-secondary btn-icon" href="{{ next_url }}" aria-label="다음 달">{% include "ui/icon.html" with name="chevron-right" size="sm" %}</a>{% endif %}
     </nav>
   </div>
   <div class="sched-grid-wrap">{% include "lessons/_month_grid.html" %}</div>

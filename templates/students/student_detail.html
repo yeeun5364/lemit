@@ -105,6 +105,8 @@
   {% endif %}
 </section>
 
+{% include "portal/_account_link.html" %}
+
 <section class="card section danger-zone" aria-labelledby="archive-title">
   <div>
     <h2 id="archive-title" class="card-title">{% if student.is_active %}수강 종료{% else %}보관된 수강생{% endif %}</h2>

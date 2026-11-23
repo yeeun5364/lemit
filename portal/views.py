@@ -6,16 +6,20 @@
 """
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_not_required
 from django.db.models import Prefetch
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 
 from inbox import services as inbox_services
 from inbox.models import Conversation, Message
 from lessons import schedule as sch
 from lessons.models import Enrollment, LessonSession
+from portal import invites
 from portal.forms import FollowUpForm, NewMessageForm
+from portal.models import StudentInvite
 
 PAST_LIMIT = 10
 
@@ -50,14 +54,18 @@ def my_lessons(request):
     def link(d):
         return f"?date={d.isoformat()}#calendar"
 
+    def link_if_allowed(d):
+        """parse_date가 받는 범위(1900~2999년) 밖으로는 이동 링크를 만들지 않는다 (PR #93 리뷰 P3)."""
+        return link(d) if sch.parse_date(d.isoformat(), None) else None
+
     calendar = {
         "grid": sch.month_grid(selected, today, days, link),
         "weekdays": sch.WEEKDAYS,
         "selected": selected,
         "today": today,
         "day_sessions": days.get(selected, []),
-        "prev_url": link(sch.add_months(selected, -1)),
-        "next_url": link(sch.add_months(selected, 1)),
+        "prev_url": link_if_allowed(sch.add_months(selected, -1)),
+        "next_url": link_if_allowed(sch.add_months(selected, 1)),
         "today_url": link(today),
     }
     sessions = LessonSession.objects.filter(enrollment__student=profile).select_related("enrollment__label")
@@ -110,3 +118,42 @@ def my_conversation(request, pk):
     thread = conversation.messages.order_by("sent_at", "id")
     context = {"profile": profile, "conversation": conversation, "thread": thread, "form": form}
     return render(request, "portal/conversation.html", context)
+
+
+@login_not_required
+def join(request, token):
+    """S19 QR 연결 요청 (#84). 휴대폰으로 QR을 스캔하면 여기로 온다.
+
+    로그인 전이면 로그인·가입으로 보내고(돌아올 주소 유지), 로그인하면 '연결 요청'을 누를 수 있다.
+    요청만으로는 아무것도 볼 수 없고, 강사가 계정을 확인해 승인해야 '내 수업'이 열린다.
+    """
+    invite = StudentInvite.objects.select_related("student__teacher", "requested_by").filter(token=token).first()
+    user = request.user
+    if invite is None:
+        return render(
+            request,
+            "portal/join.html",
+            {"error": "올바르지 않은 초대입니다. 강사에게 QR을 다시 받아 주세요."},
+            status=404,
+        )
+    if user.is_authenticated and invite.student.account_id == user.pk:
+        return redirect("portal:lessons")
+    if request.method == "POST":
+        if not user.is_authenticated:
+            return redirect(f"{reverse('login')}?next={request.path}")
+        try:
+            invite = invites.request_link(token, user)
+        except invites.InviteError as e:
+            messages.error(request, str(e))
+        return redirect("portal:join", token=token)
+    context = {"invite": invite, "next": request.path}
+    if user.is_authenticated:
+        mine = invite.status == StudentInvite.Status.REQUESTED and invite.requested_by_id == user.pk
+        context["requested"] = mine
+        if not mine:
+            context["refusal"] = invites.account_refusal(user) or (
+                None if invite.is_open else "만료됐거나 이미 사용된 초대입니다. 강사에게 새 QR을 받아 주세요."
+            )
+    elif not invite.is_open:
+        context["refusal"] = "만료됐거나 이미 사용된 초대입니다. 강사에게 새 QR을 받아 주세요."
+    return render(request, "portal/join.html", context)
