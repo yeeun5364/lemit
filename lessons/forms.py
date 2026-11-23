@@ -101,6 +101,35 @@ class EnrollmentForm(forms.ModelForm):
 
     label = LabelChoiceField(help_text="일정에서 이 레슨권의 회차를 라벨 색으로 구분합니다.")
 
+    # 회차 자동 생성 (#76, 최소 범위): 체크하면 첫 수업 날짜부터 고른 요일마다 총 회차만큼 '예정' 회차를 함께 만든다.
+    # 반복 규칙은 저장하지 않는다(만든 뒤에는 보통 회차처럼 하나씩 수정·삭제). 규칙 저장·일괄 수정은 #19.
+    WEEKDAY_CHOICES = [("0", "월"), ("1", "화"), ("2", "수"), ("3", "목"), ("4", "금"), ("5", "토"), ("6", "일")]
+    MAX_AUTO_SESSIONS = 100
+    make_sessions = forms.BooleanField(
+        label="회차도 함께 만들기",
+        required=False,
+        help_text="첫 수업 날짜부터 고른 요일마다 총 회차만큼 '예정' 회차를 만들어 달력에 표시합니다.",
+    )
+    first_date = forms.DateField(
+        label="첫 수업 날짜", required=False, widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")
+    )
+    first_start = forms.TimeField(
+        label="시작", required=False, widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M")
+    )
+    first_end = forms.TimeField(
+        label="종료", required=False, widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M")
+    )
+    weekdays = forms.MultipleChoiceField(
+        label="반복 요일",
+        required=False,
+        choices=WEEKDAY_CHOICES,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="비우면 첫 수업 날짜의 요일로 매주 만듭니다.",
+    )
+    session_place = forms.CharField(
+        label="장소 메모", required=False, max_length=100, widget=forms.TextInput(attrs={"placeholder": "예: A 레슨실"})
+    )
+
     # 이전 레슨권의 레슨명 고르기 (#75). 이전 레슨권이 없는 수강생에게는 이 칸을 지우고 레슨명을 바로 입력받는다.
     title_choice = forms.ChoiceField(label="레슨명", required=False, widget=forms.RadioSelect)
     MAX_PREVIOUS_TITLES = 5
@@ -160,6 +189,43 @@ class EnrollmentForm(forms.ModelForm):
         self.order_fields(["title_choice", "title"])  # title_choice를 먼저 검증해 clean_title에서 쓴다
 
     CUSTOM_TITLE = "__custom__"
+
+    def clean(self):
+        cleaned = super().clean()
+        self.session_slots = []
+        if cleaned.get("make_sessions"):
+            self._plan_sessions(cleaned)
+        return cleaned
+
+    def _plan_sessions(self, cleaned):
+        """만들 회차의 (시작, 종료) 목록을 정한다 (#76). 첫 수업 날짜를 포함해 그 날부터 고른 요일마다, 총 회차만큼."""
+        first, start, end = cleaned.get("first_date"), cleaned.get("first_start"), cleaned.get("first_end")
+        for name, value in (("first_date", first), ("first_start", start), ("first_end", end)):
+            if not value and name not in self.errors:
+                self.add_error(name, "회차를 함께 만들려면 입력하세요.")
+        total = cleaned.get("total_count")
+        if total and total > self.MAX_AUTO_SESSIONS:
+            self.add_error("total_count", f"회차를 함께 만들 때 총 회차는 {self.MAX_AUTO_SESSIONS}회까지입니다.")
+        if not (first and start and end and total) or total > self.MAX_AUTO_SESSIONS:
+            return
+        if end <= start:
+            self.add_error("first_end", "종료 시간은 시작 시간보다 늦어야 합니다.")
+            return
+        days = {int(d) for d in cleaned.get("weekdays") or []} or {first.weekday()}
+        if first.weekday() not in days:
+            self.add_error("weekdays", "첫 수업 날짜의 요일을 반복 요일에 포함하세요.")
+            return
+        tz = timezone.get_current_timezone()
+        day = first
+        while len(self.session_slots) < total:
+            if day.weekday() in days:
+                self.session_slots.append(
+                    (
+                        timezone.make_aware(datetime.datetime.combine(day, start), tz),
+                        timezone.make_aware(datetime.datetime.combine(day, end), tz),
+                    )
+                )
+            day += datetime.timedelta(days=1)
 
     def clean_title(self):
         choice = self.cleaned_data.get("title_choice")

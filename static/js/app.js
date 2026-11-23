@@ -90,6 +90,15 @@
     sync(false);
   });
 
+  /* 4-2. 체크박스를 켰을 때만 딸린 입력 칸을 보인다 (#76 회차 자동 생성). JS가 없으면 항상 보인다 */
+  document.querySelectorAll("[data-show-if-checked]").forEach(function (box) {
+    var check = box.closest("form").querySelector('input[name="' + box.getAttribute("data-show-if-checked") + '"]');
+    if (!check) return;
+    function sync() { box.hidden = !check.checked; }
+    check.addEventListener("change", sync);
+    sync();
+  });
+
   /* 4. 제출 전 확인 (보관 등) */
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {

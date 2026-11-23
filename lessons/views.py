@@ -58,6 +58,13 @@ def enrollment_create(request, student_pk):
             stale = still != set(selected)
             if not stale:
                 enrollment = form.save()
+                # 회차 자동 생성 (#76): 레슨권과 같은 트랜잭션. 하나라도 실패하면 레슨권도 저장되지 않는다
+                created = LessonSession.objects.bulk_create(
+                    LessonSession(
+                        enrollment=enrollment, start_at=start, end_at=end, place=form.cleaned_data["session_place"]
+                    )
+                    for start, end in form.session_slots
+                )
                 # ACTIVE 조건을 다시 걸어, 그사이 다른 요청이 먼저 종료한 행은 바꾸지도 세지도 않는다 (PR #55 리뷰 2차)
                 ended = Enrollment.objects.filter(pk__in=still, status=Enrollment.Status.ACTIVE).update(
                     status=Enrollment.Status.ENDED,
@@ -70,9 +77,17 @@ def enrollment_create(request, student_pk):
                 form.add_error("end_exhausted", "선택한 레슨권의 상태가 바뀌었습니다. 화면을 다시 확인하세요.")
             return render(request, "lessons/enrollment_form.html", {"form": form, "student": student})
         text = f"'{enrollment.title}' 레슨권({enrollment.total_count}회)을 등록했습니다."
+        if created:
+            first, last = (timezone.localtime(s.start_at) for s in (created[0], created[-1]))
+            text += f" 회차 {len(created)}개를 만들었습니다({first:%m/%d}~{last:%m/%d})."
         if ended:
             text += f" 소진된 레슨권 {ended}개를 종료했습니다."
         messages.success(request, text)
+        clashes = services.overlapping_new_sessions(created)
+        if clashes:  # 저장은 그대로 하고 경고만 (회차 하나 등록과 같은 규칙, UC-04)
+            days = ", ".join(f"{timezone.localtime(s.start_at):%m/%d}" for s in clashes[:5])
+            more = f" 외 {len(clashes) - 5}개" if len(clashes) > 5 else ""
+            messages.warning(request, f"만든 회차 중 {len(clashes)}개가 다른 일정과 시간이 겹칩니다: {days}{more}.")
         return redirect("students:detail", pk=student.pk)
     return render(request, "lessons/enrollment_form.html", {"form": form, "student": student})
 

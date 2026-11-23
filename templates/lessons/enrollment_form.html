@@ -26,6 +26,25 @@
     {% include "ui/field.html" with field=form.start_date %}
     {% include "ui/field.html" with field=form.label %}
     <p class="small"><a href="{% url 'lessons:label_create' %}?next={{ request.get_full_path|urlencode }}">{% include "ui/icon.html" with name="plus" size="sm" %}새 라벨 만들기</a> <span class="muted">(입력한 내용은 저장되지 않으니 먼저 라벨을 만들어 두세요)</span></p>
+    {# 회차 자동 생성 (#76). JS가 있으면 체크했을 때만 입력 칸이 보인다(없으면 항상 보임) #}
+    <fieldset class="field auto-sessions">
+      <legend class="sr-only">회차 자동 생성</legend>
+      {% include "ui/field.html" with field=form.make_sessions %}
+      <div class="auto-sessions-body" data-show-if-checked="{{ form.make_sessions.html_name }}">
+        {% include "ui/field.html" with field=form.first_date %}
+        <div class="field-row">
+          {% include "ui/field.html" with field=form.first_start %}
+          {% include "ui/field.html" with field=form.first_end %}
+        </div>
+        <fieldset class="field weekday-field"{% if form.weekdays.errors %} aria-invalid="true" aria-describedby="{{ form.weekdays.auto_id }}_error"{% endif %}>
+          <legend class="field-label">{{ form.weekdays.label }}</legend>
+          <div class="weekday-picker">{% for choice in form.weekdays %}<label class="weekday-option">{{ choice.tag }}<span>{{ choice.choice_label }}</span></label>{% endfor %}</div>
+          <div class="helptext">{{ form.weekdays.help_text }}</div>
+          {% if form.weekdays.errors %}<ul class="errorlist" id="{{ form.weekdays.auto_id }}_error">{% for e in form.weekdays.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+        </fieldset>
+        {% include "ui/field.html" with field=form.session_place %}
+      </div>
+    </fieldset>
     {% if form.has_exhausted or form.end_exhausted.errors %}
     {# 도움말·오류를 묶음에 연결해 스크린 리더가 체크박스로 바로 이동해도 종료 효과를 읽게 한다 #}
     <fieldset class="field notice-field" aria-describedby="{% if form.has_exhausted %}{{ form.end_exhausted.auto_id }}_helptext{% endif %}{% if form.has_exhausted and form.end_exhausted.errors %} {% endif %}{% if form.end_exhausted.errors %}{{ form.end_exhausted.auto_id }}_error{% endif %}"{% if form.end_exhausted.errors %} aria-invalid="true"{% endif %}>

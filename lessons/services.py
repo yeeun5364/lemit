@@ -23,6 +23,22 @@ def overlapping_sessions(session):
     )
 
 
+def overlapping_new_sessions(created):
+    """방금 함께 만든 회차(#76) 중 같은 강사의 다른 회차와 시간이 겹치는 것. 겹침 기준은 overlapping_sessions와 같다.
+    기간 안의 다른 회차를 한 번에 읽어 비교한다(회차마다 쿼리하지 않음)."""
+    if not created:
+        return []
+    teacher_id = created[0].enrollment.student.teacher_id
+    others = list(
+        LessonSession.objects.filter(enrollment__student__teacher_id=teacher_id)
+        .exclude(pk__in=[s.pk for s in created])
+        .exclude(status=LessonSession.Status.CANCELLED)
+        .filter(start_at__lt=max(s.end_at for s in created), end_at__gt=min(s.start_at for s in created))
+        .only("start_at", "end_at")
+    )
+    return [s for s in created if any(o.start_at < s.end_at and o.end_at > s.start_at for o in others)]
+
+
 def scheduled_over_remaining(enrollment):
     """(예정 회차 수, 잔여 회차)를 돌려준다. 예정 > 잔여이면 '잔여 회차를 넘는 일정' 경고 대상.
 
