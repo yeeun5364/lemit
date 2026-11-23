@@ -5,6 +5,9 @@ from django.db.models.functions import Lower
 # 시연용 데모 계정 이메일 (seed_demo 전용, #24). example.com은 문서·예시용 예약 도메인이라 실제 메일이 가지 않는다.
 # 회원가입에서는 받지 않는다 (PR #65 리뷰).
 DEMO_EMAIL = "demo@example.com"
+# 시연용 데모 수강생 계정 (#80). seed_demo가 만들어 데모 강사의 수강생 '김하늘' 기록에 연결한다
+DEMO_STUDENT_EMAIL = "student@example.com"
+RESERVED_EMAILS = {DEMO_EMAIL, DEMO_STUDENT_EMAIL}
 
 
 class UserManager(BaseUserManager):

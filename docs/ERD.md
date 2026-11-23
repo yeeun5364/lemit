@@ -8,6 +8,7 @@
 ```mermaid
 erDiagram
     User ||--o{ Student : "등록"
+    User |o--o| Student : "수강생 계정 (#80)"
     Student ||--o{ Enrollment : "보유"
     User ||--o{ Label : "등록"
     Label |o--o{ Enrollment : "색 구분"
@@ -36,6 +37,7 @@ erDiagram
         varchar guardian_phone "보호자 연락처, 미성년자면 필수"
         text memo "선택"
         boolean is_active "수강 종료 시 false"
+        bigint account_id FK "수강생 계정, 선택, 1:1 (#80)"
         datetime created_at
         datetime updated_at
     }
@@ -228,6 +230,12 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - 검사와 기록은 이메일·IP별 PostgreSQL advisory lock(`pg_advisory_xact_lock`) 안에서 한 번에 합니다. 로그인은 비밀번호 확인 전에 한 칸을 예약하고 성공하면 반납하므로, 동시 요청도 한도까지만 통과합니다(PR #70 리뷰).
 - 개인정보(IP·이메일)를 오래 두지 않도록 새 기록을 남길 때 하루가 지난 행을 지웁니다.
 
+### 2-12. 수강생 계정은 수강생 기록에 1:1로 연결 (2026-11-23, #80)
+- `Student.account`(`User`, 선택, `OneToOneField`)가 있으면 그 계정은 **수강생 계정**입니다. 로그인하면 수강생 화면(`/me/`)으로 가고, 연결된 기록의 회차·대화만 봅니다.
+- 별도 역할 필드는 두지 않았습니다(발표 범위). 강사·관리자 계정을 연결하지 않도록 `Student.clean()`이 **수강생을 가진 계정, 관리자, 담당 강사 본인**을 거부합니다. 수강생이 아직 없는 강사 계정은 이 검사로 구분하지 못하므로, 연결은 관리자 화면과 `seed_demo`만 합니다. 역할별 가입·초대는 #83·#84.
+- 접근 범위는 `portal.middleware.StudentPortalMiddleware`가 서버에서 제한합니다. 수강생 계정은 수강생 화면, 로그아웃, 비밀번호 변경·재설정만 쓸 수 있습니다. 강사 화면은 GET이면 `/me/`로 보내고, POST 등은 403입니다.
+- 계정을 지워도 수강 기록은 남습니다(`SET_NULL`).
+
 ## 3. 제약 조건
 
 | 대상 | 규칙 | 구현 위치 |
@@ -235,6 +243,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | `User.email` | 대소문자를 무시하고 유일 (로그인도 대소문자 무시) | DB `UniqueConstraint(Lower(email))` + 회원가입 폼 검증 (UC-01, 2026-11-19) |
 | `User.email` = `demo@example.com` | 시연용 데모 계정(`seed_demo`) 전용. 일반 회원가입 불가. `seed_demo`는 Django 그룹 `lemit-demo`가 있는 계정만 데모로 다루고, 표시 없는 같은 이메일 계정이 있으면 아무것도 바꾸지 않고 멈춤 | 회원가입 폼 검증 + 명령의 그룹 확인 (#24, PR #65 리뷰) |
 | `Student` | `is_minor`이면 `guardian_phone` 필수 | DB `CheckConstraint` + 폼 검증 |
+| `Student.account` | 한 계정은 수강생 기록 하나에만(1:1). 수강생을 가진 강사 계정·관리자·담당 강사 본인은 연결 불가 | DB `UNIQUE`(OneToOne) + 모델 `clean()` (#80) |
 | `Student.phone`, `guardian_phone` | 숫자 9~15자리. 숫자·공백·`-`·`()`만, `+`는 맨 앞(국제번호 허용). 성인이면 보호자 정보는 저장하지 않음 | 모델 검증 `validate_phone` + 폼 (UC-02, PR #37 리뷰, 2026-11-19) |
 | `Enrollment.total_count` | 1 이상 | DB `CheckConstraint` |
 | `LessonSession` | `end_at > start_at` | DB `CheckConstraint` |
@@ -283,6 +292,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | LessonSession → makeup_for | `SET_NULL` | 원래 회차가 없어져도 보강 기록은 유지 |
 | User → Conversation | `PROTECT` | 강사 계정을 지워도 대화 기록이 함께 지워지지 않게 (UC-17) |
 | Student → Conversation | `PROTECT` | 수강생은 보관(`is_active=false`)만 하므로 대화 기록 유지 |
+| User → Student.account | `SET_NULL` | 수강생 계정을 지워도 수강 기록·대화는 남고 연결만 끊김 (#80) |
 | Conversation → Message | `CASCADE` | 대화와 메시지는 운명을 같이함 |
 
 **인덱스**

@@ -1,0 +1,3 @@
+{% comment %} 수강생 계정 메뉴 (#80). 강사 메뉴 대신 보인다. 강사 화면 주소는 서버(portal.middleware)에서도 막는다. {% endcomment %}
+<li><a href="{% url 'portal:lessons' %}" class="nav-item{% if url_name == 'lessons' and app_name == 'portal' %} is-active{% endif %}"{% if url_name == 'lessons' and app_name == 'portal' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="calendar" %}내 수업</a></li>
+<li><a href="{% url 'portal:messages' %}" class="nav-item{% if app_name == 'portal' and url_name != 'lessons' %} is-active{% endif %}"{% if app_name == 'portal' and url_name != 'lessons' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="inbox" %}메시지</a></li>

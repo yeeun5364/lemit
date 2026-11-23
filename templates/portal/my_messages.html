@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}메시지{% endblock %}
+{% block page_title %}메시지{% endblock %}
+{% block page_desc %}<p class="page-desc">담당 강사 {{ profile.teacher.name }}님과 주고받은 메시지예요.</p>{% endblock %}
+{% block content %}
+<section class="card section" aria-labelledby="list-title">
+  <div class="card-head"><h2 id="list-title" class="card-title">대화</h2></div>
+  {% if conversations %}
+  <ul class="rows">
+    {% for c in conversations %}
+    {% with last=c.last_message %}
+    <li><a class="row" href="{% url 'portal:conversation' c.pk %}">
+      <span class="row-main"><span class="row-title">{{ c.subject }}</span><span class="row-sub">{% if last %}{% if last.is_from_student %}나: {% else %}{{ profile.teacher.name }}: {% endif %}{{ last.body|truncatechars:40 }}{% endif %}</span></span>
+      <span class="row-side"><span class="muted small">{{ c.last_message_at|date:"n/j H:i" }}</span>{% if last and not last.is_from_student %}<span class="badge badge-blue">새 답장</span>{% endif %}</span>
+    </a></li>
+    {% endwith %}
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state"><span class="empty-icon is-neutral">{% include "ui/icon.html" with name="inbox" %}</span><p class="empty-title">아직 주고받은 메시지가 없어요</p></div>
+  {% endif %}
+</section>
+
+<section class="card form-card section" aria-labelledby="new-title">
+  <h2 id="new-title" class="card-title">새 메시지</h2>
+  {% if profile.is_active %}
+  <form method="post" class="form" novalidate data-once>
+    {% csrf_token %}
+    {% include "ui/field.html" with field=form.subject %}
+    {% include "ui/field.html" with field=form.body %}
+    <div class="form-actions"><button type="submit" class="btn btn-primary">담당 강사에게 보내기</button></div>
+  </form>
+  {% else %}
+  <p class="muted">수강이 종료된 상태라 메시지를 보낼 수 없어요.</p>
+  {% endif %}
+</section>
+{% endblock %}

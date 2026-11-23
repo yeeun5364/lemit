@@ -1,8 +1,7 @@
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm, PasswordResetForm, UserCreationForm
 
-from accounts.models import DEMO_EMAIL as RESERVED_DEMO_EMAIL
-from accounts.models import User
+from accounts.models import RESERVED_EMAILS, User
 
 
 class SignupForm(UserCreationForm):
@@ -21,7 +20,7 @@ class SignupForm(UserCreationForm):
         # 로그인이 대소문자를 구분하지 않으므로 중복 검사도 대소문자 무시 (DB 제약과 같은 기준)
         if User.objects.filter(email__iexact=email).exists():
             raise forms.ValidationError("이미 가입된 이메일입니다.", code="duplicate_email")
-        if email.lower() == RESERVED_DEMO_EMAIL:  # seed_demo 전용 (#24, PR #65 리뷰)
+        if email.lower() in RESERVED_EMAILS:  # seed_demo 전용 데모 강사·수강생 (#24, PR #65 리뷰, #80)
             raise forms.ValidationError("사용할 수 없는 이메일입니다.", code="reserved_email")
         return email
 

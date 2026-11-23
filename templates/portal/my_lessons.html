@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}내 수업{% endblock %}
+{% block page_title %}내 수업{% endblock %}
+{% block page_desc %}<p class="page-desc">{{ profile.name }}님 · 담당 강사 {{ profile.teacher.name }}{% if not profile.is_active %} · <span class="badge badge-neutral">수강 종료</span>{% endif %}</p>{% endblock %}
+{% block page_actions %}<a class="btn btn-primary" href="{% url 'portal:messages' %}">{% include "ui/icon.html" with name="inbox" size="sm" %}강사에게 메시지</a>{% endblock %}
+{% block content %}
+{% if enrollments %}
+<section class="card section" aria-labelledby="pass-title">
+  <div class="card-head"><h2 id="pass-title" class="card-title">수강 중인 레슨권</h2></div>
+  <ul class="rows">
+    {% for e in enrollments %}
+    <li class="row">
+      {% with lb=e.label %}<span class="label-bar{% if lb %} lc-{{ lb.color }}{% endif %}" aria-hidden="true"></span>{% endwith %}
+      <span class="row-main"><span class="row-title">{{ e.title }}</span><span class="row-sub">총 {{ e.total_count }}회 · 진행 {{ e.used_count }}회</span></span>
+      <span class="row-side"><span class="{% if e.remaining_count <= 2 %}badge badge-amber{% else %}muted small{% endif %}">잔여 {{ e.remaining_count }}회</span></span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card section" aria-labelledby="upcoming-title">
+  <div class="card-head"><h2 id="upcoming-title" class="card-title">다가오는 수업</h2>{% if upcoming %}<span class="muted small">{{ upcoming|length }}개</span>{% endif %}</div>
+  {% if upcoming %}
+  <ul class="rows sessions">{% for s in upcoming %}{% include "portal/_session_row.html" %}{% endfor %}</ul>
+  {% else %}
+  <div class="empty-state"><span class="empty-icon is-neutral">{% include "ui/icon.html" with name="calendar" %}</span><p class="empty-title">예정된 수업이 없어요</p><p class="muted small">일정은 담당 강사가 등록해요. 궁금한 점은 메시지로 물어보세요.</p></div>
+  {% endif %}
+</section>
+
+{% if past %}
+<section class="card section" aria-labelledby="past-title">
+  <div class="card-head"><h2 id="past-title" class="card-title">지난 수업</h2><span class="muted small">최근 {{ past|length }}개</span></div>
+  <ul class="rows sessions">{% for s in past %}{% include "portal/_session_row.html" %}{% endfor %}</ul>
+</section>
+{% endif %}
+{% endblock %}

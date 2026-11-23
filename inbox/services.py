@@ -53,6 +53,13 @@ def add_student_message(*, teacher, student, subject, body):
         return _save(conversation, message)
 
 
+def add_student_followup(*, conversation, body):
+    """수강생 화면(#80)에서 같은 대화에 이어 보내는 수강생 메시지. 새 메시지와 같은 모델로 분류한다.
+    conversation은 호출하는 쪽에서 로그인한 수강생 계정의 대화인지 이미 확인한 값이어야 한다."""
+    message = Message(conversation=conversation, sender=Message.Sender.STUDENT, body=body, **_classify(body))
+    return _save(conversation, message)
+
+
 def add_teacher_reply(*, conversation, body):
     """강사 답장. 강사 메시지는 분류하지 않는다."""
     message = Message(conversation=conversation, sender=Message.Sender.TEACHER, body=body)
