@@ -14,8 +14,15 @@
         <span class="row-title">{{ lb.name }}</span>
         <span class="row-sub">{{ lb.get_color_display }}</span>
       </span>
-      <span class="row-side"><span class="muted small">레슨권 {{ lb.enrollment_count }}개</span></span>
-    </a></li>
+      <span class="row-side"><span class="muted small">레슨권 {{ lb.enrollment_count }}개 · 회차 {{ lb.session_count }}개</span></span>
+    </a>
+    {% comment %} 달력에 보이는지 알려 준다 (#77): 레슨권에 안 붙음 → 회차 없음 → 회차 있음(일정 바로가기) {% endcomment %}
+    <p class="label-hint small{% if not lb.session_count %} is-empty{% endif %}">
+      {% if not lb.enrollment_count %}아직 레슨권에 붙이지 않아 달력에 보이지 않아요. 수강생 상세의 레슨권 카드에서 '라벨 붙이기'를 누르세요.
+      {% elif not lb.active_enrollment_count %}달력에 표시할 회차가 없어요. 이 라벨이 붙은 레슨권은 모두 보관한 수강생의 것이에요. 활성 수강생의 레슨권에 라벨을 붙이거나 수강생 보관을 해제하세요.
+      {% elif not lb.session_count %}달력에 표시할 회차가 없어요. 라벨을 붙인 레슨권으로 일정을 추가하면 이 색으로 보여요.
+      {% else %}일정에서 회차 {{ lb.session_count }}개가 이 색으로 보여요. <a href="{% url 'lessons:schedule' %}?label={{ lb.pk }}&amp;date={{ lb.schedule_date|date:'Y-m-d' }}">이 라벨 일정 보기</a>{% endif %}
+    </p></li>
     {% endfor %}
   </ul>
   {% else %}

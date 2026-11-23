@@ -8,7 +8,7 @@ import datetime
 
 from django.contrib import messages
 from django.db import IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Count, Max, Min, Q
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -576,6 +576,9 @@ def schedule(request):
             "student": student,
             "labels": labels,
             "label": label,
+            # 라벨로 걸렀는데 그 라벨의 회차가 아예 없으면 '왜 비었는지' 알려 준다 (#77)
+            "label_without_sessions": bool(label)
+            and not LessonSession.objects.filter(enrollment__label=label, enrollment__student__is_active=True).exists(),
             "prev_url": link(date=prev_date.isoformat()),
             "next_url": link(date=next_date.isoformat()),
             "today_url": link(date=today.isoformat()),
@@ -598,8 +601,27 @@ def _safe_next(request, default):
 
 
 def label_list(request):
-    """S12 라벨 목록. 내 라벨만, 라벨마다 붙은 레슨권 수와 함께."""
-    labels = Label.objects.filter(teacher=request.user).annotate(enrollment_count=Count("enrollments"))
+    """S12 라벨 목록. 내 라벨만, 라벨마다 붙은 레슨권 수와 달력에 보이는 회차 수와 함께.
+
+    라벨을 만들어도 레슨권에 붙이지 않았거나, 붙인 레슨권에 회차가 없으면 달력에 아무것도 보이지 않는다(#77).
+    그래서 라벨마다 그 상태를 알려 주고, 회차가 있으면 그 라벨로 거른 일정(다가오는 회차, 없으면 마지막 회차의 달)으로
+    바로 가는 링크를 준다. 회차 수·날짜는 일정 화면과 같은 기준(보관하지 않은 수강생)으로 센다.
+    """
+    shown = Q(enrollments__student__is_active=True)
+    upcoming = shown & Q(enrollments__sessions__start_at__gte=timezone.now())
+    labels = list(
+        Label.objects.filter(teacher=request.user).annotate(
+            enrollment_count=Count("enrollments", distinct=True),
+            # 보관한 수강생의 레슨권에만 붙어 있으면 회차를 추가할 수 없으므로 안내가 다르다 (PR #85 리뷰 P3)
+            active_enrollment_count=Count("enrollments", filter=shown, distinct=True),
+            session_count=Count("enrollments__sessions", filter=shown, distinct=True),
+            next_start=Min("enrollments__sessions__start_at", filter=upcoming),
+            last_start=Max("enrollments__sessions__start_at", filter=shown),
+        )
+    )
+    for lb in labels:
+        when = lb.next_start or lb.last_start
+        lb.schedule_date = timezone.localdate(when) if when else None
     return render(request, "lessons/label_list.html", {"labels": labels})
 
 
@@ -653,7 +675,10 @@ def enrollment_label(request, pk):
         enrollment = form.save(commit=False)
         enrollment.save(update_fields=["label", "updated_at"])
         if enrollment.label:
-            messages.success(request, f"'{enrollment.title}' 레슨권에 '{enrollment.label.name}' 라벨을 붙였습니다.")
+            text = f"'{enrollment.title}' 레슨권에 '{enrollment.label.name}' 라벨을 붙였습니다."
+            if not enrollment.sessions.exists():  # 회차가 없으면 달력에 아무것도 보이지 않는다 (#77)
+                text += " 이 레슨권에는 아직 회차가 없어 달력에는 보이지 않아요. 일정을 추가하면 라벨 색으로 보여요."
+            messages.success(request, text)
         else:
             messages.success(request, f"'{enrollment.title}' 레슨권의 라벨을 비웠습니다.")
         return redirect("students:detail", pk=enrollment.student_id)
