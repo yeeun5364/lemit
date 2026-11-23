@@ -1,21 +1,34 @@
 name: Deploy
 
-# Lightsail 배포 (#42 → #56 Self-hosted Runner → 버전 태그 배포). 사용자가 직접 할 설정과 남는 위험은 docs/CD.md.
+# Lightsail 배포 (#42 → #56 Self-hosted Runner → 버전 태그 배포 → 태그 파이프라인). 사용자가 할 설정과 남는 위험은 docs/CD.md.
 # - PR·main push는 CI만 실행하고 배포하지 않는다.
-# - 자동: 버전 태그(vX.Y.Z)를 push하면 Release tag 워크플로(GitHub-hosted)가 태그·main 포함·CI 완료를 확인하고,
-#   성공하면 이 워크플로가 workflow_run으로 이어받아 **태그가 가리키는 커밋**을 배포한다.
-#   저장소 변수 CD_AUTO_DEPLOY가 "true"일 때만 (처음엔 꺼 둠). 롤백 뒤 보류 중이면 서버가 건너뛴다 (deploy-tag).
-#   workflow_run은 항상 main의 이 파일로 실행되므로, 태그 커밋 안의 (고쳐졌을 수 있는) deploy.yml은 러너에서 돌지 않는다.
-# - 수동: Actions → Deploy → Run workflow (main에서만). check(연결만 확인) / deploy / rollback
+# - 자동: 버전 태그(vX.Y.Z)를 push하면 Release tag 워크플로(GitHub-hosted, 가벼운 진입점)가 태그·main 포함·CI 완료를
+#   확인하고, 성공하면 이 워크플로가 workflow_run으로 이어받아 **한 실행 화면에서** 아래 작업을 순서대로 실행한다
+#   (저장소 변수 CD_AUTO_DEPLOY가 "true"일 때만):
+#     0. plan     요청 검증 (GitHub-hosted)
+#     1. test     태그 커밋의 Django 테스트·필수 검사
+#     2. train    태그 커밋의 데이터·코드로 모델 학습, 성능 기준 통과 모델만 다음 작업으로 (아티팩트)
+#     3. parity   같은 모델·같은 입력으로 학습 환경과 서비스 실행 환경(Dockerfile의 기반 이미지)의 예측 비교
+#     4. image    그 모델을 넣은 이미지 빌드 → 컨테이너 실행 시험 → GHCR에 게시, digest 기록
+#     5. release  GitHub Release에 태그·커밋·모델·digest 기록 (같은 버전 재시도 시 중복 없음, digest가 다르면 실패)
+#     6. deploy   production 승인 후 Self-hosted 러너 → 서버가 기록된 digest의 이미지를 받아 실행 (서버 빌드 없음)
+#   앞 작업이 실패하면 뒤 작업은 실행되지 않는다 (needs). 롤백 뒤 보류 중이면 서버가 건너뛴다.
+#   workflow_run은 항상 main의 이 파일로 실행되므로, 태그 커밋 안의 (고쳐졌을 수 있는) deploy.yml은 실행되지 않는다.
+# - 수동: Actions → Deploy → Run workflow (main에서만). check(연결만 확인) / deploy(서버에서 빌드) / rollback.
+#   수동 실행에서는 plan과 deploy만 실행되고 1~5는 건너뛴다.
 #
-# 두 작업으로 나눈다:
-#   1) plan   (GitHub-hosted): 요청 검증(태그 → 커밋, 최신 버전 태그인지), 그 커밋의 실제 CI 실행(ci.yml, main push)과
-#      3개 작업 성공, main 포함 확인. Release tag의 결과는 믿지 않고 여기서 다시 확인한다. 판단은 여기서.
-#   2) deploy (Self-hosted, 러너 전용 WSL 배포판): 러너 격리 확인 → SSH 요청 한 줄. 저장소 코드·외부 액션은 받지 않는다.
-#      서버는 배포 전용 키의 강제 명령(/usr/local/bin/lemit-ci-deploy = scripts/ci_deploy.sh 설치본)만 실행한다.
+# 커밋 SHA 두 가지를 구분한다 (docs/CD.md §0):
+# - github.sha: workflow_run에서는 **main의 최신 커밋**(이 워크플로 파일을 읽은 커밋). 배포 대상이 아니다.
+# - 대상 커밋 TARGET_SHA = needs.plan.outputs.sha: 버전 태그가 가리키는 커밋 (= workflow_run.head_sha, plan이 태그로 재확인).
+#   1~5의 모든 checkout은 ref로 이 값을 명시하고, 받은 HEAD가 이 값인지 다시 확인한다. 이미지 라벨·Release·서버 요청에도 이 값.
+#
+# 권한 (작업마다 최소, scripts/check_workflow_policy.py가 CI에서 고정):
+# - plan: contents·actions 읽기 / test·train·parity: contents 읽기 / image: + packages 쓰기(GHCR 게시)
+# - release: contents 쓰기(Release 만들기, 저장소 코드를 받지 않음) / deploy: contents 읽기 + production Environment
+# - 배포 키(Secret)는 production Environment의 deploy 작업만 받는다. 1~5는 GitHub-hosted이고 Environment가 없다.
 #
 # 공개 저장소에서 Self-hosted 러너를 쓰므로 위험을 줄이는 장치이며 완전한 차단은 아니다 (docs/CD.md §1):
-# - PR·push 트리거를 두지 않는다. self-hosted는 이 파일의 deploy 작업만 쓴다 (scripts/check_workflow_policy.py가 CI에서 검사).
+# - PR·push 트리거를 두지 않는다. self-hosted는 이 파일의 deploy 작업만 쓴다.
 #   포크 PR은 자기 워크플로 파일로 실행되므로, 그 경우는 저장소 설정 '모든 외부 기여자 승인'에 의존한다.
 # - 러너 PC의 공인 IP가 Lightsail SSH 22번에 허용된 관리자 IP라는 전제다. AWS 권한은 러너에 두지 않는다.
 # - 공개 로그에 키·.env·방화벽 규칙을 출력하지 않는다.
@@ -26,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "check: 서버 연결·상태만 확인 / deploy: 배포 / rollback: 이전 이미지로"
+        description: "check: 서버 연결·상태만 확인 / deploy: 배포(서버에서 빌드) / rollback: 이전 이미지로"
         type: choice
         options: [check, deploy, rollback]
         default: check
@@ -44,7 +57,7 @@ permissions:
 
 jobs:
   plan:
-    name: 배포 요청 검증 (GitHub-hosted)
+    name: 0. plan · 요청 검증
     if: >-
       github.repository == 'yeeun5364/lemit' &&
       ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -72,6 +85,7 @@ jobs:
       # - 태그 형식 vMAJOR.MINOR.PATCH, 태그가 지금도 Release tag가 본 커밋(head_sha)을 가리키는지 (그사이 옮겨지면 중단)
       # - 이 태그가 저장소의 가장 높은 버전 태그인지. 더 높은 태그가 있으면 그 태그의 배포에 맡기고 건너뛴다
       #   (태그를 여러 개 연달아 올렸거나 예전 태그의 Release tag를 다시 실행한 경우에 예전 버전으로 덮어쓰지 않게)
+      # 태그 배포는 action=deploy-image: 1~5 작업이 실행되고, deploy 작업이 release의 digest를 붙여 서버에 요청한다
       - name: 요청 정하기 (동작·대상 검증)
         id: req
         env:
@@ -90,7 +104,7 @@ jobs:
           }
           VERSION_TAG=""
           if [ "$EVENT" = "workflow_run" ]; then
-            ACTION=deploy; SHA="$RUN_SHA"; TAG=""; VERSION_TAG="$RUN_TAG"
+            ACTION=deploy-image; SHA="$RUN_SHA"; TAG=""; VERSION_TAG="$RUN_TAG"
             # 작업 조건(if)에도 있지만, 이 본문만 따로 실행해도 같은 결론이 나도록 한 번 더 본다
             [ "$AUTO" = "true" ] || skip "자동 배포가 꺼져 있어(CD_AUTO_DEPLOY≠true) 태그 $VERSION_TAG 를 배포하지 않습니다."
             re='^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
@@ -113,19 +127,22 @@ jobs:
             ACTION="$IN_ACTION"; SHA="$IN_SHA"; TAG="$IN_TAG"
           fi
           case "$ACTION" in
+            deploy-image)
+              # 서버 요청의 앞부분. deploy 작업이 release 작업의 이미지 digest를 붙인다: deploy-image <태그> <SHA> <digest>
+              # 서버(scripts/ci_deploy.sh)가 태그·main 포함·Release 기록을 다시 확인하고, 롤백 뒤 보류 중이면 배포하지 않는다
+              REMOTE="deploy-image $VERSION_TAG $SHA" ;;
             deploy)
+              # 수동 배포: 서버에서 빌드 (기존 방식). 성공하면 보류를 푼다
               [ -n "$SHA" ] || SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
               [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::SHA는 소문자 40자리여야 합니다"; exit 1; }
-              # 태그 자동 배포는 deploy-tag: 서버가 태그·main 포함을 다시 확인하고, 롤백 뒤 보류 중이면 배포하지 않는다
-              # (scripts/ci_deploy.sh). 수동 배포는 deploy: 성공하면 보류를 푼다
-              if [ "$EVENT" = "workflow_run" ]; then REMOTE="deploy-tag $VERSION_TAG $SHA"; else REMOTE="deploy $SHA"; fi ;;
+              REMOTE="deploy $SHA" ;;
             rollback)
               [[ "$TAG" =~ ^[0-9a-f]{12}$ ]] || { echo "::error::rollback_tag는 소문자 12자리여야 합니다"; exit 1; }
               SHA=""; REMOTE="rollback $TAG" ;;
             check) SHA=""; REMOTE="status" ;;
             *) echo "::error::알 수 없는 동작"; exit 1 ;;
           esac
-          # 출력에는 검증을 통과한 값만 쓴다 (deploy가 아니면 SHA는 비움)
+          # 출력에는 검증을 통과한 값만 쓴다 (deploy·deploy-image가 아니면 SHA는 비움)
           { echo "action=$ACTION"; echo "sha=$SHA"; echo "tag=$VERSION_TAG"; echo "remote=$REMOTE"; } >> "$GITHUB_OUTPUT"
           echo "동작: $ACTION / 서버 요청: $REMOTE"
 
@@ -133,13 +150,13 @@ jobs:
       # 그 실행의 작업 결과를 본다 (다른 워크플로·앱이 같은 이름의 체크를 올려도 속지 않음, PR #58 리뷰 P2).
       # 서버의 강제 명령도 main 포함 여부를 다시 확인한다.
       - name: CI 실행·main 포함 확인
-        if: steps.req.outputs.action == 'deploy'
+        if: steps.req.outputs.action == 'deploy' || steps.req.outputs.action == 'deploy-image'
         env:
           SHA: ${{ steps.req.outputs.sha }}
         run: |
           status="$(gh api "repos/$REPO/compare/$SHA...main" --jq .status)"
           case "$status" in identical|ahead) ;; *) echo "::error::$SHA 는 main에 포함된 커밋이 아닙니다 ($status)"; exit 1 ;; esac
-          # 태그 자동 배포·수동 배포 모두 그 커밋의 main push CI 성공 실행을 직접 찾는다 (Release tag 결과를 믿지 않음)
+          # 태그 배포·수동 배포 모두 그 커밋의 main push CI 성공 실행을 직접 찾는다 (Release tag 결과를 믿지 않음)
           RUN_ID="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&status=completed&per_page=50" \
             --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id // empty')"
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "::error::$SHA 의 성공한 CI 실행(ci.yml, main push)을 찾지 못했습니다"; exit 1; }
@@ -155,18 +172,529 @@ jobs:
           done
           echo "CI 실행 $RUN_ID: 3개 작업 모두 성공, main에 포함된 커밋"
 
-  deploy:
-    name: 배포 (Self-hosted → Lightsail)
+      - name: 요약
+        if: always()
+        env:
+          ACTION: ${{ steps.req.outputs.action }}
+          TARGET_SHA: ${{ steps.req.outputs.sha }}
+          VERSION_TAG: ${{ steps.req.outputs.tag }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### 0. plan: $STATUS"
+            echo "- 동작: \`${ACTION:-없음}\`"
+            if [ -n "$VERSION_TAG" ]; then echo "- 버전 태그: \`$VERSION_TAG\`"; fi
+            if [ -n "$TARGET_SHA" ]; then echo "- **대상 커밋(태그가 가리키는 커밋): \`$TARGET_SHA\`**"; fi
+            echo "- 워크플로 파일을 읽은 커밋(github.sha, main): \`$WORKFLOW_SHA\` — 배포 대상이 아님"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: 1. test · 테스트 (태그 커밋)
     needs: plan
-    if: github.repository == 'yeeun5364/lemit' && needs.plan.outputs.remote != ''
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      db:
+        image: postgres:18
+        env:
+          POSTGRES_DB: lemit
+          POSTGRES_USER: lemit
+          POSTGRES_PASSWORD: lemit-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lemit -d lemit"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TARGET_SHA: ${{ needs.plan.outputs.sha }}
+      # CI 전용 값. 실제 비밀값이 아니며 이 작업 안에서만 쓰인다.
+      DJANGO_SECRET_KEY: ci-only-not-a-real-secret
+      DJANGO_DEBUG: "False"
+      DATABASE_URL: postgres://lemit:lemit-ci@127.0.0.1:5432/lemit
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0 (저장소 정책: 액션은 커밋 SHA로 고정)
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - name: 대상 커밋 확인
+        run: |
+          [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || { echo "::error::받은 커밋이 대상 커밋과 다릅니다"; exit 1; }
+          echo "대상 커밋 $TARGET_SHA 에서 실행"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: ruff check
+        run: ruff check --output-format=github .
+      - name: ruff format --check
+        run: ruff format --check .
+      - name: 워크플로 규칙 검사
+        run: python scripts/check_workflow_policy.py
+      - name: 설정 점검
+        run: python manage.py check
+      - name: 마이그레이션 누락 확인
+        run: python manage.py makemigrations --check --dry-run
+      - name: 커밋된 ML 모델 검증
+        run: python -m ml.verify
+      - name: Django 테스트
+        run: python manage.py test --noinput -v 2
+      - name: 요약
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+        run: |
+          echo "### 1. test: $STATUS (커밋 \`$TARGET_SHA\`, ruff·워크플로 규칙·check·마이그레이션·ml.verify·Django 테스트)" >> "$GITHUB_STEP_SUMMARY"
+
+  train:
+    name: 2. train · 모델 학습
+    needs: [plan, test]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      model_version: ${{ steps.train.outputs.model_version }}
+      model_sha256: ${{ steps.train.outputs.model_sha256 }}
+      meta_sha256: ${{ steps.train.outputs.meta_sha256 }}
+      expected_sha256: ${{ steps.train.outputs.expected_sha256 }}
+      val_macro_f1: ${{ steps.train.outputs.val_macro_f1 }}
+      unseen_macro_f1: ${{ steps.train.outputs.unseen_macro_f1 }}
+    env:
+      TARGET_SHA: ${{ needs.plan.outputs.sha }}
+      VERSION_TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - name: 대상 커밋 확인
+        run: '[ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || { echo "::error::받은 커밋이 대상 커밋과 다릅니다"; exit 1; }'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      # ml.train: 이 커밋의 ml/data로 학습하고 성능 기준(GATE, 검증 macro F1)을 넘을 때만 저장한다 (못 넘으면 실패).
+      # ml.verify: 저장한 모델을 다시 불러 해시·데이터 일치·점수 재현·성능 기준을 확인한다.
+      # ml.parity dump: 이 (학습) 환경의 예측을 기록해 parity·image 작업이 비교하게 한다.
+      # 모델 버전 = <커밋된 모델의 버전>+<버전 태그> (예: v2+v0.1.2)
+      - name: 모델 학습·검증
+        id: train
+        run: |
+          out="$RUNNER_TEMP/model"
+          base="$(python -c 'import json; print(json.load(open("ml/artifacts/message_classifier.json", encoding="utf-8"))["model_version"])')"
+          [[ "$base" =~ ^[A-Za-z0-9._-]{1,20}$ ]] || { echo "::error::커밋된 모델 버전 형식 오류"; exit 1; }
+          version="$base+$VERSION_TAG"
+          python -m ml.train --version "$version" --out-dir "$out"
+          python -m ml.verify --model "$out/message_classifier.joblib"
+          python -m ml.parity dump --model "$out/message_classifier.joblib" --out "$out/parity_expected.json"
+          python - "$out" >> "$GITHUB_OUTPUT" <<'EOF'
+          import hashlib, json, sys
+          from pathlib import Path
+          out = Path(sys.argv[1])
+          meta = json.loads((out / "message_classifier.json").read_text(encoding="utf-8"))
+          sha = lambda p: hashlib.sha256((out / p).read_bytes()).hexdigest()
+          assert sha("message_classifier.joblib") == meta["sha256"]
+          print(f"model_version={meta['model_version']}")
+          print(f"model_sha256={meta['sha256']}")
+          print(f"meta_sha256={sha('message_classifier.json')}")
+          print(f"expected_sha256={sha('parity_expected.json')}")
+          print(f"val_macro_f1={meta['metrics']['val']['macro_f1']}")
+          print(f"unseen_macro_f1={meta['metrics']['unseen']['macro_f1']}")
+          # 커밋된(PR로 검토된) 모델 파일과 바이트 단위로 같은지 (참고: 고정 시드·고정 라이브러리라 보통 같다)
+          committed = json.loads(Path("ml/artifacts/message_classifier.json").read_text(encoding="utf-8"))["sha256"]
+          print(f"same_as_committed={'yes' if committed == meta['sha256'] else 'no'}")
+          EOF
+          cat "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: model
+          path: ${{ runner.temp }}/model/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+      - name: 요약
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+          MODEL_VERSION: ${{ steps.train.outputs.model_version }}
+          MODEL_SHA: ${{ steps.train.outputs.model_sha256 }}
+          VAL: ${{ steps.train.outputs.val_macro_f1 }}
+          UNSEEN: ${{ steps.train.outputs.unseen_macro_f1 }}
+          SAME: ${{ steps.train.outputs.same_as_committed }}
+        run: |
+          {
+            echo "### 2. train: $STATUS"
+            echo "| 항목 | 값 |"; echo "|---|---|"
+            echo "| 모델 버전 | \`${MODEL_VERSION:--}\` |"
+            echo "| 검증 macro F1 (기준 ≥ 0.80, ml.train GATE) | ${VAL:--} |"
+            echo "| 확인용 macro F1 (참고값) | ${UNSEEN:--} |"
+            echo "| 모델 파일 SHA-256 | \`${MODEL_SHA:--}\` |"
+            echo "| 커밋된 모델 파일과 같은 바이트 | ${SAME:--} (다르면 docs/ML.md §6 참고) |"
+            echo "| 학습 커밋 | \`$TARGET_SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  parity:
+    name: 3. parity · 학습·서비스 환경 예측 비교
+    needs: [plan, train]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TARGET_SHA: ${{ needs.plan.outputs.sha }}
+      MODEL_SHA: ${{ needs.train.outputs.model_sha256 }}
+      META_SHA: ${{ needs.train.outputs.meta_sha256 }}
+      EXPECTED_SHA: ${{ needs.train.outputs.expected_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - name: 대상 커밋 확인
+        run: '[ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || { echo "::error::받은 커밋이 대상 커밋과 다릅니다"; exit 1; }'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: model
+          path: ${{ runner.temp }}/model
+      - name: 받은 모델이 train 결과와 같은지 (해시)
+        run: |
+          cd "$RUNNER_TEMP/model"
+          printf '%s  %s\n' "$MODEL_SHA" message_classifier.joblib "$META_SHA" message_classifier.json \
+            "$EXPECTED_SHA" parity_expected.json | sha256sum -c -
+      # 비교 환경: 이 커밋 Dockerfile의 기반 이미지(FROM) + requirements.txt = 서비스 컨테이너와 같은 실행 환경.
+      # 학습 환경(train 작업: GitHub-hosted Ubuntu의 setup-python)과 OS·Python 빌드가 다르다.
+      # 같은 모델 파일·같은 입력(검증 문장 + ml/data/unseen.csv)으로 예측해 분류 일치, 확률 차이 ≤ 1e-6, macro F1 차이 ≤ 1e-4
+      - name: 서비스 실행 환경에서 예측 비교
+        run: |
+          base="$(awk 'toupper($1) == "FROM" { print $2; exit }' Dockerfile)"
+          [[ "$base" =~ ^[a-z0-9./:_-]+$ ]] || { echo "::error::Dockerfile FROM을 읽지 못했습니다"; exit 1; }
+          docker pull --quiet "$base"
+          base_ref="$(docker image inspect --format '{{index .RepoDigests 0}}' "$base")"
+          mkdir -p "$RUNNER_TEMP/parity"
+          chmod 777 "$RUNNER_TEMP/parity"
+          docker run --rm --network bridge -e PYTHONDONTWRITEBYTECODE=1 -e PIP_DISABLE_PIP_VERSION_CHECK=1 \
+            -e PIP_ROOT_USER_ACTION=ignore -v "$PWD:/src:ro" -v "$RUNNER_TEMP/model:/model:ro" \
+            -v "$RUNNER_TEMP/parity:/out" -w /src "$base_ref" sh -c '
+              pip install --quiet --no-cache-dir -r requirements.txt &&
+              python -m ml.parity compare --model /model/message_classifier.joblib \
+                --expected /model/parity_expected.json --result /out/result.json --summary /out/summary.md \
+                --expected-name "학습 (train 작업)" --actual-name "서비스 런타임 (Dockerfile 기반 이미지)"'
+          {
+            echo "### 3. parity: 통과"
+            echo "- 비교 환경 이미지: \`$base_ref\` (Dockerfile \`FROM $base\`) + requirements.txt"
+            echo "- 모델 파일 SHA-256: \`$MODEL_SHA\` (train 작업 결과와 같은 파일)"
+            echo
+            cat "$RUNNER_TEMP/parity/summary.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 실패 요약
+        if: failure()
+        run: |
+          {
+            echo "### 3. parity: 실패"
+            cat "$RUNNER_TEMP/parity/summary.md" 2> /dev/null || echo "비교 결과 없음 (위 로그 확인)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: 4. image · 이미지 빌드·시험·게시
+    needs: [plan, train, parity]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      image_id: ${{ steps.build.outputs.image_id }}
+    env:
+      TARGET_SHA: ${{ needs.plan.outputs.sha }}
+      VERSION_TAG: ${{ needs.plan.outputs.tag }}
+      MODEL_VERSION: ${{ needs.train.outputs.model_version }}
+      MODEL_SHA: ${{ needs.train.outputs.model_sha256 }}
+      META_SHA: ${{ needs.train.outputs.meta_sha256 }}
+      EXPECTED_SHA: ${{ needs.train.outputs.expected_sha256 }}
+      # 서버의 강제 명령(scripts/ci_deploy.sh IMAGE_REPO)과 같은 고정 값
+      IMAGE_REPO: ghcr.io/yeeun5364/lemit-web
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - name: 대상 커밋 확인
+        run: '[ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || { echo "::error::받은 커밋이 대상 커밋과 다릅니다"; exit 1; }'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: model
+          path: ${{ runner.temp }}/model
+      # parity를 통과한 바로 그 모델 파일(train 작업의 해시)을 이미지에 넣는다 (커밋된 ml/artifacts 파일을 덮어씀)
+      - name: train 모델을 작업 트리에 넣기 (해시 확인)
+        run: |
+          cd "$RUNNER_TEMP/model"
+          printf '%s  %s\n' "$MODEL_SHA" message_classifier.joblib "$META_SHA" message_classifier.json \
+            "$EXPECTED_SHA" parity_expected.json | sha256sum -c -
+          cd "$GITHUB_WORKSPACE"
+          cp "$RUNNER_TEMP/model/message_classifier.joblib" "$RUNNER_TEMP/model/message_classifier.json" \
+            "$RUNNER_TEMP/model/REPORT.md" ml/artifacts/
+          printf '%s  %s\n' "$MODEL_SHA" ml/artifacts/message_classifier.joblib | sha256sum -c -
+      - name: 이미지 빌드
+        id: build
+        run: |
+          docker build --pull -t lemit-web:candidate \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=$TARGET_SHA" \
+            --label "org.opencontainers.image.version=$VERSION_TAG" \
+            --label "io.lemit.model.version=$MODEL_VERSION" \
+            --label "io.lemit.model.sha256=$MODEL_SHA" .
+          echo "image_id=$(docker image inspect --format '{{.Id}}' lemit-web:candidate)" >> "$GITHUB_OUTPUT"
+      - name: 시험용 .env 만들기 (실제 비밀값 아님, 이 작업 안에서만 사용)
+        run: |
+          cat > .env <<'EOF'
+          DJANGO_SECRET_KEY=ci-only-not-a-real-secret-0123456789abcdefghijklmnopqrstuvwxyz
+          DJANGO_DEBUG=False
+          DJANGO_ALLOWED_HOSTS=203.0.113.10,localhost,127.0.0.1
+          DJANGO_CSRF_TRUSTED_ORIGINS=
+          POSTGRES_DB=lemit
+          POSTGRES_USER=lemit
+          POSTGRES_PASSWORD=lemit-ci
+          DATABASE_URL=postgres://lemit:lemit-ci@127.0.0.1:5432/lemit
+          SITE_ADDRESS=:80
+          DJANGO_BEHIND_PROXY=True
+          DJANGO_SECURE_HTTPS=False
+          EOF
+      - name: 컨테이너 실행 (db·web이 healthy가 될 때까지, 빌드한 이미지 그대로)
+        run: IMAGE_TAG=candidate docker compose -f compose.yaml up -d --wait --no-build
+      - name: 마이그레이션
+        run: IMAGE_TAG=candidate docker compose -f compose.yaml exec -T web python manage.py migrate --noinput
+      # /healthz/(앱·DB·모델 상태), check, migrate --check, ml.verify, 실제 추론 1건(inbox.classifier.classify, 서비스 분류 경로)
+      - name: 스모크 테스트 (healthz·추론 1건)
+        run: IMAGE_TAG=candidate docker compose -f compose.yaml exec -T web python scripts/smoke_test.py
+      - name: 이미지 안의 모델 = train 모델 (해시·버전), 이미지 안에서 parity 다시 비교
+        run: |
+          in_sha="$(IMAGE_TAG=candidate docker compose -f compose.yaml exec -T web sha256sum ml/artifacts/message_classifier.joblib | cut -d' ' -f1)"
+          [ "$in_sha" = "$MODEL_SHA" ] || { echo "::error::이미지 안 모델 해시($in_sha)가 train 결과($MODEL_SHA)와 다릅니다"; exit 1; }
+          version="$(IMAGE_TAG=candidate docker compose -f compose.yaml exec -T web python -c '
+          import json, urllib.request, sys
+          sys.path.insert(0, "scripts")
+          from healthcheck import host_header
+          req = urllib.request.Request("http://127.0.0.1:8000/healthz/", headers={"Host": host_header()})
+          print(json.load(urllib.request.urlopen(req, timeout=5))["message_classifier"]["version"])')"
+          [ "$version" = "$MODEL_VERSION" ] || { echo "::error::/healthz/ 모델 버전($version)이 train 결과($MODEL_VERSION)와 다릅니다"; exit 1; }
+          web="$(IMAGE_TAG=candidate docker compose -f compose.yaml ps -q web)"
+          docker cp "$RUNNER_TEMP/model/parity_expected.json" "$web:/tmp/parity_expected.json"
+          IMAGE_TAG=candidate docker compose -f compose.yaml exec -T web python -m ml.parity compare \
+            --model ml/artifacts/message_classifier.joblib --expected /tmp/parity_expected.json \
+            --expected-name "학습 (train 작업)" --actual-name "게시할 이미지 (컨테이너)" > "$RUNNER_TEMP/image-parity.md"
+          echo "이미지 안 모델: $in_sha, /healthz/ 버전 $version"
+      - name: 실패 시 컨테이너 로그
+        if: failure()
+        run: IMAGE_TAG=candidate docker compose -f compose.yaml logs --no-color --tail 200
+      - name: 컨테이너 정리 (임시 시험 환경)
+        if: always()
+        run: IMAGE_TAG=candidate docker compose -f compose.yaml down -v
+      # 시험한 이미지(lemit-web:candidate) 그대로 게시한다. 다시 빌드하지 않는다.
+      # 태그는 실행마다 새 이름(<버전 태그>-run<실행 ID>.<시도>)이라 이전 실행의 이미지를 덮어쓰지 않는다. 배포는 digest로만.
+      # 게시 뒤 로컬 이미지를 지우고 digest로 다시 받아, 레지스트리의 그 digest가 시험한 이미지(같은 이미지 ID)인지 확인한다.
+      - name: GHCR에 게시 (시험한 이미지 그대로)
+        id: push
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io > /dev/null 2>&1 || true' EXIT
+          tested="$(docker image inspect --format '{{.Id}}' lemit-web:candidate)"
+          ref="$IMAGE_REPO:$VERSION_TAG-run$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+          docker tag lemit-web:candidate "$ref"
+          docker push --quiet "$ref"
+          digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" \
+            | grep -m 1 "^$IMAGE_REPO@" | cut -d@ -f2)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::게시한 이미지의 digest를 찾지 못했습니다"; exit 1; }
+          docker image rm "$ref" lemit-web:candidate > /dev/null
+          docker pull --quiet "$IMAGE_REPO@$digest"
+          pulled="$(docker image inspect --format '{{.Id}}' "$IMAGE_REPO@$digest")"
+          [ "$pulled" = "$tested" ] || { echo "::error::레지스트리의 이미지($pulled)가 시험한 이미지($tested)와 다릅니다"; exit 1; }
+          revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE_REPO@$digest")"
+          [ "$revision" = "$TARGET_SHA" ] || { echo "::error::이미지 라벨의 커밋이 대상 커밋과 다릅니다"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "게시: $ref → $IMAGE_REPO@$digest (이미지 ID $tested)"
+      # 서버는 인증 없이 받는다 (docs/CD.md §5-4: 패키지 공개). 익명으로 매니페스트를 읽을 수 없으면 경고만 하고 계속한다
+      # (배포는 production 승인 뒤라 그 전에 공개로 바꿀 수 있음. 받지 못하면 서버가 FAILED_PULL로 멈춤).
+      - name: 서버가 인증 없이 받을 수 있는지 (익명 매니페스트 확인)
+        id: anon
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          path="${IMAGE_REPO#ghcr.io/}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:$path:pull" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' || true)"
+          if [ -n "$token" ] && curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/$path/manifests/$DIGEST"; then
+            echo "public=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "public=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::GHCR 패키지 lemit-web을 인증 없이 받을 수 없습니다. 배포를 승인하기 전에 패키지를 Public으로 바꾸세요 (docs/CD.md §5-4)"
+          fi
+      - name: 요약
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          REF: ${{ steps.push.outputs.ref }}
+          IMAGE_ID: ${{ steps.build.outputs.image_id }}
+          PUBLIC: ${{ steps.anon.outputs.public }}
+        run: |
+          {
+            echo "### 4. image: $STATUS"
+            echo "| 항목 | 값 |"; echo "|---|---|"
+            echo "| 이미지 digest | \`${DIGEST:--}\` |"
+            echo "| 게시 태그 | \`${REF:--}\` |"
+            echo "| 이미지 ID (config) | \`${IMAGE_ID:--}\` |"
+            echo "| 이미지 안 모델 SHA-256 | \`$MODEL_SHA\` (train 결과와 같음을 확인) |"
+            echo "| 라벨 커밋 | \`$TARGET_SHA\` |"
+            echo "| 인증 없이 받기 | ${PUBLIC:--} |"
+            echo
+            cat "$RUNNER_TEMP/image-parity.md" 2> /dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: 5. release · GitHub Release 기록
+    needs: [plan, train, image]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    # 같은 버전 태그의 release 작업이 동시에 돌지 않게 (재실행 중복 방지)
+    concurrency:
+      group: release-${{ needs.plan.outputs.tag }}
+      cancel-in-progress: false
+    outputs:
+      digest: ${{ steps.rel.outputs.digest }}
+      model_version: ${{ needs.train.outputs.model_version }}
+      model_sha256: ${{ needs.train.outputs.model_sha256 }}
+      image_id: ${{ needs.image.outputs.image_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      TARGET_SHA: ${{ needs.plan.outputs.sha }}
+      MODEL_VERSION: ${{ needs.train.outputs.model_version }}
+      MODEL_SHA: ${{ needs.train.outputs.model_sha256 }}
+      VAL_F1: ${{ needs.train.outputs.val_macro_f1 }}
+      UNSEEN_F1: ${{ needs.train.outputs.unseen_macro_f1 }}
+      DIGEST: ${{ needs.image.outputs.digest }}
+      IMAGE_REPO: ghcr.io/yeeun5364/lemit-web
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # 저장소 코드를 받지 않는다. Release 본문의 기계용 블록(lemit-release)을 서버 강제 명령이 배포 전에 다시 확인한다.
+      # - Release가 없으면 만든다.
+      # - 있으면 기록과 비교한다: 커밋·이미지 digest가 같으면 그대로 쓴다(중복 없음, 재시도 안전).
+      #   다르면 **덮어쓰지 않고** 차이를 요약에 남기고 실패한다 (deploy는 실행되지 않음).
+      # (scripts/test_deploy_workflow.py가 이 run 본문을 가짜 gh로 시험한다)
+      - name: Release 만들기 또는 기존 기록과 비교
+        id: rel
+        run: |
+          re='^v(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
+          [[ "$TAG" =~ $re ]] || { echo "::error::버전 태그 형식 오류"; exit 1; }
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::커밋 SHA 형식 오류"; exit 1; }
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::이미지 digest 형식 오류"; exit 1; }
+          [[ "$MODEL_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::모델 해시 형식 오류"; exit 1; }
+          image="$IMAGE_REPO@$DIGEST"
+          printf '%s\n' "<!-- lemit-release" "tag=$TAG" "commit=$TARGET_SHA" "model_version=$MODEL_VERSION" \
+            "model_sha256=$MODEL_SHA" "val_macro_f1=$VAL_F1" "unseen_macro_f1=$UNSEEN_F1" "image=$image" "-->" > record.txt
+          field() { awk -v k="$1" -F= '/^<!-- lemit-release/ { on = 1; next } on && /^-->/ { exit } on && $1 == k { sub(/^[^=]*=/, ""); print; exit }' "$2"; }
+          if gh api "repos/$REPO/releases/tags/$TAG" --jq '.body // ""' > existing.raw 2> err.txt; then
+            tr -d '\r' < existing.raw > existing.txt
+            if ! grep -q '^<!-- lemit-release' existing.txt; then
+              echo "::error::Release $TAG 가 이미 있지만 파이프라인 기록(lemit-release)이 없습니다. 덮어쓰지 않습니다 (직접 확인 후 새 버전 태그)"
+              exit 1
+            fi
+            diff=""
+            for k in tag commit model_version model_sha256 val_macro_f1 unseen_macro_f1 image; do
+              old="$(field "$k" existing.txt)"; new="$(field "$k" record.txt)"
+              [ "$old" = "$new" ] || diff="$diff| $k | \`$old\` | \`$new\` |"$'\n'
+            done
+            if [ "$(field commit existing.txt)" = "$TARGET_SHA" ] && [ "$(field image existing.txt)" = "$image" ]; then
+              echo "Release $TAG 가 이미 같은 커밋·이미지로 기록돼 있습니다. 새로 만들지 않고 그대로 씁니다"
+              [ -z "$diff" ] || echo "::notice::이미지는 같지만 다른 기록 항목이 다릅니다 (기존 기록 유지)"
+              echo "state=existing" >> "$GITHUB_OUTPUT"
+            else
+              {
+                echo "### 5. release: 기존 기록과 다름 — 덮어쓰지 않음"
+                echo "| 항목 | 기존 Release | 이번 실행 |"; echo "|---|---|---|"
+                printf '%s' "$diff"
+                echo
+                echo "같은 버전을 다시 빌드하면 이미지 digest가 달라질 수 있습니다. 기록된 이미지를 다시 배포하려면 이 실행이 아니라"
+                echo "원래 실행에서 **Re-run failed jobs**를 쓰거나, 변경을 배포하려면 **새 버전 태그**를 올리세요 (docs/CD.md §6-2)."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Release $TAG 에 기록된 커밋·이미지와 이번 결과가 다릅니다. 기존 Release를 덮어쓰지 않습니다 (요약의 차이 표)"
+              exit 1
+            fi
+          elif grep -q 'HTTP 404' err.txt; then
+            {
+              echo "## $TAG"
+              echo
+              echo "태그 파이프라인([실행]($RUN_URL))이 시험·게시한 결과입니다."
+              echo
+              echo "| 항목 | 값 |"; echo "|---|---|"
+              echo "| 버전 태그 | \`$TAG\` |"
+              echo "| 커밋 | \`$TARGET_SHA\` |"
+              echo "| 모델 버전 | \`$MODEL_VERSION\` |"
+              echo "| 모델 파일 SHA-256 | \`$MODEL_SHA\` |"
+              echo "| 검증 macro F1 | $VAL_F1 (기준 ≥ 0.80) |"
+              echo "| 확인용 macro F1 | $UNSEEN_F1 (참고값) |"
+              echo "| 이미지 | \`$image\` |"
+              echo
+              cat record.txt
+            } > notes.md
+            gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --notes-file notes.md
+            echo "state=created" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Release를 확인하지 못했습니다: $(head -c 300 err.txt)"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+      - name: 요약
+        if: success()
+        env:
+          STATE: ${{ steps.rel.outputs.state }}
+        run: |
+          {
+            echo "### 5. release: $([ "$STATE" = created ] && echo '새로 만듦' || echo '기존 기록과 같음 (그대로 사용)')"
+            echo "- Release: ${{ github.server_url }}/$REPO/releases/tag/$TAG"
+            echo "- 기록: 태그 \`$TAG\` · 커밋 \`$TARGET_SHA\` · 모델 \`$MODEL_VERSION\` (\`$MODEL_SHA\`) · 검증 macro F1 $VAL_F1 · 이미지 \`$IMAGE_REPO@$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: 6. deploy · Lightsail 배포 (Self-hosted)
+    needs: [plan, release]
+    # 수동 실행(check·deploy·rollback)에서는 release가 건너뛰어지므로 !cancelled()로 조건을 직접 본다.
+    # 태그 배포(deploy-image)는 release 작업이 성공했을 때만 (test~release 중 하나라도 실패·건너뜀이면 실행 안 함).
+    if: >-
+      !cancelled() && github.repository == 'yeeun5364/lemit' &&
+      needs.plan.result == 'success' && needs.plan.outputs.remote != '' &&
+      (needs.plan.outputs.action != 'deploy-image' || needs.release.result == 'success')
     # 전용 라벨 lemit-deploy가 붙은 러너에서만 (docs/CD.md §2). 맞는 러너가 없으면 최대 24시간 기다린 뒤 실패한다
     runs-on: [self-hosted, Linux, X64, lemit-deploy]
     # 서버 잠금 대기(최대 20분, scripts/ci_deploy.sh) + 배포 시간
     timeout-minutes: 45
+    # Required reviewers를 켜 두면 이 작업은 승인 후에만 시작한다 (docs/CD.md §5-1)
     environment: production
     # 검증(plan)을 통과한 작업만 이 그룹에 들어온다 (PR #58 리뷰 P2: 검증 전 실행이 대기 배포를 밀어내지 않게).
     # GitHub는 한 그룹에 진행 1개 + 대기 1개만 두고, 새 대기 작업이 기존 대기 작업을 취소한다. 그래서 동작마다 그룹을 나눈다:
-    # - deploy(자동·수동): 진행 중인 것은 취소하지 않고, 기다리는 배포는 가장 최근 것 하나만 남는다 (오래된 배포는 필요 없음).
+    # - deploy·deploy-image(자동·수동): 진행 중인 것은 취소하지 않고, 기다리는 배포는 가장 최근 것 하나만 남는다.
     # - rollback: 따로 둬서 새 자동 배포가 대기 중인 롤백을 취소하지 못하게 한다 (PR #58 리뷰 P2).
     # - check: 읽기 전용이라 따로 둔다.
     # 그룹이 달라 동시에 시작될 수 있는 deploy와 rollback은 서버에서 직렬화한다: 강제 명령이 서버 잠금을 기다려 잡고,
@@ -184,7 +712,12 @@ jobs:
       ACTION: ${{ needs.plan.outputs.action }}
       SHA: ${{ needs.plan.outputs.sha }}
       VERSION_TAG: ${{ needs.plan.outputs.tag }}
-      REMOTE: ${{ needs.plan.outputs.remote }}
+      PLAN_REMOTE: ${{ needs.plan.outputs.remote }}
+      IMAGE_DIGEST: ${{ needs.release.outputs.digest }}
+      IMAGE_ID: ${{ needs.release.outputs.image_id }}
+      MODEL_VERSION: ${{ needs.release.outputs.model_version }}
+      MODEL_SHA: ${{ needs.release.outputs.model_sha256 }}
+      WORKFLOW_SHA: ${{ github.sha }}
       EVENT: ${{ github.event_name }}
       REPO: ${{ github.repository }}
     steps:
@@ -283,6 +816,21 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # 태그 배포: plan이 만든 'deploy-image <태그> <SHA>'에 release가 기록한 digest를 붙인다.
+      # 서버는 이 digest가 GitHub Release의 기록과 같은지 다시 확인한 뒤, 그 digest의 이미지를 받아 실행한다 (빌드 없음).
+      # (scripts/test_deploy_workflow.py가 이 run 본문을 시험한다)
+      - name: 서버 요청 만들기
+        id: remote
+        run: |
+          REMOTE="$PLAN_REMOTE"
+          if [ "$ACTION" = "deploy-image" ]; then
+            [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::release 작업의 이미지 digest가 올바르지 않습니다"; exit 1; }
+            [ "$REMOTE" = "deploy-image $VERSION_TAG $SHA" ] || { echo "::error::plan 요청과 대상이 다릅니다"; exit 1; }
+            REMOTE="$REMOTE $IMAGE_DIGEST"
+          fi
+          echo "remote=$REMOTE" >> "$GITHUB_OUTPUT"
+          echo "서버 요청: $REMOTE"
+
       # 키는 이 단계 안에서만 새 임시 폴더에 만들고 쓰고 지운다. 이전 작업이 비정상 종료로 남긴 키 폴더도 먼저 지운다.
       # 러너의 SSH 설정·전역 known_hosts는 쓰지 않는다 (-F /dev/null, GlobalKnownHostsFile=/dev/null)
       - name: 서버에서 실행 (${{ needs.plan.outputs.action }})
@@ -290,6 +838,7 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           KNOWN_HOSTS: ${{ vars.LIGHTSAIL_KNOWN_HOSTS }}
+          REMOTE: ${{ steps.remote.outputs.remote }}
         run: |
           rm -rf "$RUNNER_TEMP"/lemit-ssh.*            # 이전 작업이 비정상 종료로 남긴 키 폴더
           dir="$(mktemp -d "$RUNNER_TEMP/lemit-ssh.XXXXXXXX")"   # 새 폴더(700). 실패하면 여기서 중단 (bash -e)
@@ -309,7 +858,7 @@ jobs:
             fi
             sleep 5
           done
-          # 서버 출력은 로그에 그대로 보이고, 요약에서 '건너뜀'(보류·이미 배포됨)을 알리려고 파일에도 남긴다
+          # 서버 출력은 로그에 그대로 보이고, 요약에서 '건너뜀'·실행 이미지·공개 경로 결과를 알리려고 파일에도 남긴다
           set -o pipefail
           "${SSH[@]}" "$REMOTE" 2>&1 | tee "$RUNNER_TEMP/lemit-remote.log"
 
@@ -322,16 +871,33 @@ jobs:
         env:
           STATUS: ${{ job.status }}
           SKIPPED: ${{ steps.fresh.outputs.skip }}
+          REMOTE: ${{ steps.remote.outputs.remote }}
         run: |
-          server_skip="$(grep -m 1 -F '[ci_deploy] 건너뜀:' "$RUNNER_TEMP/lemit-remote.log" 2> /dev/null | sed 's/^\[ci_deploy\] 건너뜀: *//' || true)"
-          rm -f "$RUNNER_TEMP/lemit-remote.log"
+          log="$RUNNER_TEMP/lemit-remote.log"
+          server_skip="$(grep -m 1 -F '[ci_deploy] 건너뜀:' "$log" 2> /dev/null | sed 's/^\[ci_deploy\] 건너뜀: *//' || true)"
+          result="$(grep -m 1 '^\[deploy-result\]' "$log" 2> /dev/null || true)"
+          public="$(grep '^\[public\]' "$log" 2> /dev/null | tail -n 1 || true)"
+          running_id="$(sed -n 's/.*running_image_id=\([^ ]*\).*/\1/p' <<< "$result")"
+          rm -f "$log"
           {
-            echo "### 배포 결과: $STATUS"
+            echo "### 6. deploy: $STATUS"
             if [ "$SKIPPED" = "true" ]; then echo "- **건너뜀:** 태그가 옮겨졌거나 더 높은 버전 태그가 있음 (위 알림 참고)"; fi
             if [ -n "$server_skip" ]; then echo "- **건너뜀(서버):** $server_skip"; fi
             echo "- 동작: \`$ACTION\`"
             if [ -n "$VERSION_TAG" ]; then echo "- 버전 태그: \`$VERSION_TAG\`"; fi
-            echo "- 서버 요청: \`$REMOTE\`"
-            if [ -n "$SHA" ]; then echo "- 커밋: \`$SHA\`"; fi
-            echo "- 서버 기록: \`deploy/state/history.log\` (check 동작으로 확인 가능)"
+            if [ -n "$SHA" ]; then echo "- 대상 커밋: \`$SHA\` (워크플로 파일 커밋 github.sha: \`$WORKFLOW_SHA\`)"; fi
+            if [ -n "$IMAGE_DIGEST" ]; then
+              echo "- 이미지 digest (image·release 기록): \`$IMAGE_DIGEST\`"
+              echo "- 모델: \`$MODEL_VERSION\` (\`$MODEL_SHA\`)"
+            fi
+            echo "- 서버 요청: \`${REMOTE:-$PLAN_REMOTE}\`"
+            if [ -n "$result" ]; then
+              echo "- 서버 실행 결과: \`${result#\[deploy-result\] }\`"
+              if [ -n "$IMAGE_ID" ]; then
+                if [ "$running_id" = "$IMAGE_ID" ]; then echo "- 이미지 ID: image 작업에서 시험한 이미지와 서버 실행 컨테이너가 **같음** (\`$IMAGE_ID\`)"
+                else echo "- 이미지 ID: image 작업 \`$IMAGE_ID\` / 서버 \`${running_id:-없음}\` (다르면 docs/CD.md §6-3 확인)"; fi
+              fi
+            fi
+            if [ -n "$public" ]; then echo "- 공개 경로 점검: \`$public\`"; fi
+            echo "- 서버 기록: \`deploy/state/history.log\`·\`current_image\` (check 동작으로 확인 가능)"
           } >> "$GITHUB_STEP_SUMMARY"

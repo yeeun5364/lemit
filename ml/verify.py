@@ -1,6 +1,7 @@
 """저장된 모델 검증 (CI·배포 전 실행). 다시 학습하지 않는다.
 
     python -m ml.verify
+    python -m ml.verify --model <경로>/message_classifier.joblib   # 저장소 밖에서 학습한 모델 (태그 배포 파이프라인)
 
 확인 항목
 1. 불러오기: 파일 존재, 해시, scikit-learn 버전, 분류 목록 (ml.artifact.load)
@@ -9,7 +10,9 @@
 4. 성능 기준: 검증 점수가 현재 코드의 GATE를 넘는지 (확인용 점수는 재현 여부만 확인, 기준에 쓰지 않음)
 """
 
+import argparse
 import sys
+from pathlib import Path
 
 from ml import artifact
 from ml.train import DATA_PATH, GATE, UNSEEN_PATH, data_sha256, evaluate, read_csv
@@ -57,5 +60,11 @@ def main(model_path=None) -> int:
     return 1 if errors else 0
 
 
+def cli(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="저장된 모델 검증 (다시 학습하지 않음)")
+    parser.add_argument("--model", type=Path, help="모델 파일 경로 (기본: ml/artifacts/message_classifier.joblib)")
+    return main(parser.parse_args(argv).model)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(cli())

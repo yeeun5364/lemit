@@ -39,6 +39,7 @@ jobs:
           python -m unittest discover -s scripts -p "test_*.py"
           bash scripts/test_ci_deploy.sh
           bash scripts/test_deploy_lock.sh
+          bash scripts/test_deploy_buildx.sh
 
   test:
     name: 테스트 (PostgreSQL 18)

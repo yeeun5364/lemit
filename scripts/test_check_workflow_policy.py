@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from check_workflow_policy import check  # noqa: E402
 
+CHECKOUT = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 GOOD_DEPLOY = """
 name: Deploy
 on:
@@ -17,6 +18,8 @@ on:
     workflows: [Release tag]
     types: [completed]
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   plan:
     if: >-
@@ -29,13 +32,66 @@ jobs:
         github.event.workflow_run.path == '.github/workflows/release-tag.yml' &&
         github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     steps:
-      - uses: actions/checkout@v5
       - run: |
-          if [ "$EVENT" = "workflow_run" ]; then REMOTE="deploy-tag $VERSION_TAG $SHA"; else REMOTE="deploy $SHA"; fi
-  deploy:
+          if [ "$EVENT" = "workflow_run" ]; then REMOTE="deploy-image $VERSION_TAG $SHA"; else REMOTE="deploy $SHA"; fi
+  test:
     needs: plan
-    if: github.repository == 'yeeun5364/lemit'
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - run: echo test
+  train:
+    needs: [plan, test]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: echo train
+  parity:
+    needs: [plan, train]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - run: echo parity
+  image:
+    needs: [plan, train, parity]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TOKEN: ${{ github.token }}
+    steps:
+      - run: echo image
+  release:
+    needs: [plan, train, image]
+    if: needs.plan.outputs.action == 'deploy-image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - run: echo release
+  deploy:
+    needs: [plan, release]
+    if: >-
+      !cancelled() && github.repository == 'yeeun5364/lemit' &&
+      needs.plan.result == 'success' && needs.plan.outputs.remote != '' &&
+      (needs.plan.outputs.action != 'deploy-image' || needs.release.result == 'success')
     runs-on: [self-hosted, Linux, X64, lemit-deploy]
     environment: production
     concurrency:
@@ -43,9 +99,15 @@ jobs:
         ${{ needs.plan.outputs.action == 'check' && 'deploy-production-check' ||
             needs.plan.outputs.action == 'rollback' && 'deploy-production-rollback' || 'deploy-production' }}
       cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}
     steps:
-      - run: echo deploy
+      - run: |
+          [ "$ACTION" != deploy-image ] || REMOTE="$REMOTE $IMAGE_DIGEST"
 """
+PLAN_RUNS_ON = "    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
 
 GOOD_CI = """
 name: CI
@@ -152,13 +214,23 @@ class WorkflowPolicyTests(unittest.TestCase):
         cases = [  # (바꿀 부분, 바꾼 값, 기대 오류 / None이면 통과)
             ("environment: production", "environment: staging", "environment: production"),
             ("environment: production", "environment: {name: production}", None),
-            ("    needs: plan\n", "", "needs로"),
+            ("    needs: [plan, release]\n", "", "needs로"),
+            ("    needs: [plan, release]\n", "    needs: [release]\n", "needs에 검증 작업 plan"),
             (
-                "if: github.repository == 'yeeun5364/lemit'\n    runs-on: [self",
-                "if: always()\n    runs-on: [self",
+                "!cancelled() && github.repository == 'yeeun5364/lemit' &&\n",
+                "!cancelled() &&\n",
                 "if에 github",
             ),
-            ("      - run: echo deploy", "      - uses: actions/checkout@v5", "액션(uses)"),
+            # 수동 실행 때문에 !cancelled()를 쓰므로, plan 성공·release 성공 조건이 빠지면
+            # 앞 작업이 실패해도 배포될 수 있음
+            ("needs.plan.result == 'success' && ", "", "needs.plan.result == 'success'"),
+            ("(needs.plan.outputs.action != 'deploy-image' || needs.release.result == 'success')", "true", "release"),
+            ('          [ "$ACTION" != deploy-image ] || REMOTE="$REMOTE $IMAGE_DIGEST"', "          echo x", "digest"),
+            (
+                "    steps:\n      - run: |\n          [",
+                "    steps:\n      - uses: x/y@v1\n      - run: |\n          [",
+                "액션(uses)",
+            ),
             ("      cancel-in-progress: false\n", "      cancel-in-progress: true\n", "concurrency"),
             ("    concurrency:\n", "    no_concurrency:\n", "concurrency"),
             (">-\n        ${{", ">-\n        x${{", "다른 그룹"),
@@ -167,12 +239,14 @@ class WorkflowPolicyTests(unittest.TestCase):
             ("needs.plan.outputs.action == 'rollback' && 'deploy-production-rollback' || ", "", "다른 그룹"),
             # 그룹이 한 줄이든 여러 줄이든 같은 식이면 통과
             ("      group: >-\n        ${{", "      group: ${{", None),
-            # 태그 자동 배포를 deploy로 요청 (서버의 롤백 뒤 보류·태그 재확인을 우회)
-            ('REMOTE="deploy-tag $VERSION_TAG $SHA"', 'REMOTE="deploy $SHA"', "deploy-tag"),
+            # 태그 자동 배포를 deploy로 요청 (서버의 롤백 뒤 보류·태그·Release 재확인을 우회)
+            ('REMOTE="deploy-image $VERSION_TAG $SHA"', 'REMOTE="deploy $SHA"', "deploy-image"),
+            # 서버에서 다시 빌드하는 태그 배포 요청으로 되돌림
+            ('REMOTE="deploy-image $VERSION_TAG $SHA"', 'REMOTE="deploy-tag $VERSION_TAG $SHA"', "deploy-tag"),
             # main push 자동 배포 요청을 다시 넣음 (중복 배포)
             (
-                'REMOTE="deploy-tag $VERSION_TAG $SHA"',
-                'REMOTE="deploy-tag $VERSION_TAG $SHA"; X=deploy-auto',
+                'REMOTE="deploy-image $VERSION_TAG $SHA"',
+                'REMOTE="deploy-image $VERSION_TAG $SHA"; X=deploy-auto',
                 "deploy-auto",
             ),
         ]
@@ -183,6 +257,65 @@ class WorkflowPolicyTests(unittest.TestCase):
                     self.assertEqual(errors, [])
                 else:
                     self.assert_error(errors, msg)
+
+    def test_pipeline_order_and_skip_rules(self):
+        """앞 작업이 실패·건너뛰면 뒤 작업이 실행되지 않는 구조.
+
+        plan → test → train → parity → image → release → deploy
+        """
+        cases = [
+            ("    needs: [plan, train]\n", "    needs: [plan, test]\n", "needs는"),  # parity가 train을 건너뜀
+            ("    needs: [plan, train, image]\n", "    needs: [plan, train]\n", "needs는"),  # release가 image 전에
+            ("    needs: [plan, release]\n", "    needs: [plan, image]\n", "needs는"),  # deploy가 release를 건너뜀
+            ("  parity:\n", "  parity2:\n", "작업은"),
+            (
+                "    needs: [plan, test]\n    if: needs.plan.outputs.action == 'deploy-image'\n",
+                "    needs: [plan, test]\n    if: always() && needs.plan.outputs.action == 'deploy-image'\n",
+                "always()",
+            ),
+            (
+                "    needs: [plan, train, parity]\n    if: needs.plan.outputs.action == 'deploy-image'\n",
+                "    needs: [plan, train, parity]\n    if: ${{ !cancelled() }}\n",
+                "cancelled()",
+            ),
+            (
+                "    needs: [plan, train, image]\n    if: needs.plan.outputs.action == 'deploy-image'\n",
+                "    needs: [plan, train, image]\n    if: success()\n",
+                "deploy-image' 조건",  # 수동 실행에서도 release가 돌게 됨
+            ),
+        ]
+        for old, new, msg in cases:
+            with self.subTest(change=new.strip()[:50]):
+                self.assert_error(self.deploy_with(old, new), msg)
+
+    def test_pipeline_permissions_secrets_and_checkout(self):
+        cases = [
+            ("permissions:\n  contents: read\njobs:", "permissions:\n  contents: write\njobs:", "최상위 permissions"),
+            (
+                "      contents: read\n      packages: write\n",
+                "      contents: write\n      packages: write\n",
+                "permissions는",
+            ),
+            (
+                "    permissions:\n      contents: write\n",
+                "    permissions:\n      contents: write\n      packages: write\n",
+                "permissions는",
+            ),
+            (
+                "  train:\n    needs: [plan, test]\n",
+                "  train:\n    environment: production\n    needs: [plan, test]\n",
+                "environment는 deploy",
+            ),
+            ("      TOKEN: ${{ github.token }}", "      KEY: ${{ secrets.LIGHTSAIL_SSH_KEY }}", "Secret은 deploy"),
+            # workflow_run의 기본 커밋(github.sha = main 최신)을 받으면 태그 커밋이 아닌 코드를 시험하게 됨
+            ("          ref: ${{ needs.plan.outputs.sha }}\n", "          ref: ${{ github.sha }}\n", "ref:"),
+            ("          ref: ${{ needs.plan.outputs.sha }}\n", "", "ref:"),
+            ("          persist-credentials: false\n", "", "persist-credentials"),
+            (f"      - uses: {CHECKOUT}  # v5.1.0", "      - uses: actions/checkout@v5", "커밋 SHA 40자리"),
+        ]
+        for old, new, msg in cases:
+            with self.subTest(change=new.strip()[:50]):
+                self.assert_error(self.deploy_with(old, new), msg)
 
     def test_gate_job_must_keep_event_and_ref_conditions(self):
         for cond in (
@@ -202,7 +335,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assert_error(errors, "최상위 concurrency")
 
     def test_gate_job_must_be_github_hosted(self):
-        errors = self.deploy_with("    runs-on: ubuntu-latest\n", "    runs-on: [self-hosted]\n")
+        errors = self.deploy_with(PLAN_RUNS_ON, "    runs-on: [self-hosted]\n    timeout-minutes: 5\n")
         self.assert_error(errors, "정확히 하나")
         self.assert_error(errors, "GitHub-hosted 검증 작업")
 

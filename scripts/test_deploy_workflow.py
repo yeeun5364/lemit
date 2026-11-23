@@ -25,6 +25,8 @@ CI_JOBS = "린트 (ruff)\tsuccess\n테스트 (PostgreSQL 18)\tsuccess\nDocker �
 
 FAKE_GH = r"""#!/usr/bin/env bash
 # 가짜 gh: gh api <경로> [--jq 식] → routes에서 경로가 접두사로 맞는 첫 응답을 출력한다
+# gh release create ... → 호출만 기록 (Release 노트는 작업 폴더의 notes.md로 남음)
+if [ "${1:-}" = release ]; then echo "release $*" >> "$FAKE_DIR/calls.log"; exit 0; fi
 [ "${1:-}" = api ] || { echo "fake gh: 지원하지 않는 명령 $*" >&2; exit 2; }
 shift
 path=""
@@ -45,7 +47,8 @@ while IFS=$'\t' read -r prefix name; do
       echo $((c + 1)) > "$FAKE_DIR/count.$n"
       f="$FAKE_DIR/resp/$name.$c"
       if [ ! -f "$f" ]; then f="$(ls "$FAKE_DIR/resp/$name".* | sort -t. -k2 -n | tail -n 1)"; fi
-      if [ "$(cat "$f")" = "__FAIL__" ]; then echo "fake gh: HTTP 404" >&2; exit 1; fi
+      if [ "$(cat "$f")" = "__FAIL__" ]; then echo "fake gh: Not Found (HTTP 404)" >&2; exit 1; fi
+      if [ "$(cat "$f")" = "__ERROR__" ]; then echo "fake gh: Server Error (HTTP 502)" >&2; exit 1; fi
       cat "$f"
       exit 0 ;;
   esac
@@ -235,13 +238,14 @@ class DeployPlanRequestTests(StepRunner):
         base = {"EVENT": "workflow_run", "RUN_SHA": SHA, "RUN_TAG": tag, "AUTO": "true"}
         return self.run_step(**{**base, **env})
 
-    def test_normal_tag_requests_deploy_tag(self):
+    def test_normal_tag_requests_image_pipeline(self):
         self.gh("repos/yeeun5364/lemit/git/ref/tags/v0.1.1", f"commit {SHA}")
         self.gh("repos/yeeun5364/lemit/git/matching-refs/tags/v", "v0.1.0\nv0.1.1\nvnot-a-version")
         rc, out, o, _ = self.tag_event()
         self.assertEqual(rc, 0, out)
-        self.assertEqual((o["action"], o["sha"], o["tag"]), ("deploy", SHA, "v0.1.1"))
-        self.assertEqual(o["remote"], f"deploy-tag v0.1.1 {SHA}")
+        # 태그 배포는 deploy-image: 1~5 작업이 돌고, deploy 작업이 release의 digest를 붙인다 (서버 빌드 없음)
+        self.assertEqual((o["action"], o["sha"], o["tag"]), ("deploy-image", SHA, "v0.1.1"))
+        self.assertEqual(o["remote"], f"deploy-image v0.1.1 {SHA}")
 
     def test_auto_deploy_off_skips_without_api_calls(self):
         for auto in ("", "false", "TRUE"):
@@ -376,6 +380,165 @@ class RunnerFreshnessTests(StepRunner):
     def test_manual_deploy_is_not_checked(self):
         rc, out, o, calls = self.run_step(EVENT="workflow_dispatch", SHA=SHA, VERSION_TAG="")
         self.assertEqual((rc, o["skip"], calls), (0, "false", []), out)
+
+
+DIGEST = "sha256:" + "d" * 64
+OTHER_DIGEST = "sha256:" + "e" * 64
+IMAGE_REPO = "ghcr.io/yeeun5364/lemit-web"
+
+
+class DeployRemoteTests(StepRunner):
+    """deploy.yml deploy: 서버 요청 만들기 (태그 배포는 release의 digest를 붙임, 수동은 그대로)."""
+
+    workflow, job, step = "deploy.yml", "deploy", "서버 요청 만들기"
+
+    def make(self, **env):
+        rc, out, o, _ = self.run_step(**env)
+        return rc, out, o.get("remote")
+
+    def tag(self, **over):
+        env = {
+            "ACTION": "deploy-image",
+            "PLAN_REMOTE": f"deploy-image v0.1.1 {SHA}",
+            "VERSION_TAG": "v0.1.1",
+            "SHA": SHA,
+            "IMAGE_DIGEST": DIGEST,
+        }
+        return self.make(**{**env, **over})
+
+    def test_tag_deploy_appends_release_digest(self):
+        rc, out, remote = self.tag()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(remote, f"deploy-image v0.1.1 {SHA} {DIGEST}")
+
+    def test_bad_or_missing_digest_fails(self):
+        for digest in ("", "sha256:abc", DIGEST.upper(), f"{DIGEST} status"):
+            with self.subTest(digest=digest):
+                rc, out, remote = self.tag(IMAGE_DIGEST=digest)
+                self.assertNotEqual(rc, 0)
+                self.assertIsNone(remote)
+
+    def test_plan_request_must_match_target(self):
+        rc, out, remote = self.tag(PLAN_REMOTE=f"deploy-image v0.1.1 {OTHER}")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("plan 요청과 대상이 다릅니다", out)
+        self.assertIsNone(remote)
+
+    def test_manual_requests_unchanged(self):
+        for action, remote in (("deploy", f"deploy {SHA}"), ("check", "status"), ("rollback", "rollback 0123456789ab")):
+            with self.subTest(action=action):
+                rc, out, got = self.make(ACTION=action, PLAN_REMOTE=remote, IMAGE_DIGEST="")
+                self.assertEqual((rc, got), (0, remote), out)
+
+
+class ReleaseRecordTests(StepRunner):
+    """deploy.yml release: Release 만들기 또는 기존 기록과 비교 (재시도 중복 없음, digest가 다르면 덮어쓰지 않음)."""
+
+    workflow, job, step = "deploy.yml", "release", "Release 만들기 또는 기존 기록과 비교"
+    API = "repos/yeeun5364/lemit/releases/tags/v0.1.2"
+
+    def env(self, **over):
+        base = {
+            "TAG": "v0.1.2",
+            "TARGET_SHA": SHA,
+            "MODEL_VERSION": "v2+v0.1.2",
+            "MODEL_SHA": "f" * 64,
+            "VAL_F1": "0.9357",
+            "UNSEEN_F1": "0.9833",
+            "DIGEST": DIGEST,
+            "IMAGE_REPO": IMAGE_REPO,
+            "RUN_URL": "https://github.com/yeeun5364/lemit/actions/runs/1",
+        }
+        return {**base, **over}
+
+    def body(self, commit=SHA, digest=DIGEST, model_sha="f" * 64):
+        lines = [
+            "## v0.1.2",
+            "",
+            "| 항목 | 값 |",
+            "<!-- lemit-release",
+            "tag=v0.1.2",
+            f"commit={commit}",
+            "model_version=v2+v0.1.2",
+            f"model_sha256={model_sha}",
+            "val_macro_f1=0.9357",
+            "unseen_macro_f1=0.9833",
+            f"image={IMAGE_REPO}@{digest}",
+            "-->",
+        ]
+        return "\r\n".join(lines)  # GitHub가 돌려주는 본문은 CRLF일 수 있다
+
+    def creates(self, calls):
+        return [c for c in calls if c.startswith("release ")]
+
+    def test_new_release_is_created_with_record(self):
+        self.gh(self.API, "__FAIL__")
+        rc, out, o, calls = self.run_step(**self.env())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((o["state"], o["digest"]), ("created", DIGEST))
+        self.assertEqual(len(self.creates(calls)), 1)
+        self.assertIn("--verify-tag", self.creates(calls)[0])
+        notes = (self.dir / "work" / "notes.md").read_text(encoding="utf-8")
+        for text in (
+            "tag=v0.1.2",
+            f"commit={SHA}",
+            "model_version=v2+v0.1.2",
+            "model_sha256=" + "f" * 64,
+            "val_macro_f1=0.9357",
+            f"image={IMAGE_REPO}@{DIGEST}",
+        ):
+            self.assertIn(text, notes)
+
+    def test_retry_with_same_image_reuses_release(self):
+        self.gh(self.API, self.body())
+        rc, out, o, calls = self.run_step(**self.env())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((o["state"], o["digest"]), ("existing", DIGEST))
+        self.assertEqual(self.creates(calls), [])  # 중복 Release를 만들지 않음
+
+    def test_different_digest_is_reported_not_overwritten(self):
+        self.gh(self.API, self.body(digest=OTHER_DIGEST))
+        rc, out, o, calls = self.run_step(**self.env())
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(self.creates(calls), [])
+        self.assertNotIn("digest", o)
+        summary = (self.dir / "summary").read_text(encoding="utf-8")
+        self.assertIn("덮어쓰지 않음", summary)
+        self.assertIn(f"| image | `{IMAGE_REPO}@{OTHER_DIGEST}` | `{IMAGE_REPO}@{DIGEST}` |", summary)
+
+    def test_different_commit_is_reported(self):
+        self.gh(self.API, self.body(commit=OTHER))
+        rc, out, _, calls = self.run_step(**self.env())
+        self.assertNotEqual(rc, 0)
+        self.assertIn("| commit |", (self.dir / "summary").read_text(encoding="utf-8"))
+        self.assertEqual(self.creates(calls), [])
+
+    def test_release_without_pipeline_record_is_not_touched(self):
+        self.gh(self.API, "손으로 쓴 릴리즈 노트")
+        rc, out, _, calls = self.run_step(**self.env())
+        self.assertNotEqual(rc, 0)
+        self.assertIn("파이프라인 기록(lemit-release)이 없습니다", out)
+        self.assertEqual(self.creates(calls), [])
+
+    def test_api_error_other_than_404_fails(self):
+        self.gh(self.API, "__ERROR__")
+        rc, out, _, calls = self.run_step(**self.env())
+        self.assertNotEqual(rc, 0)
+        self.assertIn("Release를 확인하지 못했습니다", out)
+        self.assertEqual(self.creates(calls), [])
+
+    def test_bad_inputs_fail_before_api(self):
+        for over in (
+            {"DIGEST": ""},
+            {"DIGEST": "sha256:xyz"},
+            {"TAG": "v1.2"},
+            {"TARGET_SHA": "main"},
+            {"MODEL_SHA": ""},
+        ):
+            with self.subTest(**over):
+                rc, out, _, calls = self.run_step(**self.env(**over))
+                self.assertNotEqual(rc, 0)
+                self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

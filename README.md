@@ -56,7 +56,7 @@
 | 인프라 | Docker 실행 환경 | ✅ | web(gunicorn)+db(+proxy) 컨테이너, 이미지 안 모델 검증·추론, 헬스체크·스모크 테스트. 운영 서버(Lightsail)에서 동작 중 (#5) |
 | 인프라 | GitHub Actions (테스트) | ✅ | 린트·PostgreSQL 18 테스트·Docker 이미지(빌드·스모크) 3개 작업, main 병합 필수 검사 (#6) |
 | 인프라 | AWS Lightsail 배포 | ✅ | **첫 수동 배포 성공 (2026-11-20, `c848f2c`)**: Amazon Linux 2023, db·web·proxy healthy, 스모크 6항목(AI 모델 v2 추론 포함)·공개 경로 확인 통과, 외부에서 5432·8000 차단 확인. 도메인 `lemit.eta.pyhub.kr`에 HTTPS 적용(Let's Encrypt 인증서, HTTP→HTTPS 308, 보안 쿠키, HSTS는 아직 0). 외부 `/healthz/` ok·모델 v2 확인 (2026-11-21). 브라우저 기능 확인·관리자 계정 생성은 사용자 진행 (#48, [docs/DEPLOY.md](docs/DEPLOY.md)) |
-| 인프라 | GitHub Actions 자동 배포(CD) | 🟡 | **버전 태그 배포 (2026-11-22, PR 검토 전):** `vX.Y.Z` 태그 push → Release tag(GitHub-hosted)가 main 포함·CI 완료 확인 → Deploy가 태그 커밋 배포(main push는 CI만). 판정·서버 `deploy-tag`는 자동 테스트로 검증, 실제 태그 배포 시험은 아직. **Self-hosted Runner 방식 (#56):** CI(GitHub-hosted)가 성공한 main 커밋만(실제 CI 실행 ID와 작업 결과 확인). 검증은 GitHub-hosted 작업, 배포는 러너 전용 WSL 배포판(라벨 `lemit-deploy`)이 격리 확인 후 SSH 요청 한 줄만. 배포 전용 키는 저장소 밖 고정 경로 강제 명령(서버에서 main 포함 재확인). PR 트리거 금지 등 규칙을 CI에서 검사. 공개 저장소라 위험을 줄이는 구성이며 완전한 차단은 아님. 스크립트 테스트 통과, **러너 격리·서버 설치·GitHub 설정과 실제 배포 시험은 아직** ([docs/CD.md](docs/CD.md)) |
+| 인프라 | GitHub Actions 자동 배포(CD) | 🟡 | **태그 파이프라인 (2026-11-22, PR 검토 전):** `vX.Y.Z` 태그 push → Release tag(진입점)가 main 포함·CI 완료 확인 → Deploy 한 실행에서 `plan → test → train → parity → image → release → deploy`. 태그 커밋으로 학습한 모델을 넣어 시험한 이미지를 GHCR에 게시하고, Release에 기록한 digest를 서버가 받아 실행(서버 빌드 없음). 단계 판정·서버 `deploy-image`는 자동 테스트, 이미지 빌드·게시·digest 재수신·서버 이미지 배포·롤백은 로컬 Docker로 확인. GitHub 실제 실행·GHCR 공개·서버 갱신·실제 태그 배포는 아직. **버전 태그 배포 (#71):** main push는 CI만. **Self-hosted Runner 방식 (#56):** CI(GitHub-hosted)가 성공한 main 커밋만(실제 CI 실행 ID와 작업 결과 확인). 검증은 GitHub-hosted 작업, 배포는 러너 전용 WSL 배포판(라벨 `lemit-deploy`)이 격리 확인 후 SSH 요청 한 줄만. 배포 전용 키는 저장소 밖 고정 경로 강제 명령(서버에서 main 포함 재확인). PR 트리거 금지 등 규칙을 CI에서 검사. 공개 저장소라 위험을 줄이는 구성이며 완전한 차단은 아님. 스크립트 테스트 통과, **러너 격리·서버 설치·GitHub 설정과 실제 배포 시험은 아직** ([docs/CD.md](docs/CD.md)) |
 | 인프라 | 운영 로그·DB 백업 | 🟡 | 500 오류 traceback·AI 모델 경고를 표준 출력으로(`docker compose logs web`), `scripts/backup_db.sh`(목차 확인·보관 개수), `scripts/restore_check.sh`(실행별 임시 DB에 복원 후 건수 비교, 자기가 만든 DB만 삭제), systemd 매일 백업+복원 점검 타이머. 테스트·PC 연습·CI 시나리오 통과, main 반영 (PR #46). 운영 서버에서 수동 백업·복원 점검 통과, systemd 타이머 설치·1회 실행 통과(매일 03:30 KST, 2026-11-20) (#44) |
 
 ## 회차 상태와 차감 규칙
@@ -243,7 +243,7 @@ PR·main push는 CI만 실행하고 배포하지 않습니다. 배포는 별도 
 | 워크플로 | 내용 |
 |---|---|
 | Release tag (`release-tag.yml`) | 버전 태그(`vX.Y.Z`) push 시 태그·main 포함 확인, 그 커밋의 main push CI 결과를 기다림(GitHub-hosted, Secret 없음) |
-| Deploy (`deploy.yml`) | Release tag가 성공하면 태그가 가리키는 커밋을 Lightsail에 배포(`CD_AUTO_DEPLOY=true`일 때만, 롤백 뒤 보류 중이면 건너뜀). 수동 실행(check·deploy·rollback) |
+| Deploy (`deploy.yml`) | Release tag가 성공하면 한 실행에서 `0. plan → 1. test → 2. train → 3. parity → 4. image → 5. release → 6. deploy`(`CD_AUTO_DEPLOY=true`일 때만): 태그 커밋 테스트·모델 학습·학습/서비스 환경 예측 비교·이미지 시험과 GHCR 게시·GitHub Release 기록 → production 승인 후 서버가 기록된 digest로 실행(롤백 뒤 보류 중이면 건너뜀). 수동 실행(check·deploy·rollback)은 plan·deploy만 |
 
 ## 시연 자료
 
