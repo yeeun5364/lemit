@@ -19,6 +19,27 @@
 </section>
 {% endif %}
 
+{# 월간 달력 (#92): 읽기 전용. 날짜를 누르면 그날 수업, 화살표로 달 이동. 강사 달력과 같은 표를 쓴다 #}
+<section class="card section my-calendar" id="calendar" aria-labelledby="cal-title">
+  <div class="card-head">
+    <h2 id="cal-title" class="card-title">{{ selected|date:"Y년 n월" }}</h2>
+    <nav class="sched-nav" aria-label="달 이동">
+      <a class="btn btn-secondary btn-icon" href="{{ prev_url }}" aria-label="이전 달">{% include "ui/icon.html" with name="chevron-left" size="sm" %}</a>
+      <a class="btn btn-secondary" href="{{ today_url }}">오늘</a>
+      <a class="btn btn-secondary btn-icon" href="{{ next_url }}" aria-label="다음 달">{% include "ui/icon.html" with name="chevron-right" size="sm" %}</a>
+    </nav>
+  </div>
+  <div class="sched-grid-wrap">{% include "lessons/_month_grid.html" %}</div>
+  <div class="my-day" aria-labelledby="day-title">
+    <h3 id="day-title" class="my-day-title">{{ selected|date:"n월 j일 l" }}{% if selected == today %} <span class="badge badge-blue">오늘</span>{% endif %}{% if day_sessions %} <span class="muted small">{{ day_sessions|length }}개</span>{% endif %}</h3>
+    {% if day_sessions %}
+    <ul class="rows sessions">{% for s in day_sessions %}{% include "portal/_session_row.html" with show_time=True %}{% endfor %}</ul>
+    {% else %}
+    <p class="muted small my-day-empty">이날은 수업이 없어요.</p>
+    {% endif %}
+  </div>
+</section>
+
 <section class="card section" aria-labelledby="upcoming-title">
   <div class="card-head"><h2 id="upcoming-title" class="card-title">다가오는 수업</h2>{% if upcoming %}<span class="muted small">{{ upcoming|length }}개</span>{% endif %}</div>
   {% if upcoming %}

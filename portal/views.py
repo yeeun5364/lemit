@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from inbox import services as inbox_services
 from inbox.models import Conversation, Message
+from lessons import schedule as sch
 from lessons.models import Enrollment, LessonSession
 from portal.forms import FollowUpForm, NewMessageForm
 
@@ -34,9 +35,31 @@ def _closed_notice(request, profile):
 
 
 def my_lessons(request):
-    """S16 내 수업: 다가오는 회차와 지난 회차(날짜·시간·장소·상태), 진행 중 레슨권의 잔여 회차."""
+    """S16 내 수업: 월간 달력(#92) + 고른 날의 수업, 다가오는 회차와 지난 회차, 진행 중 레슨권의 잔여 회차.
+
+    ?date=YYYY-MM-DD로 달과 날짜를 고른다(잘못된 값은 오늘). 달력·그날 목록 모두 로그인 계정에 연결된
+    수강생 기록의 회차만 조회하고, 다른 요청 값(student 등)은 쓰지 않는다. 읽기 전용(일정 추가·수정 없음).
+    """
     profile = _profile(request)
     now = timezone.now()
+    today = timezone.localdate()
+    selected = sch.parse_date(request.GET.get("date"), today)
+    weeks = sch.month_weeks(selected)
+    days = sch.student_sessions_by_day(profile, weeks[0][0], weeks[-1][-1])
+
+    def link(d):
+        return f"?date={d.isoformat()}#calendar"
+
+    calendar = {
+        "grid": sch.month_grid(selected, today, days, link),
+        "weekdays": sch.WEEKDAYS,
+        "selected": selected,
+        "today": today,
+        "day_sessions": days.get(selected, []),
+        "prev_url": link(sch.add_months(selected, -1)),
+        "next_url": link(sch.add_months(selected, 1)),
+        "today_url": link(today),
+    }
     sessions = LessonSession.objects.filter(enrollment__student=profile).select_related("enrollment__label")
     upcoming = list(sessions.filter(start_at__gte=now).order_by("start_at", "id"))
     past = list(sessions.filter(start_at__lt=now).order_by("-start_at", "-id")[:PAST_LIMIT])
@@ -45,7 +68,7 @@ def my_lessons(request):
         .filter(student=profile, status=Enrollment.Status.ACTIVE)
         .order_by("-start_date", "id")
     )
-    context = {"profile": profile, "upcoming": upcoming, "past": past, "enrollments": enrollments}
+    context = {"profile": profile, "upcoming": upcoming, "past": past, "enrollments": enrollments, **calendar}
     return render(request, "portal/my_lessons.html", context)
 
 

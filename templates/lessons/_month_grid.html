@@ -1,0 +1,18 @@
+{% comment %} 월간 달력 표 (강사 S05·수강생 S16 공용, #92). grid = lessons.schedule.month_grid(...), weekdays = WEEKDAYS.
+   칸을 누르면 c.url로 그날을 고른다. 점은 라벨 색(최대 3개), 회차 수는 읽기 프로그램용 이름에 넣는다. {% endcomment %}
+<table class="month">
+    <caption class="sr-only">{{ selected|date:"Y년 n월" }} 달력. 회차가 있는 날은 라벨 색 점(최대 3개)과 개수로 표시합니다.</caption>
+    <thead><tr>{% for w in weekdays %}<th scope="col"{% if forloop.first %} class="is-sun"{% endif %}>{{ w }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for week in grid %}<tr>
+        {% for c in week %}<td>
+          <a href="{{ c.url }}" class="day{% if not c.in_month %} is-out{% endif %}{% if c.is_today %} is-today{% endif %}{% if c.is_selected %} is-selected{% endif %}{% if forloop.first %} is-sun{% endif %}"
+             {% if c.is_selected %}aria-current="date"{% endif %}
+             aria-label="{{ c.date|date:'n월 j일' }}{% if c.is_today %} 오늘{% endif %}{% if c.count %}, 회차 {{ c.count }}개{% else %}, 일정 없음{% endif %}">
+            <span class="day-num">{{ c.date.day }}</span>
+            <span class="day-dots" aria-hidden="true">{% for color in c.dots %}<span class="dot{% if color %} lc-{{ color }}{% endif %}"></span>{% endfor %}</span>
+          </a>
+        </td>{% endfor %}
+      </tr>{% endfor %}
+    </tbody>
+  </table>

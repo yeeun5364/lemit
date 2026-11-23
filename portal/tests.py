@@ -217,3 +217,81 @@ class AccountLinkTests(PortalTestCase):
         self.me_account.delete()
         self.me.refresh_from_db()
         self.assertIsNone(self.me.account)
+
+
+class MyCalendarTests(PortalTestCase):
+    """#92: 내 수업 월간 달력. 로그인 계정에 연결된 기록의 회차만, 요청 값을 바꿔도 다른 수강생 회차가 섞이지 않는다."""
+
+    def at(self, day, hour):
+        tz = timezone.get_current_timezone()
+        return timezone.make_aware(datetime.datetime.combine(day, datetime.time(hour)), tz)
+
+    def add(self, enrollment, day, hour, place="A 레슨실", status=LessonSession.Status.SCHEDULED):
+        start = self.at(day, hour)
+        return LessonSession.objects.create(
+            enrollment=enrollment,
+            start_at=start,
+            end_at=start + datetime.timedelta(hours=1),
+            place=place,
+            status=status,
+        )
+
+    def cell(self, response, day):
+        return next(c for week in response.context["grid"] for c in week if c["date"] == day)
+
+    def test_month_grid_counts_only_my_sessions_and_selected_day_lists_them_in_time_order(self):
+        day = datetime.date(2026, 12, 9)
+        self.add(self.my_pass, day, 18, place="B 연습실")
+        self.add(self.my_pass, day, 10, status=LessonSession.Status.COMPLETED)
+        self.add(self.peer_pass, day, 12, place="다른 학생 장소")  # 같은 날 다른 수강생
+        self.login(self.me_account)
+        r = self.client.get(reverse("portal:lessons"), {"date": day.isoformat()})
+        self.assertEqual(self.cell(r, day)["count"], 2)
+        self.assertTrue(self.cell(r, day)["is_selected"])
+        self.assertEqual([timezone.localtime(s.start_at).hour for s in r.context["day_sessions"]], [10, 18])
+        html = r.content.decode()
+        self.assertIn("2026년 12월", html)
+        self.assertIn("12월 9일 수요일", html)
+        self.assertIn("B 연습실", html)
+        self.assertNotIn("다른 학생 장소", html)
+        self.assertIn('aria-label="12월 9일, 회차 2개"', html)
+
+    def test_other_request_values_cannot_mix_in_other_students_sessions(self):
+        day = datetime.date(2026, 12, 9)
+        self.add(self.peer_pass, day, 12, place="다른 학생 장소")
+        other_student = Student.objects.create(teacher=self.other_teacher, name="다른 강사 학생")
+        other_pass = Enrollment.objects.create(
+            student=other_student, title="다른 강사 레슨", total_count=4, start_date=day
+        )
+        self.add(other_pass, day, 13, place="다른 강사 장소")
+        self.login(self.me_account)
+        for params in (
+            {"date": day.isoformat(), "student": self.peer.pk},
+            {"date": day.isoformat(), "student": other_student.pk, "label": "1", "teacher": self.other_teacher.pk},
+        ):
+            r = self.client.get(reverse("portal:lessons"), params)
+            self.assertEqual(self.cell(r, day)["count"], 0, params)
+            self.assertEqual(r.context["day_sessions"], [], params)
+            self.assertNotContains(r, "다른 학생 장소")
+            self.assertNotContains(r, "다른 강사 장소")
+            self.assertContains(r, "이날은 수업이 없어요")
+
+    def test_month_navigation_links_and_bad_date_falls_back_to_today(self):
+        self.login(self.me_account)
+        r = self.client.get(reverse("portal:lessons"), {"date": "2026-01-31"})
+        self.assertEqual(r.context["prev_url"], "?date=2025-12-31#calendar")
+        self.assertEqual(r.context["next_url"], "?date=2026-02-28#calendar")  # 2월에 없는 날은 말일
+        self.assertEqual(r.context["today_url"], f"?date={timezone.localdate().isoformat()}#calendar")
+        for bad in ("abc", "2026-13-01", "0001-01-01"):
+            r = self.client.get(reverse("portal:lessons"), {"date": bad})
+            self.assertEqual(r.context["selected"], timezone.localdate(), bad)
+
+    def test_calendar_is_read_only_and_lists_still_shown(self):
+        make_session(self.my_pass, 2)
+        self.login(self.me_account)
+        html = self.client.get(reverse("portal:lessons")).content.decode()
+        self.assertIn('id="calendar"', html)
+        self.assertIn("다가오는 수업", html)  # 기존 목록 유지
+        self.assertNotIn("일정 추가", html)
+        self.assertNotIn(reverse("lessons:session_create"), html)
+        self.assertNotIn("<form", html.split('id="calendar"')[1].split("</section>")[0])

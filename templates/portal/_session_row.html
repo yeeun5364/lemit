@@ -1,9 +1,10 @@
 {% comment %} 수강생 화면의 회차 한 줄 (#80): 날짜(요일)·시간·장소·상태. 강사 화면으로 가는 링크는 없다. {% endcomment %}
 <li class="row session-row sched-row is-{{ s.status }}">
   {% with lb=s.enrollment.label %}<span class="label-bar{% if lb %} lc-{{ lb.color }}{% endif %}" aria-hidden="true"></span>{% endwith %}
-  <span class="sched-time">{{ s.start_at|date:"n/j" }}<span class="sched-end">{{ s.start_at|date:"D" }}</span></span>
+  {% if show_time %}<span class="sched-time">{{ s.start_at|time:"H:i" }}<span class="sched-end">{{ s.end_at|time:"H:i" }}</span></span>
+  {% else %}<span class="sched-time">{{ s.start_at|date:"n/j" }}<span class="sched-end">{{ s.start_at|date:"D" }}</span></span>{% endif %}
   <span class="row-main">
-    <span class="row-title">{{ s.start_at|time:"H:i" }}–{{ s.end_at|time:"H:i" }} · {{ s.enrollment.title }}</span>
+    <span class="row-title">{% if not show_time %}{{ s.start_at|time:"H:i" }}–{{ s.end_at|time:"H:i" }} · {% endif %}{{ s.enrollment.title }}</span>
     <span class="row-sub">{% if s.place %}{{ s.place }}{% else %}장소 미정{% endif %}</span>
   </span>
   <span class="row-side">{% include "lessons/_session_state.html" %}</span>
