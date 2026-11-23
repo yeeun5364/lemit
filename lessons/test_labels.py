@@ -341,10 +341,10 @@ class LabelCalendarHintTests(LabelTestCase):
         self.assertContains(r, "아직 회차가 없어 달력에는 보이지 않아요")
         row = self.label_row_hint(label)
         self.assertIn("레슨권 1개 · 회차 0개", row)
-        self.assertIn("붙인 레슨권에 회차가 없어 달력에 보이지 않아요", row)
+        self.assertIn("달력에 표시할 회차가 없어요. 라벨을 붙인 레슨권으로 일정을 추가하면", row)
         r = self.client.get(reverse("lessons:schedule"), {"label": label.pk})
         self.assertTrue(r.context["label_without_sessions"])
-        self.assertContains(r, "라벨이 붙은 레슨권에 회차가 없어 달력에 보이지 않아요")
+        self.assertContains(r, "라벨로 달력에 표시할 회차가 없어요")
 
         # 3) 그 레슨권으로 회차 등록 → 달력 점·목록 막대가 고른 색, 목록은 일정 바로가기
         data = {"enrollment": enrollment.pk, "date": today.isoformat(), "start_time": "16:00", "end_time": "17:00"}
@@ -355,7 +355,7 @@ class LabelCalendarHintTests(LabelTestCase):
         self.assertIn(link, row)
         r = self.client.get(reverse("lessons:schedule"), {"label": label.pk, "date": today.isoformat()})
         self.assertFalse(r.context["label_without_sessions"])
-        self.assertNotContains(r, "라벨이 붙은 레슨권에 회차가 없어")
+        self.assertNotContains(r, "라벨로 달력에 표시할 회차가 없어요")
         self.assertEqual(day_cell(r, today)["dots"], ["orange"])  # 달력 점
         self.assertContains(r, '<span class="dot lc-orange"></span>', html=False)
         self.assertContains(r, 'class="label-bar lc-orange"', html=False)  # 그날 목록 막대
@@ -391,7 +391,25 @@ class LabelCalendarHintTests(LabelTestCase):
         Student.objects.filter(pk=enrollment.student_id).update(is_active=False)  # 일정 화면에서도 빠짐
         row = self.label_row_hint(label)
         self.assertIn("회차 0개", row)
-        self.assertIn("붙인 레슨권에 회차가 없어", row)
+        # PR #85 리뷰 P3: 보관 수강생에게는 일정을 추가할 수 없으므로 보관 해제·다른 레슨권을 안내
+        self.assertIn("모두 보관한 수강생의 것이에요", row)
+        self.assertIn("수강생 보관을 해제하세요", row)
+        self.assertNotIn("일정을 추가하면", row)
+        r = self.client.get(reverse("lessons:schedule"), {"label": label.pk})
+        self.assertTrue(r.context["label_without_sessions"])
+        self.assertContains(r, "보관한 수강생이라면 보관을 해제하세요")
+
+    def test_archived_and_active_enrollments_guide_to_add_sessions(self):
+        """보관 수강생 레슨권과 활성 수강생 레슨권(회차 없음)에 함께 붙어 있으면 일정 추가 안내."""
+        label = Label.objects.create(teacher=self.a, name="혼합", color="green")
+        archived = make_enrollment(self.a, "보관학생", label)
+        make_session(archived, timezone.localdate())
+        Student.objects.filter(pk=archived.student_id).update(is_active=False)
+        make_enrollment(self.a, "활성학생", label)
+        row = self.label_row_hint(label)
+        self.assertIn("레슨권 2개 · 회차 0개", row)
+        self.assertIn("라벨을 붙인 레슨권으로 일정을 추가하면", row)
+        self.assertNotIn("모두 보관한 수강생", row)
 
     def test_counts_only_my_labels(self):
         mine = Label.objects.create(teacher=self.a, name="내라벨", color="blue")
