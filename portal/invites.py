@@ -7,7 +7,8 @@
 
 import datetime
 
-from django.db import transaction
+from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from lessons.services import lock_student
@@ -84,13 +85,25 @@ def approve(invite):
         current = StudentInvite.objects.select_for_update(of=("self",)).select_related("requested_by").get(pk=invite.pk)
         if current.status != StudentInvite.Status.REQUESTED or current.requested_by is None:
             raise InviteError("승인할 요청이 없습니다. 화면을 다시 확인하세요.")
+        # 요청 뒤에 보관된 기록에는 새 계정을 연결하지 않는다 (PR #94 리뷰 P2: 보관 기록의 과거 수업·대화 노출 방지)
+        if not student.is_active:
+            raise InviteError(
+                "보관된 수강생에게는 계정을 연결할 수 없습니다. 보관을 해제한 뒤 새 QR로 다시 연결하세요."
+            )
         if student.account_id:
             raise InviteError("이미 수강생 계정이 연결돼 있습니다.")
+        # 같은 계정을 두 수강생 기록에 동시에 승인하는 경우를 직렬화한다 (PR #94 리뷰 P2): 서로 다른 수강생 행을
+        # 잠그므로 그것만으로는 막히지 않는다. 요청 계정 행을 잠근 뒤 '이미 연결됨'을 다시 확인한다
+        get_user_model().objects.select_for_update().get(pk=current.requested_by_id)
         refusal = account_refusal(current.requested_by)
         if refusal:
             raise InviteError(refusal)
         student.account = current.requested_by
-        student.save(update_fields=["account", "updated_at"])
+        try:
+            with transaction.atomic():  # 혹시 남은 경합도 DB UNIQUE 충돌을 500이 아닌 연결 오류로
+                student.save(update_fields=["account", "updated_at"])
+        except IntegrityError:
+            raise InviteError("이 계정은 이미 다른 수강생 기록에 연결돼 있습니다.") from None
         now = timezone.now()
         current.status = StudentInvite.Status.APPROVED
         current.decided_at = now

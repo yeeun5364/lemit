@@ -54,14 +54,18 @@ def my_lessons(request):
     def link(d):
         return f"?date={d.isoformat()}#calendar"
 
+    def link_if_allowed(d):
+        """parse_date가 받는 범위(1900~2999년) 밖으로는 이동 링크를 만들지 않는다 (PR #93 리뷰 P3)."""
+        return link(d) if sch.parse_date(d.isoformat(), None) else None
+
     calendar = {
         "grid": sch.month_grid(selected, today, days, link),
         "weekdays": sch.WEEKDAYS,
         "selected": selected,
         "today": today,
         "day_sessions": days.get(selected, []),
-        "prev_url": link(sch.add_months(selected, -1)),
-        "next_url": link(sch.add_months(selected, 1)),
+        "prev_url": link_if_allowed(sch.add_months(selected, -1)),
+        "next_url": link_if_allowed(sch.add_months(selected, 1)),
         "today_url": link(today),
     }
     sessions = LessonSession.objects.filter(enrollment__student=profile).select_related("enrollment__label")

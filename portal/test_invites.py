@@ -229,3 +229,46 @@ class PermissionTests(InviteTestCase):
         self.client.force_login(self.account)
         self.assertEqual(self.client.get(reverse("portal:lessons")).status_code, 404)
         self.assertEqual(self.client.get(reverse("portal:messages")).status_code, 404)
+
+
+class ApproveRaceTests(InviteTestCase):
+    """PR #94 리뷰 P2: 요청 뒤 보관, 같은 계정의 동시 승인."""
+
+    def test_archived_after_request_cannot_be_approved(self):
+        invite = self.issue()
+        self.request_as(self.account, invite)
+        Student.objects.filter(pk=self.student.pk).update(is_active=False)  # 요청을 받은 뒤 보관
+        r = self.approve(invite)
+        self.assertContains(r, "보관된 수강생에게는 계정을 연결할 수 없습니다")
+        self.assertIsNone(Student.objects.get(pk=self.student.pk).account)
+        self.assertEqual(StudentInvite.objects.get(pk=invite.pk).status, StudentInvite.Status.REQUESTED)
+
+    def test_same_account_requested_for_two_students_links_once(self):
+        other = Student.objects.create(teacher=self.teacher, name="두 번째 기록")
+        first = self.issue()
+        self.request_as(self.account, first)
+        self.client.force_login(self.teacher)
+        self.client.post(reverse("students:invite_issue", args=[other.pk]))
+        second = StudentInvite.objects.filter(student=other).latest("id")
+        self.request_as(self.account, second)
+        self.approve(first)
+        self.client.force_login(self.teacher)
+        r = self.client.post(reverse("students:invite_approve", args=[other.pk, second.pk]), follow=True)
+        self.assertContains(r, "이미 다른 수강생 기록에 연결돼 있습니다")
+        self.assertEqual(Student.objects.filter(account=self.account).count(), 1)
+
+    def test_unique_conflict_becomes_link_error_not_500(self):
+        """잠금 확인을 지나친 경합을 흉내: 미연결 확인이 통과해도 DB UNIQUE 충돌은 연결 오류로 바뀐다."""
+        from unittest import mock
+
+        Student.objects.create(teacher=self.teacher, name="이미 연결된 기록", account=self.account)
+        invite = self.issue()
+        StudentInvite.objects.filter(pk=invite.pk).update(
+            status=StudentInvite.Status.REQUESTED, requested_by=self.account, requested_at=timezone.now()
+        )
+        with mock.patch("portal.invites.account_refusal", return_value=None):
+            r = self.approve(invite)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "이미 다른 수강생 기록에 연결돼 있습니다")
+        self.assertIsNone(Student.objects.get(pk=self.student.pk).account)
+        self.assertEqual(Student.objects.filter(account=self.account).count(), 1)
