@@ -87,7 +87,11 @@ MAIN_REF="${CI_DEPLOY_MAIN_REF:-refs/remotes/origin/main}"
 IMAGE_REPO="ghcr.io/yeeun5364/lemit-web"
 GITHUB_REPO="yeeun5364/lemit"
 
-[ "${#REQ}" -le 140 ] || reject "너무 깁니다"
+# 1차 길이 상한 = 허용하는 요청 중 가장 긴 것 (PR #74 리뷰 P2: 예전 140은 아래 TAG_RE가 허용하는 긴 태그를 막았음)
+#   "deploy-image"(12) + 공백 + 태그 최대 "v999999.999999.999999"(21) + 공백 + SHA(40) + 공백 + "sha256:"+64(71) = 147
+# 형식 검사는 이 뒤의 동작별 정규식이 한다. TAG_RE나 요청 형식을 바꾸면 이 값과 test_ci_deploy.sh 경계값 시험도 함께 바꾼다.
+MAX_REQ_LEN=147
+[ "${#REQ}" -le "$MAX_REQ_LEN" ] || reject "너무 깁니다"
 [[ "$REQ" != *$'\n'* && "$REQ" != *$'\r'* ]] || reject "여러 줄"
 read -r ACTION ARG ARG2 ARG3 EXTRA <<< "$REQ" || true
 [ -z "${EXTRA:-}" ] || reject "인자가 너무 많습니다"

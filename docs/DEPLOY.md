@@ -57,7 +57,7 @@ SSH 22 (내 IP만) ── 관리자
      - Compose v5의 `compose build`는 buildx **0.17.0 이상**이 필요해서, 이 상태로 배포하면 `compose build requires buildx 0.17.0 or later`로 멈춥니다.
      - 위 스크립트는 우선순위가 더 높은 `/usr/local/lib/docker/cli-plugins`에 설치하므로 패키지 파일을 지우지 않아도 새 버전이 쓰입니다.
      - docker CLI가 플러그인을 찾는 순서: `~/.docker/cli-plugins` → `/usr/local/lib/docker/cli-plugins` → `/usr/local/libexec/...` → `/usr/lib/...` → `/usr/libexec/docker/cli-plugins`
-     - `server_check.sh`와 `deploy.sh`가 buildx 버전(0.17.0 이상)을 검사하고, 부족하면 이 명령을 안내합니다.
+     - `server_check.sh`와 `deploy.sh`가 buildx 버전(0.17.0 이상)을 검사하고, 부족하면 이 명령을 안내합니다. `deploy.sh`는 **서버에서 빌드할 때만** 검사합니다. 태그 배포 파이프라인의 이미지 배포(`DEPLOY_IMAGE`)는 빌드하지 않으므로 buildx 버전 때문에 멈추지 않습니다(PR #74 리뷰).
    - 버전을 고정합니다: Compose v5.6.1(2026-10-21), Buildx v0.38.1(2026-10-20). 나온 지 2주가 지난 버전 중에서 골랐습니다.
    - **두 파일의 sha256 체크섬이 모두 맞을 때만 설치합니다.**
      - 스크립트는 `set -euo pipefail`로 실행되어, 어느 단계든 실패하면 즉시 멈춥니다.
@@ -129,7 +129,7 @@ scripts/deploy.sh <커밋SHA>   # 특정 커밋
    - 도메인 모드(`SITE_ADDRESS`가 도메인): `DJANGO_BEHIND_PROXY=True`, `DJANGO_SECURE_HTTPS=True`, `DJANGO_ALLOWED_HOSTS` **첫 값 = 도메인**, `DJANGO_CSRF_TRUSTED_ORIGINS`에 `https://도메인`
    - IP 모드(`SITE_ADDRESS=:80`): `DJANGO_SECURE_HTTPS=False`(HTTPS가 없어서 켜면 리다이렉트가 반복됨), `DJANGO_ALLOWED_HOSTS` 첫 값은 서버 IP(`localhost` 아님)
 2. **코드 받기:** `git fetch`와 `checkout`을 합니다. 서버 작업 폴더에 수정한 내용이 있으면 중단합니다.
-3. **이미지 준비:** 태그는 커밋 SHA 12자리입니다. 서버에서 직접 실행하거나 수동 `deploy`면 서버에서 빌드합니다. **태그 배포 파이프라인**(CD.md §0)은 `DEPLOY_IMAGE=ghcr.io/yeeun5364/lemit-web@sha256:…`로 실행되어 **빌드하지 않고** 그 digest의 이미지를 받아 `lemit-web:<12자리>` 태그를 붙입니다. 받지 못하면 빌드로 대신하지 않고 `FAILED_PULL`, 이미지 라벨의 커밋이 배포할 커밋과 다르면 `FAILED_IMAGE_REVISION`으로 멈춥니다.
+3. **이미지 준비:** 태그는 커밋 SHA 12자리입니다. 서버에서 직접 실행하거나 수동 `deploy`면 서버에서 빌드합니다. **태그 배포 파이프라인**(CD.md §0)은 `DEPLOY_IMAGE=ghcr.io/yeeun5364/lemit-web@sha256:…`로 실행되어 **빌드하지 않고** 그 digest의 이미지를 받아 `lemit-web:<12자리>` 태그를 붙입니다. 받지 못하면 빌드로 대신하지 않고 `FAILED_PULL`, 이미지 라벨의 커밋이 배포할 커밋과 다르면 `FAILED_IMAGE_REVISION`으로 멈춥니다. 이 경우 buildx 버전 검사는 하지 않습니다(빌드하지 않으므로).
 4. **`manage.py check --deploy`:** 운영 `.env`로 새 이미지에서 실행합니다. **모드별로 의도적으로 받아들이는 경고만 허용**하고, 그 밖의 경고나 오류가 나오면 중단합니다.
    - IP 모드: `W004`(HSTS), `W008`(SSL 리다이렉트), `W012`(세션 쿠키 secure), `W016`(CSRF 쿠키 secure). HTTP 시연이므로 HTTPS 관련 경고는 피할 수 없습니다.
    - 도메인 모드: `W004`(HSTS)만. 인증서가 안정된 뒤 `DJANGO_HSTS_SECONDS`로 켭니다.

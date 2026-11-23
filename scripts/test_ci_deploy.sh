@@ -31,12 +31,13 @@ export CI_DEPLOY_REPO="$T/server" CI_DEPLOY_DRY_RUN=1
 TAG="0123456789ab"
 pass=0; fail=0
 
-# expect <기대 출력 일부 | REJECT | FAIL:문구> <요청 문자열> [실행할 스크립트]
+# expect <기대 출력 일부 | REJECT | REJECT:거부 사유 | FAIL:문구> <요청 문자열> [실행할 스크립트]
 expect() {
     local want="$1" req="$2" bin="${3:-$T/lemit-ci-deploy}" out code ok
     out="$(SSH_ORIGINAL_COMMAND="$req" bash "$bin" 2>&1)"; code=$?
     case "$want" in
         REJECT) [ "$code" -eq 2 ] && ! grep -q "DRY_RUN" <<< "$out" && ok=1 || ok=0 ;;
+        REJECT:*) [ "$code" -eq 2 ] && ! grep -q "DRY_RUN" <<< "$out" && grep -qF "${want#REJECT:}" <<< "$out" && ok=1 || ok=0 ;;
         FAIL:*) [ "$code" -eq 1 ] && grep -qF "${want#FAIL:}" <<< "$out" && ok=1 || ok=0 ;;
         *) [ "$code" -eq 0 ] && grep -qF "$want" <<< "$out" && ok=1 || ok=0 ;;
     esac
@@ -103,7 +104,8 @@ expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-auto $C2"   # 보류가
 g -C "$T/src" tag v0.1.1 "$C2"                                     # 가벼운 태그 → main 최신 커밋
 g -C "$T/src" tag -a -m "release" v0.2.0 "$C1"                     # 주석 태그 → main의 이전 커밋
 g -C "$T/src" tag v9.9.9 "$FEATURE"                                # main 밖 커밋
-g -C "$T/src" push -q "$T/origin.git" v0.1.1 v0.2.0 v9.9.9
+g -C "$T/src" tag v123456.123456.123456 "$C1"                      # 태그 정규식이 허용하는 가장 긴 태그 (길이 상한 경계값)
+g -C "$T/src" push -q "$T/origin.git" v0.1.1 v0.2.0 v9.9.9 v123456.123456.123456
 CURRENT="$T/server/deploy/state/current_tag"
 rm -f "$HOLD" "$CURRENT"
 expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-tag v0.1.1 $C2"   # 정상 태그 → 그 커밋 배포
@@ -169,6 +171,19 @@ done
 expect REJECT                                    "deploy-tag v0.2.0 $C1 $D"       # 세 번째 인자는 deploy-image만
 expect REJECT                                    "deploy $C1 v0.2.0 $D"
 expect REJECT                                    "deploy-image v0.2.0 $C1 $D$(printf 'a%.0s' $(seq 1 40))"  # 너무 김
+# 길이 상한 경계값 (PR #74 리뷰 P2): 허용 형식 중 가장 긴 정상 요청(147자)은 배포까지 가고, 148자부터는 길이에서 거부.
+# 상한 안의 잘못된 요청은 여전히 형식 검사에서 거부된다.
+LONG_TAG="v123456.123456.123456"
+MAX_REQ="deploy-image $LONG_TAG $C1 $D"
+if [ "${#MAX_REQ}" -eq 147 ]; then pass=$((pass+1)); echo "[통과] 허용 형식 중 가장 긴 정상 요청은 147자"
+else fail=$((fail+1)); echo "[실패] 허용 형식 중 가장 긴 정상 요청이 147자가 아님: ${#MAX_REQ}"; fi
+release_json "$LONG_TAG" "$C1" "$D"
+expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "$MAX_REQ"            # 147자 → 배포
+expect "REJECT:너무 깁니다"                       "deploy-image v1234567.123456.123456 $C1 $D"   # 148자 (태그 7자리)
+expect "REJECT:너무 깁니다"                       "$MAX_REQ "                                  # 148자 (뒤 공백)
+expect "REJECT:vMAJOR.MINOR.PATCH"                "deploy-image v1234567.12345.123456 $C1 $D"    # 147자지만 태그 형식 오류
+expect "REJECT:vMAJOR.MINOR.PATCH"                "deploy-image v123456.123456.12345x $C1 $D"    # 147자, 숫자 아님
+release_json v0.2.0 "$C1" "$D"
 printf '%s rollback %s 이후 자동 배포 보류 (요청 1)\n' "$(date '+%F %T')" "$TAG" > "$HOLD"
 expect "건너뜀: 자동 배포 보류 중"               "deploy-image v0.2.0 $C1 $D"     # 롤백 보류 중 → 배포 안 함(0)
 rm -f "$HOLD"

@@ -233,7 +233,7 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 - 게시 태그는 `<버전 태그>-run<실행 ID>.<시도>`(예: `v0.1.2-run123456789.1`)라 이전 실행의 이미지를 덮어쓰지 않습니다. 배포는 태그가 아니라 **digest**로만 합니다. 오래된 이미지는 Packages 화면에서 직접 지웁니다(롤백에 쓸 수 있는 버전은 남겨 둠).
 
 ### 5-5. 서버 준비 (태그 파이프라인, 직접, 병합 후)
-1. **강제 명령 다시 설치**(§3-2 1번과 같음): 이 PR의 `ci_deploy.sh`가 `deploy-image` 요청을 처리합니다. 다시 설치하기 전에는 서버가 "허용하지 않는 요청입니다: deploy-image"로 거부합니다(배포 안 됨, 안전한 쪽 실패).
+1. **강제 명령 다시 설치**(§3-2 1번과 같음): 이 PR의 `ci_deploy.sh`가 `deploy-image` 요청을 처리합니다. 다시 설치하기 전에는 서버가 "허용하지 않는 요청입니다: deploy-image"로 거부합니다(배포 안 됨, 안전한 쪽 실패). 요청 길이 상한은 허용 형식 중 가장 긴 요청(`deploy-image v999999.999999.999999 <SHA 40> sha256:<64>`, 147자)에 맞춰져 있습니다(PR #74 리뷰). 태그 형식이나 요청 형식을 바꾸면 이 상한과 `test_ci_deploy.sh`의 경계값 시험도 함께 바꿉니다.
 2. 서버에 `curl`·`python3`가 있는지(Amazon Linux 2023 기본 포함): 강제 명령이 GitHub API로 Release 기록을 확인합니다. `check` 결과는 바뀌지 않으므로 `ssh ec2-user@서버 'command -v curl python3'`로 확인합니다.
 3. 서버에서 `https://ghcr.io`·`https://api.github.com`으로 나가는 연결이 되는지(Lightsail 기본 허용): `curl -fsS -o /dev/null https://ghcr.io/v2/ ; echo $?` (401이 나오면 정상 연결, 종료 22)
 - 서버 작업 트리는 `deploy-image` 때 대상 커밋으로 바뀝니다(`deploy.sh`도 원래 그 커밋으로 바꿈). 서버 작업 폴더에 커밋하지 않은 변경이 있으면 거부합니다.
@@ -332,7 +332,7 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 | 서버가 거부·건너뜀 | 같은 작업의 "서버에서 실행" 단계 출력(`[ci_deploy] …`)과 요약의 "건너뜀(서버)" | 보류 중, 이미 배포됨, 강제 명령 미갱신, Release 기록 불일치 |
 | 배포 스크립트 실패 | "서버에서 실행" 단계의 `deploy.sh` 출력, 서버의 `deploy/state/history.log`(`check`로 확인), 관리자 SSH로 `docker compose logs web` | `FAILED_PULL`·`FAILED_IMAGE_REVISION`(§6-1 표), DEPLOY.md §4·§7 |
 
-- 시험: 판정 로직은 `scripts/test_deploy_workflow.py`(워크플로 run 본문을 가짜 GitHub API로 실행: 정상 태그 → deploy-image, 주석 태그, main 밖 커밋, CI 진행 중→성공·실패·없음·시간 초과, 자동 배포 꺼짐, 더 높은 태그, 태그 이동, 수동 동작 유지, 서버 요청에 digest 붙이기, Release 새로 만들기·재사용·digest 다름·커밋 다름·기록 없는 Release·API 오류), 작업 구조는 `scripts/test_check_workflow_policy.py`(순서·상태 함수·권한·Secret·checkout 대상), 서버 쪽은 `scripts/test_ci_deploy.sh`(Release 기록과 digest·커밋·태그 비교, 초안·기록 없음, main 밖, 형식, 롤백 보류·대기 중 건너뜀, 이미 배포됨, 대상 커밋으로 바꾼 뒤 실제 `deploy.sh` 실행, 이미지 배포를 모르는 `deploy.sh` 거부)에서 확인합니다. GitHub의 `workflow_run` 연결, 아티팩트 전달, GHCR 게시, production 승인은 로컬에서 재현할 수 없어 첫 태그 시험에서 확인합니다.
+- 시험: 판정 로직은 `scripts/test_deploy_workflow.py`(워크플로 run 본문을 가짜 GitHub API로 실행: 정상 태그 → deploy-image, 주석 태그, main 밖 커밋, CI 진행 중→성공·실패·없음·시간 초과, 자동 배포 꺼짐, 더 높은 태그, 태그 이동, 수동 동작 유지, 서버 요청에 digest 붙이기, Release 새로 만들기·재사용·digest 다름·커밋 다름·기록 없는 Release·API 오류), 작업 구조는 `scripts/test_check_workflow_policy.py`(순서·상태 함수·권한·Secret·checkout 대상), 서버 쪽은 `scripts/test_ci_deploy.sh`(Release 기록과 digest·커밋·태그 비교, 초안·기록 없음, main 밖, 형식, 롤백 보류·대기 중 건너뜀, 이미 배포됨, 대상 커밋으로 바꾼 뒤 실제 `deploy.sh` 실행, 이미지 배포를 모르는 `deploy.sh` 거부, 요청 길이 상한 경계값 147자 통과·148자 거부)와 `scripts/test_deploy_buildx.sh`(이미지 배포는 buildx가 낮아도 이미지 받기까지 진행·빌드 안 함, 서버 빌드는 buildx가 낮으면 빌드 전에 중단)에서 확인합니다. GitHub의 `workflow_run` 연결, 아티팩트 전달, GHCR 게시, production 승인은 로컬에서 재현할 수 없어 첫 태그 시험에서 확인합니다.
 
 ### 6-3. 모델·이미지가 같은지 확인하기
 

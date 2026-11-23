@@ -55,8 +55,14 @@ main() {
 
     # 0-1) 빌드 도구 확인: Compose 빌드에는 buildx 0.17.0 이상 필요 (#48). 부족하면 해결 방법과 함께 중단.
     #      git checkout보다 먼저 한다: 이 검사 스크립트가 없는 예전 커밋을 배포해도 검사가 실행되게 (Codex 리뷰 P2)
-    BX="$(bash scripts/buildx_check.sh)" || { log "$BX"; exit 1; }
-    log "$BX"
+    #      서버에서 빌드할 때만 검사한다. DEPLOY_IMAGE(태그 배포 파이프라인)는 시험한 이미지를 받기만 하고 빌드하지 않으므로
+    #      buildx 버전 때문에 배포를 멈추지 않는다 (PR #74 리뷰 P2)
+    if [ -z "${DEPLOY_IMAGE:-}" ]; then
+        BX="$(bash scripts/buildx_check.sh)" || { log "$BX"; exit 1; }
+        log "$BX"
+    else
+        log "빌드 도구 확인 건너뜀: 레지스트리 이미지 배포라 서버에서 빌드하지 않음"
+    fi
 
     # 1) 코드 받기
     if [ "${DEPLOY_SKIP_GIT:-0}" != "1" ]; then
