@@ -21,6 +21,7 @@
 #                                    같은지 확인한다. 작업 트리를 그 커밋으로 바꾼 뒤 그 커밋의 scripts/deploy.sh를
 #                                    DEPLOY_IMAGE=<저장소>@<digest>로 실행한다: 레지스트리에서 정확히 그 digest를 받아
 #                                    실행하고 **서버에서 이미지를 빌드하지 않는다.** 그 커밋·digest가 이미 배포돼 있으면 건너뜀
+#                                    (기록과 실행 중인 web 컨테이너의 이미지 ID가 모두 맞을 때만, running_image_is)
 #   deploy-auto <커밋 SHA 40자리>  → (예전 main push 자동 배포. 지금 워크플로는 쓰지 않지만 갱신 순서와 무관하게 안전하도록
 #                                    남겨 둠) 보류 중이거나 origin/main 최신 커밋이 아니면 아무것도 바꾸지 않고 끝낸다(0)
 #   rollback <이미지 태그 12자리>   → 자동 배포 보류를 건 뒤 scripts/rollback.sh <태그>
@@ -139,6 +140,22 @@ rollback_pending() {
         if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2> /dev/null; then alive=0; else rm -f "$f"; fi
     done
     return "$alive"
+}
+
+# 실행 중인 web 컨테이너의 이미지 ID가 이미지 <$1>의 ID와 같으면 0 (PR #74 재검토 P2).
+# 기록(current_tag·current_image)만으로는 '이미 배포됨'을 판단하지 않는다: 공개 경로 검사만 실패한 배포
+# (FAILED_PUBLIC_CHECK)는 새 이미지를 실행한 채 기록을 직전 성공값으로 남기기 때문이다.
+# 확인할 수 없으면(컨테이너 없음·이미지 없음·docker 오류) 1 → 건너뛰지 않고 배포한다 (안전한 쪽).
+# 컨테이너는 deploy.sh와 같은 방식(docker compose ps -q web)으로 찾는다.
+running_image_is() {
+    local want cid run
+    want="$(docker image inspect --format '{{.Id}}' "$1" 2> /dev/null)" || return 1
+    cid="$(docker compose --profile proxy ps -q web 2> /dev/null | head -n 1)" || return 1
+    [ -n "$want" ] && [ -n "$cid" ] || return 1
+    run="$(docker inspect --format '{{.Image}}' "$cid" 2> /dev/null)" || return 1
+    if [ "$run" = "$want" ]; then return 0; fi
+    echo "[ci_deploy] 기록은 이미 배포됨이지만 실행 중인 web 이미지(${run:-없음})가 $1($want)와 달라 다시 배포합니다"
+    return 1
 }
 
 # 서버 변경 잠금을 기다려 잡는다. 잠금(설명자 9)은 exec로 넘어가 deploy.sh·rollback.sh가 끝날 때까지 유지된다
@@ -265,7 +282,8 @@ case "${ACTION:-}" in
         fi
         check_tag_commit
         if [ "$(cat "$STATE_DIR/current_tag" 2> /dev/null || true)" = "${ARG:0:12}" ] \
-            && [ "$(cat "$STATE_DIR/current_image" 2> /dev/null || true)" = "$IMAGE_REF" ]; then
+            && [ "$(cat "$STATE_DIR/current_image" 2> /dev/null || true)" = "$IMAGE_REF" ] \
+            && running_image_is "$IMAGE_REF"; then
             echo "[ci_deploy] 건너뜀: 태그 $TAG_NAME 의 이미지($DIGEST)가 이미 배포돼 있습니다"
             exit 0
         fi
@@ -299,7 +317,8 @@ case "${ACTION:-}" in
         fi
         # 기다리는 사이에 태그가 옮겨졌을 수 있으므로 잠금 안에서 한 번 더 본다
         check_tag_commit
-        if [ "$(cat "$STATE_DIR/current_tag" 2> /dev/null || true)" = "${ARG:0:12}" ]; then
+        if [ "$(cat "$STATE_DIR/current_tag" 2> /dev/null || true)" = "${ARG:0:12}" ] \
+            && running_image_is "lemit-web:${ARG:0:12}"; then
             echo "[ci_deploy] 건너뜀: 태그 $TAG_NAME 의 커밋(${ARG:0:12})이 이미 배포돼 있습니다"
             exit 0
         fi

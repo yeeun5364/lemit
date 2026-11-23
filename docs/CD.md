@@ -54,7 +54,7 @@ PR·main push → CI(린트·테스트·Docker, GitHub-hosted)만 실행. 배포
 
 **커밋 SHA 두 가지.** `workflow_run`에서 `github.sha`는 **main의 최신 커밋**(워크플로 파일을 읽은 커밋)이고 배포 대상이 아닙니다. 배포할 커밋은 Release tag 실행의 `head_sha`이고, plan이 태그 → 커밋으로 다시 확인해 `needs.plan.outputs.sha`(작업 환경변수 `TARGET_SHA`)로 넘깁니다. 1~5의 모든 checkout은 `ref`로 이 값을 명시하고(`persist-credentials: false`), 받은 HEAD가 이 값인지 다시 확인합니다. 이 값이 이미지 라벨(`org.opencontainers.image.revision`), Release 기록(`commit=`), 서버 요청(`deploy-image <태그> <커밋> <digest>`)에 그대로 들어가고, 서버는 받은 이미지의 라벨이 배포할 커밋과 같은지 확인합니다. 각 작업 요약에 두 값을 따로 적습니다.
 
-**중복 배포를 막는 방법.** 자동 배포 경로는 태그 하나뿐입니다(main push 자동 배포 `deploy-auto`와 서버 빌드 태그 배포 `deploy-tag`는 워크플로에서 뺐고, 정책 검사가 다시 넣지 못하게 막습니다. 강제 명령에는 예전 요청이 남아 있지만 쓰이지 않습니다). 같은 커밋·같은 digest가 이미 배포돼 있으면 서버가 건너뜁니다. 같은 버전을 다시 실행해도 Release는 하나이고(기록이 같으면 재사용, 다르면 실패), 태그 여러 개를 연달아 올리면 가장 높은 버전만 배포합니다(plan·러너가 낮은 버전은 건너뜀, 대기 중인 deploy는 가장 최근 것 하나만 남음).
+**중복 배포를 막는 방법.** 자동 배포 경로는 태그 하나뿐입니다(main push 자동 배포 `deploy-auto`와 서버 빌드 태그 배포 `deploy-tag`는 워크플로에서 뺐고, 정책 검사가 다시 넣지 못하게 막습니다. 강제 명령에는 예전 요청이 남아 있지만 쓰이지 않습니다). 같은 커밋·같은 digest가 이미 배포돼 있으면 서버가 건너뜁니다. 이때 기록(`current_tag`·`current_image`)만 보지 않고 **실행 중인 web 컨테이너의 이미지 ID가 그 digest의 이미지 ID와 같은지**도 확인합니다(PR #74 재검토). 공개 경로 검사만 실패한 배포는 새 이미지를 실행한 채 기록을 직전 성공값으로 남기므로, 기록만 비교하면 실제로는 다른 이미지가 돌고 있는데도 건너뛸 수 있기 때문입니다. 확인할 수 없으면(컨테이너 없음·이미지 없음·docker 오류) 건너뛰지 않고 배포합니다. 같은 버전을 다시 실행해도 Release는 하나이고(기록이 같으면 재사용, 다르면 실패), 태그 여러 개를 연달아 올리면 가장 높은 버전만 배포합니다(plan·러너가 낮은 버전은 건너뜀, 대기 중인 deploy는 가장 최근 것 하나만 남음).
 
 **배포·롤백 직렬화와 롤백 보존 (PR #58 리뷰 P2).** GitHub concurrency 그룹은 진행 1개 + 대기 1개만 두고, 새 대기 작업이 기존 대기 작업을 취소합니다. 그래서 deploy와 rollback이 한 그룹이면 "배포 A 진행 중 + 수동 롤백 B 대기" 상태에서 최신 main 자동 배포 C가 들어올 때 B가 취소될 수 있었습니다. 지금은:
 
@@ -271,13 +271,14 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 | 수동 deploy가 "수동 배포 실패(종료 …): 자동 배포 보류를 유지합니다" | 배포가 실패해 보류를 그대로 둠 (정상). 원인을 고친 뒤 다시 수동 `deploy` |
 | "… 잠금 넘겨받기 이전 버전이라 잠금을 놓고 실행합니다 (호환 모드)" | 작업 트리가 이 기능 이전 커밋. 동작에는 문제없음. 다음 배포부터 새 스크립트가 쓰임 |
 | 태그 배포가 "건너뜀: 자동 배포 보류 중이라 태그 … 를 배포하지 않습니다"로 성공 종료 | 롤백 뒤 보류 중 (정상). 원인을 확인한 뒤 수동 `deploy`로 배포해 성공하면 보류가 풀리고, 그다음 태그부터 자동 배포 |
-| "건너뜀: 태그 … 의 커밋(…)이 이미 배포돼 있습니다" | 같은 커밋을 다시 배포하려 함 (중복 방지, 정상) |
+| "건너뜀: 태그 … 의 커밋(…)이 이미 배포돼 있습니다" | 같은 커밋을 다시 배포하려 함 (중복 방지, 정상). 기록과 실행 중인 web 이미지가 모두 그 커밋일 때만 |
 | "허용하지 않는 요청입니다: deploy-tag" 또는 "…: deploy-image" | 서버 강제 명령이 이 기능 이전 버전 → §5-5로 다시 설치 |
 | "GitHub Release … 를 찾지 못했습니다" / "Release에 기록된 이미지 digest가 요청과 다릅니다" | `5. release`가 끝나지 않았거나 Release를 손으로 고침. 요청한 digest가 Release 기록과 다르면 서버는 배포하지 않음 (정상 차단) |
 | `FAILED_PULL` "이미지를 받지 못했습니다" | GHCR 패키지가 비공개(§5-4), 서버 외부 연결(§5-5) |
 | `FAILED_IMAGE_REVISION` "이미지 라벨의 커밋 … 이 배포할 커밋 … 과 다릅니다" | 다른 커밋의 이미지 digest를 요청함 → 배포하지 않음. Release 기록과 이미지가 맞는지 확인 |
 | "커밋 … 의 scripts/deploy.sh는 이미지 배포를 지원하지 않습니다" | 태그 파이프라인 이전 커밋에 태그를 담. 이 기능이 병합된 뒤의 커밋에 새 태그 |
-| "건너뜀: 태그 … 의 이미지(…)가 이미 배포돼 있습니다" | 같은 커밋·같은 digest를 다시 배포하려 함 (중복 방지, 정상) |
+| "건너뜀: 태그 … 의 이미지(…)가 이미 배포돼 있습니다" | 같은 커밋·같은 digest를 다시 배포하려 함 (중복 방지, 정상). 기록과 실행 중인 web 이미지가 모두 그 digest일 때만 |
+| "기록은 이미 배포됨이지만 실행 중인 web 이미지(…)가 …와 달라 다시 배포합니다" | 직전 배포가 공개 경로 검사에서만 실패해(`FAILED_PUBLIC_CHECK`) 다른 이미지가 실행 중. 요청한 이미지로 실제 교체를 진행함(정상) |
 | "태그 … 가 커밋 … 를 가리키지 않습니다" | 태그를 지웠거나 다른 커밋으로 옮김. 태그는 옮기지 말고 새 버전 태그를 올림 |
 
 ### 6-2. 버전 태그로 배포하기 (§5-3 자동 배포를 켠 뒤)
@@ -332,7 +333,7 @@ Settings → Secrets and variables → Actions → **Variables** → `CD_AUTO_DE
 | 서버가 거부·건너뜀 | 같은 작업의 "서버에서 실행" 단계 출력(`[ci_deploy] …`)과 요약의 "건너뜀(서버)" | 보류 중, 이미 배포됨, 강제 명령 미갱신, Release 기록 불일치 |
 | 배포 스크립트 실패 | "서버에서 실행" 단계의 `deploy.sh` 출력, 서버의 `deploy/state/history.log`(`check`로 확인), 관리자 SSH로 `docker compose logs web` | `FAILED_PULL`·`FAILED_IMAGE_REVISION`(§6-1 표), DEPLOY.md §4·§7 |
 
-- 시험: 판정 로직은 `scripts/test_deploy_workflow.py`(워크플로 run 본문을 가짜 GitHub API로 실행: 정상 태그 → deploy-image, 주석 태그, main 밖 커밋, CI 진행 중→성공·실패·없음·시간 초과, 자동 배포 꺼짐, 더 높은 태그, 태그 이동, 수동 동작 유지, 서버 요청에 digest 붙이기, Release 새로 만들기·재사용·digest 다름·커밋 다름·기록 없는 Release·API 오류), 작업 구조는 `scripts/test_check_workflow_policy.py`(순서·상태 함수·권한·Secret·checkout 대상), 서버 쪽은 `scripts/test_ci_deploy.sh`(Release 기록과 digest·커밋·태그 비교, 초안·기록 없음, main 밖, 형식, 롤백 보류·대기 중 건너뜀, 이미 배포됨, 대상 커밋으로 바꾼 뒤 실제 `deploy.sh` 실행, 이미지 배포를 모르는 `deploy.sh` 거부, 요청 길이 상한 경계값 147자 통과·148자 거부)와 `scripts/test_deploy_buildx.sh`(이미지 배포는 buildx가 낮아도 이미지 받기까지 진행·빌드 안 함, 서버 빌드는 buildx가 낮으면 빌드 전에 중단)에서 확인합니다. GitHub의 `workflow_run` 연결, 아티팩트 전달, GHCR 게시, production 승인은 로컬에서 재현할 수 없어 첫 태그 시험에서 확인합니다.
+- 시험: 판정 로직은 `scripts/test_deploy_workflow.py`(워크플로 run 본문을 가짜 GitHub API로 실행: 정상 태그 → deploy-image, 주석 태그, main 밖 커밋, CI 진행 중→성공·실패·없음·시간 초과, 자동 배포 꺼짐, 더 높은 태그, 태그 이동, 수동 동작 유지, 서버 요청에 digest 붙이기, Release 새로 만들기·재사용·digest 다름·커밋 다름·기록 없는 Release·API 오류), 작업 구조는 `scripts/test_check_workflow_policy.py`(순서·상태 함수·권한·Secret·checkout 대상), 서버 쪽은 `scripts/test_ci_deploy.sh`(Release 기록과 digest·커밋·태그 비교, 초안·기록 없음, main 밖, 형식, 롤백 보류·대기 중 건너뜀, 이미 배포됨, 대상 커밋으로 바꾼 뒤 실제 `deploy.sh` 실행, 이미지 배포를 모르는 `deploy.sh` 거부, 요청 길이 상한 경계값 147자 통과·148자 거부, 기록은 같아도 실행 중인 web 이미지가 다르거나 확인할 수 없으면 건너뛰지 않음)와 `scripts/test_deploy_buildx.sh`(이미지 배포는 buildx가 낮아도 이미지 받기까지 진행·빌드 안 함, 서버 빌드는 buildx가 낮으면 빌드 전에 중단)에서 확인합니다. GitHub의 `workflow_run` 연결, 아티팩트 전달, GHCR 게시, production 승인은 로컬에서 재현할 수 없어 첫 태그 시험에서 확인합니다.
 
 ### 6-3. 모델·이미지가 같은지 확인하기
 

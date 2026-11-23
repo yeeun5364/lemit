@@ -29,6 +29,22 @@ MISSING="0123456789abcdef0123456789abcdef01234567"   # 어디에도 없는 커�
 install -m 755 "$SRC" "$T/lemit-ci-deploy"
 export CI_DEPLOY_REPO="$T/server" CI_DEPLOY_DRY_RUN=1
 TAG="0123456789ab"
+
+# 가짜 docker (PR #74 재검토 P2: '이미 배포됨'은 실행 중인 web 이미지까지 확인). 실제 docker가 있는 CI에서도 같은 결과가 나오게
+# 항상 이 가짜를 쓴다. 이미지 <ref>의 ID는 "id:<ref>", 실행 중인 web 컨테이너의 이미지 ID는 FAKE_RUNNING_IMAGE.
+#   FAKE_RUNNING_IMAGE 비어 있음 → web 컨테이너 없음,  FAKE_IMAGE_MISSING=1 → 이미지 조회 실패
+mkdir -p "$T/fakebin"
+cat > "$T/fakebin/docker" << 'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+    "image inspect") [ "${FAKE_IMAGE_MISSING:-0}" != 1 ] || exit 1; echo "id:${!#}" ;;
+    "compose --profile") [[ " $* " == *" ps -q web "* ]] && [ -n "${FAKE_RUNNING_IMAGE:-}" ] && echo "web-cid" ;;
+    "inspect --format") [ "${!#}" = "web-cid" ] && echo "$FAKE_RUNNING_IMAGE" ;;
+esac
+exit 0
+EOF
+chmod +x "$T/fakebin/docker"
+export PATH="$T/fakebin:$PATH" FAKE_RUNNING_IMAGE=""
 pass=0; fail=0
 
 # expect <기대 출력 일부 | REJECT | REJECT:거부 사유 | FAIL:문구> <요청 문자열> [실행할 스크립트]
@@ -129,7 +145,12 @@ echo "대기" > "$T/server/deploy/state/rollback_pending/$$"            # 살아
 expect "건너뜀: 대기 중인 롤백"                  "deploy-tag v0.1.1 $C2"
 rm -rf "$T/server/deploy/state/rollback_pending"
 echo "${C2:0:12}" > "$CURRENT"
-expect "건너뜀: 태그 v0.1.1 의 커밋"             "deploy-tag v0.1.1 $C2"   # 이미 배포된 커밋 → 중복 배포 안 함
+FAKE_RUNNING_IMAGE="id:lemit-web:${C2:0:12}" \
+expect "건너뜀: 태그 v0.1.1 의 커밋"             "deploy-tag v0.1.1 $C2"   # 기록·실행 이미지 모두 그 커밋 → 중복 배포 안 함
+# 기록은 그 커밋인데 실제로는 다른 이미지가 실행 중(공개 경로 검사만 실패한 배포 뒤) → 건너뛰지 않고 배포 (PR #74 재검토 P2)
+FAKE_RUNNING_IMAGE="id:lemit-web:bbbbbbbbbbbb" \
+expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-tag v0.1.1 $C2"
+expect "DRY_RUN: bash scripts/deploy.sh $C2"     "deploy-tag v0.1.1 $C2"   # web 컨테이너 없음 → 배포
 rm -f "$CURRENT"
 # 원격에서 태그를 다른 커밋으로 옮기면 서버도 origin 값을 따른다
 g -C "$T/src" tag -f v0.1.1 "$C1" > /dev/null
@@ -192,10 +213,20 @@ echo "대기" > "$T/server/deploy/state/rollback_pending/$$"
 expect "건너뜀: 대기 중인 롤백"                  "deploy-image v0.2.0 $C1 $D"
 rm -rf "$T/server/deploy/state/rollback_pending"
 echo "${C1:0:12}" > "$CURRENT"; echo "$IMG@$D" > "$CURRENT_IMAGE"
-expect "이미 배포돼 있습니다"                    "deploy-image v0.2.0 $C1 $D"     # 같은 커밋·digest → 중복 배포 안 함
+export FAKE_RUNNING_IMAGE="id:$IMG@$D"
+expect "이미 배포돼 있습니다"                    "deploy-image v0.2.0 $C1 $D"     # 기록·실행 이미지 모두 그 digest → 중복 배포 안 함
+# PR #74 재검토 P2: 기록은 A(이 digest)인데 공개 경로 검사만 실패한 배포로 B가 실행 중 → A를 요청하면 실제로 교체
+FAKE_RUNNING_IMAGE="id:lemit-web:bbbbbbbbbbbb" \
+expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "deploy-image v0.2.0 $C1 $D"
+FAKE_RUNNING_IMAGE="id:lemit-web:bbbbbbbbbbbb" \
+expect "다시 배포합니다"                         "deploy-image v0.2.0 $C1 $D"     # 왜 다시 배포하는지 남김
+FAKE_RUNNING_IMAGE="" \
+expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "deploy-image v0.2.0 $C1 $D"   # web 컨테이너 없음 → 배포
+FAKE_IMAGE_MISSING=1 \
+expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "deploy-image v0.2.0 $C1 $D"   # 서버에 그 이미지 없음 → 배포
 rm -f "$CURRENT_IMAGE"                                                          # 같은 커밋을 서버에서 빌드해 배포한 상태
 expect "DRY_RUN: DEPLOY_IMAGE=$IMG@$D bash scripts/deploy.sh $C1" "deploy-image v0.2.0 $C1 $D"   # → 검증된 이미지로 교체
-rm -f "$CURRENT"
+rm -f "$CURRENT"; export FAKE_RUNNING_IMAGE=""
 unset CI_DEPLOY_RELEASE_JSON
 
 # 서버 잠금 대기: 다른 배포가 잠금을 잡고 있으면 기다렸다가 진행, 시간 안에 못 얻으면 실패
