@@ -10,7 +10,7 @@ from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
 from django.views.generic import FormView
 
-from accounts.forms import LoginForm, SignupForm
+from accounts.forms import LemitPasswordResetForm, LoginForm, SignupForm
 
 
 class TeacherLoginView(LoginView):
@@ -44,6 +44,8 @@ class SignupView(FormView):
 # ---- UC-15 비밀번호 찾기(S03)·변경(S04): Django 기본 뷰에 템플릿·문구만 붙인다 ----
 # 재설정 뷰 4개는 Django가 이미 공개(login_not_required)로 표시해 두었다 (SCREENS §1).
 
+RESET_EMAIL_SESSION_KEY = "password_reset_entered_email"  # 비밀번호 찾기에 입력한 이메일 (#78, 안내 화면 표시용)
+
 
 class PasswordResetView(auth_views.PasswordResetView):
     """메일 발송이 실패해도 Django 기본 폼이 예외를 잡아 로그만 남기므로(django.contrib.auth 로거),
@@ -53,6 +55,15 @@ class PasswordResetView(auth_views.PasswordResetView):
     email_template_name = "accounts/password_reset_email.txt"
     subject_template_name = "accounts/password_reset_subject.txt"
     success_url = reverse_lazy("password_reset_done")
+    form_class = LemitPasswordResetForm
+
+    def get_initial(self):
+        """안내 화면의 '이메일 다시 입력'으로 돌아오면 방금 입력한 이메일을 채워 오타만 고치게 한다 (#78).
+        세션에 있는 값은 이 브라우저에서 사용자가 직접 입력한 문자열뿐이라 가입 여부와 무관하다."""
+        initial = super().get_initial()
+        if self.request.GET.get("retry") and self.request.session.get(RESET_EMAIL_SESSION_KEY):
+            initial["email"] = self.request.session[RESET_EMAIL_SESSION_KEY]
+        return initial
 
     def form_valid(self, form):
         """요청 횟수 제한 (#7, PR #68 '재설정 요청 횟수 제한 없음'): 같은 이메일·IP로 너무 자주 요청하면
@@ -60,6 +71,8 @@ class PasswordResetView(auth_views.PasswordResetView):
         from accounts import throttle
         from accounts.models import LoginAttempt
 
+        # 안내 화면에 '입력한 이메일'을 보여 주려고 저장한다 (#78). 가입·제한·발송 실패와 관계없이 항상 같은 값
+        self.request.session[RESET_EMAIL_SESSION_KEY] = form.cleaned_data.get("email", "")
         # 한도 확인과 사용 기록을 잠금 안에서 한 번에 한다(동시 요청도 한도까지만 메일 발송, PR #70 리뷰 P2)
         if throttle.reserve(LoginAttempt.Kind.RESET, self.request, form.cleaned_data.get("email")) is None:
             return redirect(self.get_success_url())
@@ -67,7 +80,15 @@ class PasswordResetView(auth_views.PasswordResetView):
 
 
 class PasswordResetDoneView(auth_views.PasswordResetDoneView):
+    """입력한 이메일을 다시 보여 주어 오타를 확인하게 한다 (#78).
+    사용자가 입력한 그대로라 가입 여부는 드러나지 않는다."""
+
     template_name = "accounts/password_reset_done.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["entered_email"] = self.request.session.get(RESET_EMAIL_SESSION_KEY, "")
+        return context
 
 
 class PasswordResetConfirmView(auth_views.PasswordResetConfirmView):

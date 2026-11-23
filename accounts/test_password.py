@@ -231,3 +231,57 @@ class ProductionWithoutSmtpTests(TestCase):
         unknown, captured = self.capture_reset("nobody@example.com")
         self.assertEqual((known.status_code, known["Location"]), (unknown.status_code, unknown["Location"]))
         self.assertNotIn("nobody@example.com", captured)
+
+
+@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class LoginIdHintTests(TestCase):
+    """#78: 로그인 ID = 가입 이메일 안내, 안내 화면에서 입력한 이메일 확인·다시 입력. 가입 여부는 계속 드러나지 않음."""
+
+    def setUp(self):
+        User.objects.create_user(email="teacher@example.com", password=OLD, name="강사")
+
+    def done_page_after(self, email):
+        client = self.client_class()  # 요청마다 새 브라우저(세션)
+        r = client.post(reverse("password_reset"), {"email": email})
+        self.assertRedirects(r, reverse("password_reset_done"))
+        return client, client.get(reverse("password_reset_done")).content.decode()
+
+    def test_form_says_login_id_is_signup_email(self):
+        r = self.client.get(reverse("password_reset"))
+        self.assertContains(r, "가입 이메일 (로그인 ID)")
+        self.assertContains(r, "로그인할 때 입력하는 이메일이 가입 이메일이에요")
+        self.assertContains(r, "로그인에 사용하는 <strong>가입 이메일</strong>", html=False)
+
+    def test_done_page_shows_entered_email_and_retry_link(self):
+        _, html = self.done_page_after("techer@example.com")  # 오타
+        self.assertIn("techer@example.com", html)
+        self.assertIn(reverse("password_reset") + "?retry=1", html)
+        self.assertIn("이메일 다시 입력하기", html)
+
+    def test_done_page_is_same_for_known_and_unknown_email(self):
+        _, known = self.done_page_after("teacher@example.com")
+        _, unknown = self.done_page_after("nobody@example.com")
+        self.assertEqual(len(mail.outbox), 1)  # 등록된 계정에만 발송 (기존 검증 유지)
+        self.assertEqual(mail.outbox[0].to, ["teacher@example.com"])
+        # 입력한 이메일 문자열과 CSRF 토큰만 다르고 화면은 같다
+        strip = re.compile(r'name="csrfmiddlewaretoken" value="[^"]+"')
+        self.assertEqual(
+            strip.sub("", known).replace("teacher@example.com", "X"),
+            strip.sub("", unknown).replace("nobody@example.com", "X"),
+        )
+
+    def test_throttled_request_shows_same_done_page(self):
+        with mock.patch("accounts.throttle.reserve", return_value=None):
+            _, html = self.done_page_after("teacher@example.com")
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertIn("teacher@example.com", html)
+        self.assertIn("이메일 다시 입력하기", html)
+
+    def test_retry_prefills_entered_email_only_when_asked(self):
+        client, _ = self.done_page_after("techer@example.com")
+        retry = client.get(reverse("password_reset") + "?retry=1").content.decode()
+        self.assertIn('value="techer@example.com"', retry)
+        plain = client.get(reverse("password_reset")).content.decode()
+        self.assertNotIn("techer@example.com", plain)
+        fresh = self.client_class().get(reverse("password_reset") + "?retry=1").content.decode()
+        self.assertNotIn('value="', fresh.split('name="email"')[1].split(">")[0])  # 다른 브라우저엔 값 없음
