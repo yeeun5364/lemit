@@ -285,3 +285,20 @@ class LoginIdHintTests(TestCase):
         self.assertNotIn("techer@example.com", plain)
         fresh = self.client_class().get(reverse("password_reset") + "?retry=1").content.decode()
         self.assertNotIn('value="', fresh.split('name="email"')[1].split(">")[0])  # 다른 브라우저엔 값 없음
+
+    def test_entered_email_expires_after_ten_minutes_and_is_removed(self):
+        """PR #82 리뷰 P3: 공용 기기에서 나중에 안내 화면·다시 입력을 열어도 이전 이메일이 보이지 않게."""
+        from accounts.views import RESET_EMAIL_SESSION_KEY
+
+        with mock.patch("accounts.views.time.time", return_value=1_000_000):
+            client, html = self.done_page_after("techer@example.com")
+        self.assertIn("techer@example.com", html)
+        with mock.patch("accounts.views.time.time", return_value=1_000_000 + 600):  # 10분째: 아직 보임
+            self.assertContains(client.get(reverse("password_reset_done")), "techer@example.com")
+        with mock.patch("accounts.views.time.time", return_value=1_000_000 + 601):  # 지남: 안 보이고 세션에서 지움
+            done = client.get(reverse("password_reset_done"))
+            self.assertNotContains(done, "techer@example.com")
+            self.assertContains(done, "가입된 계정이 있으면")  # 같은 안내는 그대로
+            self.assertNotIn(RESET_EMAIL_SESSION_KEY, client.session)
+            retry = client.get(reverse("password_reset") + "?retry=1")
+            self.assertNotContains(retry, "techer@example.com")

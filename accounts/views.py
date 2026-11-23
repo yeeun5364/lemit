@@ -1,3 +1,4 @@
+import time
 from collections import Counter
 
 from django.contrib import messages
@@ -45,6 +46,22 @@ class SignupView(FormView):
 # 재설정 뷰 4개는 Django가 이미 공개(login_not_required)로 표시해 두었다 (SCREENS §1).
 
 RESET_EMAIL_SESSION_KEY = "password_reset_entered_email"  # 비밀번호 찾기에 입력한 이메일 (#78, 안내 화면 표시용)
+# 입력한 이메일은 오타를 확인·고치는 짧은 시간 동안만 둔다. 공용 기기에서 나중에 같은 화면을 열어도 보이지 않게
+# (PR #82 리뷰 P3). 재설정 링크 유효 시간(1시간)과는 별개다.
+RESET_EMAIL_TTL_SECONDS = 10 * 60
+
+
+def _remember_reset_email(request, email):
+    request.session[RESET_EMAIL_SESSION_KEY] = {"email": email, "at": time.time()}
+
+
+def _recent_reset_email(request):
+    """10분 안에 입력한 이메일. 지났거나 형식이 다르면 세션에서 지우고 빈 문자열."""
+    saved = request.session.get(RESET_EMAIL_SESSION_KEY)
+    if isinstance(saved, dict) and time.time() - saved.get("at", 0) <= RESET_EMAIL_TTL_SECONDS:
+        return saved.get("email", "")
+    request.session.pop(RESET_EMAIL_SESSION_KEY, None)
+    return ""
 
 
 class PasswordResetView(auth_views.PasswordResetView):
@@ -61,8 +78,10 @@ class PasswordResetView(auth_views.PasswordResetView):
         """안내 화면의 '이메일 다시 입력'으로 돌아오면 방금 입력한 이메일을 채워 오타만 고치게 한다 (#78).
         세션에 있는 값은 이 브라우저에서 사용자가 직접 입력한 문자열뿐이라 가입 여부와 무관하다."""
         initial = super().get_initial()
-        if self.request.GET.get("retry") and self.request.session.get(RESET_EMAIL_SESSION_KEY):
-            initial["email"] = self.request.session[RESET_EMAIL_SESSION_KEY]
+        if self.request.GET.get("retry"):
+            email = _recent_reset_email(self.request)
+            if email:
+                initial["email"] = email
         return initial
 
     def form_valid(self, form):
@@ -72,7 +91,7 @@ class PasswordResetView(auth_views.PasswordResetView):
         from accounts.models import LoginAttempt
 
         # 안내 화면에 '입력한 이메일'을 보여 주려고 저장한다 (#78). 가입·제한·발송 실패와 관계없이 항상 같은 값
-        self.request.session[RESET_EMAIL_SESSION_KEY] = form.cleaned_data.get("email", "")
+        _remember_reset_email(self.request, form.cleaned_data.get("email", ""))
         # 한도 확인과 사용 기록을 잠금 안에서 한 번에 한다(동시 요청도 한도까지만 메일 발송, PR #70 리뷰 P2)
         if throttle.reserve(LoginAttempt.Kind.RESET, self.request, form.cleaned_data.get("email")) is None:
             return redirect(self.get_success_url())
@@ -87,7 +106,7 @@ class PasswordResetDoneView(auth_views.PasswordResetDoneView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["entered_email"] = self.request.session.get(RESET_EMAIL_SESSION_KEY, "")
+        context["entered_email"] = _recent_reset_email(self.request)
         return context
 
 
