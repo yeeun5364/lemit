@@ -1,5 +1,5 @@
 from django import forms
-from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
+from django.contrib.auth.forms import AuthenticationForm, PasswordResetForm, UserCreationForm
 
 from accounts.models import DEMO_EMAIL as RESERVED_DEMO_EMAIL
 from accounts.models import User
@@ -69,3 +69,15 @@ class LoginForm(AuthenticationForm):
         throttle.release(attempt)  # 성공은 실패가 아니므로 반납
         throttle.clear_email(kind, email)
         return cleaned
+
+
+class LemitPasswordResetForm(PasswordResetForm):
+    """S03 비밀번호 찾기 입력 (#78): 별도 아이디가 없고 로그인 ID가 곧 가입 이메일임을 입력란에서 알린다.
+    발송 대상 조회(활성·사용 가능 비밀번호가 있는 계정만, 대소문자 무시)는 Django 기본 동작 그대로 둔다."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        email = self.fields["email"]
+        email.label = "가입 이메일 (로그인 ID)"
+        email.help_text = "LEMIT은 별도 아이디가 없어요. 로그인할 때 입력하는 이메일이 가입 이메일이에요."
+        email.widget.attrs.update({"autofocus": True, "placeholder": "example@email.com"})
