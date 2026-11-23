@@ -627,6 +627,8 @@ def label_list(request):
     labels = list(
         Label.objects.filter(teacher=request.user).annotate(
             enrollment_count=Count("enrollments", distinct=True),
+            # 보관한 수강생의 레슨권에만 붙어 있으면 회차를 추가할 수 없으므로 안내가 다르다 (PR #85 리뷰 P3)
+            active_enrollment_count=Count("enrollments", filter=shown, distinct=True),
             session_count=Count("enrollments__sessions", filter=shown, distinct=True),
             next_start=Min("enrollments__sessions__start_at", filter=upcoming),
             last_start=Max("enrollments__sessions__start_at", filter=shown),
