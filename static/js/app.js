@@ -77,6 +77,19 @@
     });
   });
 
+  /* 4-1. 레슨명: '직접 입력'을 고를 때만 새 레슨명 칸을 보인다 (#75, S11). JS가 없으면 칸이 항상 보인다 */
+  document.querySelectorAll("[data-custom-toggle]").forEach(function (box) {
+    var radios = box.closest("form").querySelectorAll('input[name="' + box.getAttribute("data-custom-toggle") + '"]');
+    function sync(focus) {
+      var picked = Array.prototype.find.call(radios, function (r) { return r.checked; });
+      box.hidden = !!picked && picked.value !== "__custom__";
+      var input = box.querySelector("input");
+      if (focus && !box.hidden && input) input.focus();
+    }
+    radios.forEach(function (r) { r.addEventListener("change", function () { sync(true); }); });
+    sync(false);
+  });
+
   /* 4. 제출 전 확인 (보관 등) */
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {

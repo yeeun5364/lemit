@@ -101,6 +101,10 @@ class EnrollmentForm(forms.ModelForm):
 
     label = LabelChoiceField(help_text="일정에서 이 레슨권의 회차를 라벨 색으로 구분합니다.")
 
+    # 이전 레슨권의 레슨명 고르기 (#75). 이전 레슨권이 없는 수강생에게는 이 칸을 지우고 레슨명을 바로 입력받는다.
+    title_choice = forms.ChoiceField(label="레슨명", required=False, widget=forms.RadioSelect)
+    MAX_PREVIOUS_TITLES = 5
+
     class Meta:
         model = Enrollment
         fields = ("title", "total_count", "start_date", "label")
@@ -127,9 +131,41 @@ class EnrollmentForm(forms.ModelForm):
         candidates = list(exhausted)
         self.has_exhausted = bool(candidates)
         field.initial = candidates
+        self._setup_title_choice(student)
+
+    def _setup_title_choice(self, student):
+        """이전 레슨권의 레슨명(최근 것부터, 중복 없이 최대 5개)을 고르게 하고 가장 최근 것을 기본으로 둔다 (#75).
+        '직접 입력'을 고르면 새 레슨명 칸에 입력한 값을 쓴다. 이전 레슨명이 없으면 지금처럼 바로 입력한다.
+        title_choice를 보내지 않은 요청(예전 화면·직접 POST)은 '직접 입력'과 같게 처리해 입력한 레슨명을 쓴다."""
+        previous = []
+        for title in (
+            Enrollment.objects.filter(student=student).order_by("-start_date", "-id").values_list("title", flat=True)
+        ):
+            if title not in previous:
+                previous.append(title)
+            if len(previous) == self.MAX_PREVIOUS_TITLES:
+                break
+        self.previous_titles = previous
+        if not previous:
+            del self.fields["title_choice"]
+            return
+        choice = self.fields["title_choice"]
+        choice.choices = [(t, t) for t in previous] + [(self.CUSTOM_TITLE, "직접 입력")]
+        choice.initial = previous[0]
+        choice.help_text = "이전 레슨권의 레슨명입니다. 새 이름이면 '직접 입력'을 고르세요."
+        title = self.fields["title"]
+        title.required = False  # 고른 레슨명을 쓸 때는 비어 있어도 된다. 직접 입력이면 clean_title이 확인
+        title.label = "새 레슨명"
+        title.widget.attrs.pop("autofocus", None)
+        self.order_fields(["title_choice", "title"])  # title_choice를 먼저 검증해 clean_title에서 쓴다
+
+    CUSTOM_TITLE = "__custom__"
 
     def clean_title(self):
-        title = self.cleaned_data["title"].strip()
+        choice = self.cleaned_data.get("title_choice")
+        if choice and choice != self.CUSTOM_TITLE:  # 선택지 밖 값은 title_choice 필드 오류로 이미 걸러짐
+            return choice
+        title = (self.cleaned_data.get("title") or "").strip()
         if not title:
             raise forms.ValidationError("레슨명을 입력하세요.")
         return title
