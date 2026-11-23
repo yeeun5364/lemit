@@ -113,3 +113,33 @@ class AutoSessionTests(TestCase):
         self.assertIn("회차도 함께 만들기", html)
         self.assertIn('data-show-if-checked="make_sessions"', html)
         self.assertIn("반복 요일", html)
+
+    def test_unchecked_ignores_invalid_session_inputs_and_saves_enrollment(self):
+        """PR #87 리뷰 P2: 자동 생성을 끈 채 잘못된 회차 입력이 남아 있어도 레슨권만 저장된다."""
+        r = self.post(
+            first_date="날짜아님",
+            first_start="25:99",
+            first_end="16:00",
+            weekdays=["9"],
+            session_place="가" * 101,
+        )
+        self.assertRedirects(r, reverse("students:detail", args=[self.student.pk]))
+        self.assertEqual(Enrollment.objects.count(), 1)
+        self.assertEqual(LessonSession.objects.count(), 0)
+
+    def test_checked_still_validates_session_inputs(self):
+        r = self.auto(session_place="가" * 101)
+        self.assertIn("session_place", r.context["form"].errors)
+        self.assertEqual(Enrollment.objects.count(), 0)
+
+    def test_repeat_past_last_date_is_form_error_not_500(self):
+        """PR #87 리뷰 P3: 날짜 범위 끝(9999-12-31)을 넘는 반복은 폼 오류."""
+        r = self.auto(first_date="9999-12-28", total_count="4")  # 9999-12-28은 화요일, 매주면 다음 해로 넘어감
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("반복 회차가 날짜 범위를 넘습니다", r.context["form"].errors["first_date"][0])
+        self.assertEqual((Enrollment.objects.count(), LessonSession.objects.count()), (0, 0))
+
+    def test_repeat_ending_exactly_on_last_date_is_ok(self):
+        r = self.auto(first_date="9999-12-31", total_count="1", weekdays=[])  # 마지막 날 한 번: 날짜를 더 넘기지 않음
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(LessonSession.objects.count(), 1)

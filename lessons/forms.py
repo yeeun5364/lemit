@@ -190,11 +190,19 @@ class EnrollmentForm(forms.ModelForm):
 
     CUSTOM_TITLE = "__custom__"
 
+    AUTO_SESSION_FIELDS = ("first_date", "first_start", "first_end", "weekdays", "session_place")
+
     def clean(self):
         cleaned = super().clean()
         self.session_slots = []
         if cleaned.get("make_sessions"):
             self._plan_sessions(cleaned)
+        else:
+            # 회차 자동 생성을 끄면 그 입력은 쓰지 않으므로 형식 오류(장소 100자 초과 등)로 레슨권 저장을 막지 않는다
+            # (PR #87 리뷰 P2). 화면에서도 숨긴 칸은 비활성화돼 보내지지 않는다(static/js/app.js).
+            for name in self.AUTO_SESSION_FIELDS:
+                self.errors.pop(name, None)
+                cleaned.pop(name, None)
         return cleaned
 
     def _plan_sessions(self, cleaned):
@@ -216,16 +224,23 @@ class EnrollmentForm(forms.ModelForm):
             self.add_error("weekdays", "첫 수업 날짜의 요일을 반복 요일에 포함하세요.")
             return
         tz = timezone.get_current_timezone()
-        day = first
-        while len(self.session_slots) < total:
-            if day.weekday() in days:
-                self.session_slots.append(
-                    (
-                        timezone.make_aware(datetime.datetime.combine(day, start), tz),
-                        timezone.make_aware(datetime.datetime.combine(day, end), tz),
+        slots, day = [], first
+        try:
+            while True:
+                if day.weekday() in days:
+                    slots.append(
+                        (
+                            timezone.make_aware(datetime.datetime.combine(day, start), tz),
+                            timezone.make_aware(datetime.datetime.combine(day, end), tz),
+                        )
                     )
-                )
-            day += datetime.timedelta(days=1)
+                    if len(slots) == total:  # 마지막 회차를 만든 뒤에는 날짜를 더 넘기지 않는다
+                        break
+                day += datetime.timedelta(days=1)
+        except OverflowError:  # 날짜 범위(9999-12-31) 끝을 넘는 반복 (PR #87 리뷰 P3): 500이 아니라 폼 오류
+            self.add_error("first_date", "반복 회차가 날짜 범위를 넘습니다. 첫 수업 날짜나 총 회차를 확인하세요.")
+            return
+        self.session_slots = slots
 
     def clean_title(self):
         choice = self.cleaned_data.get("title_choice")
