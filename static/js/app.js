@@ -90,6 +90,19 @@
     sync(false);
   });
 
+  /* 4-2. 체크박스를 켰을 때만 딸린 입력 칸을 보인다 (#76 회차 자동 생성). JS가 없으면 항상 보인다 */
+  document.querySelectorAll("[data-show-if-checked]").forEach(function (box) {
+    var check = box.closest("form").querySelector('input[name="' + box.getAttribute("data-show-if-checked") + '"]');
+    if (!check) return;
+    function sync() {
+      box.hidden = !check.checked;
+      /* 숨긴 칸은 보내지 않는다: 이전에 입력한 잘못된 값이 숨은 채 저장을 막지 않게 (PR #87 리뷰 P2) */
+      box.querySelectorAll("input, select, textarea").forEach(function (el) { el.disabled = box.hidden; });
+    }
+    check.addEventListener("change", sync);
+    sync();
+  });
+
   /* 4. 제출 전 확인 (보관 등) */
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {

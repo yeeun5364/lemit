@@ -101,6 +101,35 @@ class EnrollmentForm(forms.ModelForm):
 
     label = LabelChoiceField(help_text="일정에서 이 레슨권의 회차를 라벨 색으로 구분합니다.")
 
+    # 회차 자동 생성 (#76, 최소 범위): 체크하면 첫 수업 날짜부터 고른 요일마다 총 회차만큼 '예정' 회차를 함께 만든다.
+    # 반복 규칙은 저장하지 않는다(만든 뒤에는 보통 회차처럼 하나씩 수정·삭제). 규칙 저장·일괄 수정은 #19.
+    WEEKDAY_CHOICES = [("0", "월"), ("1", "화"), ("2", "수"), ("3", "목"), ("4", "금"), ("5", "토"), ("6", "일")]
+    MAX_AUTO_SESSIONS = 100
+    make_sessions = forms.BooleanField(
+        label="회차도 함께 만들기",
+        required=False,
+        help_text="첫 수업 날짜부터 고른 요일마다 총 회차만큼 '예정' 회차를 만들어 달력에 표시합니다.",
+    )
+    first_date = forms.DateField(
+        label="첫 수업 날짜", required=False, widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")
+    )
+    first_start = forms.TimeField(
+        label="시작", required=False, widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M")
+    )
+    first_end = forms.TimeField(
+        label="종료", required=False, widget=forms.TimeInput(attrs={"type": "time"}, format="%H:%M")
+    )
+    weekdays = forms.MultipleChoiceField(
+        label="반복 요일",
+        required=False,
+        choices=WEEKDAY_CHOICES,
+        widget=forms.CheckboxSelectMultiple,
+        help_text="비우면 첫 수업 날짜의 요일로 매주 만듭니다.",
+    )
+    session_place = forms.CharField(
+        label="장소 메모", required=False, max_length=100, widget=forms.TextInput(attrs={"placeholder": "예: A 레슨실"})
+    )
+
     # 이전 레슨권의 레슨명 고르기 (#75). 이전 레슨권이 없는 수강생에게는 이 칸을 지우고 레슨명을 바로 입력받는다.
     title_choice = forms.ChoiceField(label="레슨명", required=False, widget=forms.RadioSelect)
     MAX_PREVIOUS_TITLES = 5
@@ -137,21 +166,21 @@ class EnrollmentForm(forms.ModelForm):
         """이전 레슨권의 레슨명(최근 것부터, 중복 없이 최대 5개)을 고르게 하고 가장 최근 것을 기본으로 둔다 (#75).
         '직접 입력'을 고르면 새 레슨명 칸에 입력한 값을 쓴다. 이전 레슨명이 없으면 지금처럼 바로 입력한다.
         title_choice를 보내지 않은 요청(예전 화면·직접 POST)은 '직접 입력'과 같게 처리해 입력한 레슨명을 쓴다."""
-        previous = []
-        for title in (
-            Enrollment.objects.filter(student=student).order_by("-start_date", "-id").values_list("title", flat=True)
-        ):
-            if title not in previous:
-                previous.append(title)
-            if len(previous) == self.MAX_PREVIOUS_TITLES:
+        # 선택지 값은 레슨명이 아니라 그 레슨명을 쓴 가장 최근 레슨권의 PK다 (PR #86 리뷰 P3).
+        # 레슨명 자체를 값으로 쓰면 실제 레슨명이 '직접 입력' 값(__custom__)과 같을 때 구분할 수 없다.
+        self.previous_titles = {}  # {레슨권 PK 문자열: 레슨명}, 최근 것부터
+        rows = Enrollment.objects.filter(student=student).order_by("-start_date", "-id").values_list("pk", "title")
+        for pk, title in rows:
+            if title not in self.previous_titles.values():
+                self.previous_titles[str(pk)] = title
+            if len(self.previous_titles) == self.MAX_PREVIOUS_TITLES:
                 break
-        self.previous_titles = previous
-        if not previous:
+        if not self.previous_titles:
             del self.fields["title_choice"]
             return
         choice = self.fields["title_choice"]
-        choice.choices = [(t, t) for t in previous] + [(self.CUSTOM_TITLE, "직접 입력")]
-        choice.initial = previous[0]
+        choice.choices = [*self.previous_titles.items(), (self.CUSTOM_TITLE, "직접 입력")]
+        choice.initial = next(iter(self.previous_titles))
         choice.help_text = "이전 레슨권의 레슨명입니다. 새 이름이면 '직접 입력'을 고르세요."
         title = self.fields["title"]
         title.required = False  # 고른 레슨명을 쓸 때는 비어 있어도 된다. 직접 입력이면 clean_title이 확인
@@ -161,10 +190,62 @@ class EnrollmentForm(forms.ModelForm):
 
     CUSTOM_TITLE = "__custom__"
 
+    AUTO_SESSION_FIELDS = ("first_date", "first_start", "first_end", "weekdays", "session_place")
+
+    def clean(self):
+        cleaned = super().clean()
+        self.session_slots = []
+        if cleaned.get("make_sessions"):
+            self._plan_sessions(cleaned)
+        else:
+            # 회차 자동 생성을 끄면 그 입력은 쓰지 않으므로 형식 오류(장소 100자 초과 등)로 레슨권 저장을 막지 않는다
+            # (PR #87 리뷰 P2). 화면에서도 숨긴 칸은 비활성화돼 보내지지 않는다(static/js/app.js).
+            for name in self.AUTO_SESSION_FIELDS:
+                self.errors.pop(name, None)
+                cleaned.pop(name, None)
+        return cleaned
+
+    def _plan_sessions(self, cleaned):
+        """만들 회차의 (시작, 종료) 목록을 정한다 (#76). 첫 수업 날짜를 포함해 그 날부터 고른 요일마다, 총 회차만큼."""
+        first, start, end = cleaned.get("first_date"), cleaned.get("first_start"), cleaned.get("first_end")
+        for name, value in (("first_date", first), ("first_start", start), ("first_end", end)):
+            if not value and name not in self.errors:
+                self.add_error(name, "회차를 함께 만들려면 입력하세요.")
+        total = cleaned.get("total_count")
+        if total and total > self.MAX_AUTO_SESSIONS:
+            self.add_error("total_count", f"회차를 함께 만들 때 총 회차는 {self.MAX_AUTO_SESSIONS}회까지입니다.")
+        if not (first and start and end and total) or total > self.MAX_AUTO_SESSIONS:
+            return
+        if end <= start:
+            self.add_error("first_end", "종료 시간은 시작 시간보다 늦어야 합니다.")
+            return
+        days = {int(d) for d in cleaned.get("weekdays") or []} or {first.weekday()}
+        if first.weekday() not in days:
+            self.add_error("weekdays", "첫 수업 날짜의 요일을 반복 요일에 포함하세요.")
+            return
+        tz = timezone.get_current_timezone()
+        slots, day = [], first
+        try:
+            while True:
+                if day.weekday() in days:
+                    slots.append(
+                        (
+                            timezone.make_aware(datetime.datetime.combine(day, start), tz),
+                            timezone.make_aware(datetime.datetime.combine(day, end), tz),
+                        )
+                    )
+                    if len(slots) == total:  # 마지막 회차를 만든 뒤에는 날짜를 더 넘기지 않는다
+                        break
+                day += datetime.timedelta(days=1)
+        except OverflowError:  # 날짜 범위(9999-12-31) 끝을 넘는 반복 (PR #87 리뷰 P3): 500이 아니라 폼 오류
+            self.add_error("first_date", "반복 회차가 날짜 범위를 넘습니다. 첫 수업 날짜나 총 회차를 확인하세요.")
+            return
+        self.session_slots = slots
+
     def clean_title(self):
         choice = self.cleaned_data.get("title_choice")
         if choice and choice != self.CUSTOM_TITLE:  # 선택지 밖 값은 title_choice 필드 오류로 이미 걸러짐
-            return choice
+            return self.previous_titles[choice]
         title = (self.cleaned_data.get("title") or "").strip()
         if not title:
             raise forms.ValidationError("레슨명을 입력하세요.")
