@@ -8,7 +8,20 @@
   <form method="post" class="form" novalidate>
     {% csrf_token %}
     {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% if form.previous_titles %}
+    {# 이전 레슨명 고르기 (#75). JS가 있으면 '직접 입력'을 고를 때만 새 레슨명 칸이 보인다(없으면 항상 보임) #}
+    <fieldset class="field title-choice" aria-describedby="{{ form.title_choice.auto_id }}_helptext{% if form.title_choice.errors %} {{ form.title_choice.auto_id }}_error{% endif %}"{% if form.title_choice.errors %} aria-invalid="true"{% endif %}>
+      <legend class="field-label">{{ form.title_choice.label }}<span class="req" aria-hidden="true">*</span><span class="sr-only">(필수)</span></legend>
+      <p class="helptext" id="{{ form.title_choice.auto_id }}_helptext">{{ form.title_choice.help_text }}</p>
+      {% for choice in form.title_choice %}
+      <div class="check-field"><label>{{ choice.tag }} {{ choice.choice_label }}</label></div>
+      {% endfor %}
+      {% if form.title_choice.errors %}<ul class="errorlist" id="{{ form.title_choice.auto_id }}_error">{% for e in form.title_choice.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+    </fieldset>
+    <div data-custom-toggle="{{ form.title_choice.html_name }}">{% include "ui/field.html" with field=form.title note="'직접 입력'을 고른 경우" %}</div>
+    {% else %}
     {% include "ui/field.html" with field=form.title %}
+    {% endif %}
     {% include "ui/field.html" with field=form.total_count %}
     {% include "ui/field.html" with field=form.start_date %}
     {% include "ui/field.html" with field=form.label %}
