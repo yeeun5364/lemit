@@ -26,7 +26,7 @@ from lessons.forms import (
     MakeupForm,
     SessionForm,
 )
-from lessons.models import Enrollment, Label, LessonSession
+from lessons.models import Enrollment, Label, LessonSession, SessionChangeLog
 from students.models import Student
 
 SESSION_OWNER = "enrollment__student__teacher"
@@ -153,7 +153,28 @@ def _save_session_locked(form, original=None):
             raise SaveRejected("종료된 레슨권으로는 옮길 수 없습니다. 레슨권을 다시 선택하세요.")
         session = form.save(commit=False)
         session.save(update_fields=SESSION_FORM_FIELDS)
+        _log_schedule_change(before=current, after=session)
         return session
+
+
+def _log_schedule_change(before, after):
+    """날짜·시간·장소가 바뀌었으면 변경 이력을 남긴다 (UC-11). 바꾸기 전 값은 잠근 뒤 다시 읽은 최신 값을 쓴다.
+
+    화면을 연 뒤 다른 탭에서 시간을 바꿨다면 그 값이 '변경 전'이 된다. 레슨권만 옮긴 경우는 남기지 않는다.
+    """
+    old = (before.start_at, before.end_at, before.place)
+    new = (after.start_at, after.end_at, after.place)
+    if old == new:
+        return
+    SessionChangeLog.objects.create(
+        session=after,
+        old_start_at=before.start_at,
+        old_end_at=before.end_at,
+        old_place=before.place,
+        new_start_at=after.start_at,
+        new_end_at=after.end_at,
+        new_place=after.place,
+    )
 
 
 def _after_save(request, session, verb):
@@ -202,6 +223,7 @@ def _render_session_detail(request, session, absent_form=None, status=200):
             "absent_form": absent_form or AbsentForm(),
             "absent_open": absent_form is not None,  # 결석 폼 오류가 있으면 펼친 채로
             "needs_makeup": services.needs_makeup(session),
+            "change_logs": session.change_logs.all(),
         },
         status=status,
     )
@@ -213,7 +235,7 @@ def session_detail(request, pk):
 
 
 def session_edit(request, pk):
-    """S07 회차 수정. '예정' 회차만 고친다 (완료·휴강·결석 회차의 일정 변경은 UC-11 확장)."""
+    """S07 회차 수정·일정 변경 (UC-04·UC-11). '예정' 회차만 고친다. 날짜·시간·장소가 바뀌면 변경 이력을 남긴다."""
     session = _owned_session(request, pk)
     if session.status != LessonSession.Status.SCHEDULED:
         messages.error(request, "예정 상태인 회차만 수정할 수 있습니다.")
