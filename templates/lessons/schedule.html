@@ -31,6 +31,9 @@
     <noscript><button type="submit" class="btn btn-secondary">보기</button></noscript>
   </form>
 </div>
+{% if label_without_sessions %}
+<p class="notice sched-notice">{% include "ui/icon.html" with name="info" size="sm" %}<span>'{{ label.name }}' 라벨이 붙은 레슨권에 회차가 없어 달력에 보이지 않아요. 그 레슨권으로 일정을 추가하거나, 다른 레슨권에 라벨을 붙이세요. <a href="{% url 'lessons:label_list' %}">라벨 상태 보기</a></span></p>
+{% endif %}
 
 {% if view == "month" %}
 <div class="sched-grid-wrap card card-flush">

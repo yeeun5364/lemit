@@ -313,3 +313,93 @@ class ScheduleColorTests(LabelTestCase):
             label = Label.objects.create(teacher=self.a, name=f"추가{i}", color="teal")
             make_session(make_enrollment(self.a, f"학생{i}", label), self.today, 9 + i)
         self.assertEqual(count(), few)
+
+
+class LabelCalendarHintTests(LabelTestCase):
+    """#77: 라벨이 달력에 보이는지 알려 주기. 운영에서 '라벨을 만들었는데 달력에 반영이 안 된다'는 보고는
+    라벨이 붙은 레슨권에 회차가 0개인 경우였다. 만들기 → 레슨권에 붙이기 → 회차 등록 흐름을 화면 그대로 따라간다."""
+
+    def label_row_hint(self, label):
+        html = self.client.get(reverse("lessons:label_list")).content.decode()
+        row = html.split(f'href="{reverse("lessons:label_edit", args=[label.pk])}"', 1)[1].split("</li>", 1)[0]
+        return row
+
+    def test_flow_label_then_enrollment_then_session_shows_color(self):
+        today = timezone.localdate()
+        # 1) 라벨 만들기 → 아직 레슨권에 안 붙음
+        self.client.post(reverse("lessons:label_create"), {"name": "피아노", "color": "orange"})
+        label = Label.objects.get(teacher=self.a, name="피아노")
+        row = self.label_row_hint(label)
+        self.assertIn("레슨권 0개 · 회차 0개", row)
+        self.assertIn("아직 레슨권에 붙이지 않아 달력에 보이지 않아요", row)
+
+        # 2) 레슨권에 붙이기 → 회차가 없다는 안내 (저장 메시지와 목록 모두)
+        enrollment = make_enrollment(self.a, "김하늘")
+        r = self.client.post(
+            reverse("lessons:enrollment_label", args=[enrollment.pk]), {"label": label.pk}, follow=True
+        )
+        self.assertContains(r, "아직 회차가 없어 달력에는 보이지 않아요")
+        row = self.label_row_hint(label)
+        self.assertIn("레슨권 1개 · 회차 0개", row)
+        self.assertIn("붙인 레슨권에 회차가 없어 달력에 보이지 않아요", row)
+        r = self.client.get(reverse("lessons:schedule"), {"label": label.pk})
+        self.assertTrue(r.context["label_without_sessions"])
+        self.assertContains(r, "라벨이 붙은 레슨권에 회차가 없어 달력에 보이지 않아요")
+
+        # 3) 그 레슨권으로 회차 등록 → 달력 점·목록 막대가 고른 색, 목록은 일정 바로가기
+        data = {"enrollment": enrollment.pk, "date": today.isoformat(), "start_time": "16:00", "end_time": "17:00"}
+        self.client.post(reverse("lessons:session_create"), data)
+        row = self.label_row_hint(label)
+        self.assertIn("레슨권 1개 · 회차 1개", row)
+        link = f"{reverse('lessons:schedule')}?label={label.pk}&amp;date={today.isoformat()}"
+        self.assertIn(link, row)
+        r = self.client.get(reverse("lessons:schedule"), {"label": label.pk, "date": today.isoformat()})
+        self.assertFalse(r.context["label_without_sessions"])
+        self.assertNotContains(r, "라벨이 붙은 레슨권에 회차가 없어")
+        self.assertEqual(day_cell(r, today)["dots"], ["orange"])  # 달력 점
+        self.assertContains(r, '<span class="dot lc-orange"></span>', html=False)
+        self.assertContains(r, 'class="label-bar lc-orange"', html=False)  # 그날 목록 막대
+        week = self.client.get(reverse("lessons:schedule"), {"view": "week", "date": today.isoformat()})
+        self.assertContains(week, 'class="label-bar lc-orange"', html=False)  # 주간 목록 막대
+
+    def test_attaching_label_to_enrollment_with_sessions_has_no_empty_hint(self):
+        label = Label.objects.create(teacher=self.a, name="기타", color="green")
+        enrollment = make_enrollment(self.a, "이도윤")
+        make_session(enrollment, timezone.localdate())
+        r = self.client.post(
+            reverse("lessons:enrollment_label", args=[enrollment.pk]), {"label": label.pk}, follow=True
+        )
+        self.assertContains(r, "라벨을 붙였습니다")
+        self.assertNotContains(r, "아직 회차가 없어")
+
+    def test_schedule_link_goes_to_next_session_else_last(self):
+        label = Label.objects.create(teacher=self.a, name="보컬", color="purple")
+        enrollment = make_enrollment(self.a, "박서연", label)
+        today = timezone.localdate()
+        past = today - datetime.timedelta(days=40)
+        make_session(enrollment, past)
+        self.assertIn(f"date={past.isoformat()}", self.label_row_hint(label))  # 다가오는 회차 없음 → 마지막 회차
+        soon = today + datetime.timedelta(days=45)
+        make_session(enrollment, soon)
+        make_session(enrollment, today + datetime.timedelta(days=60))
+        self.assertIn(f"date={soon.isoformat()}", self.label_row_hint(label))  # 가장 가까운 다가오는 회차
+
+    def test_archived_students_sessions_are_not_counted(self):
+        label = Label.objects.create(teacher=self.a, name="체험", color="blue")
+        enrollment = make_enrollment(self.a, "보관학생", label)
+        make_session(enrollment, timezone.localdate())
+        Student.objects.filter(pk=enrollment.student_id).update(is_active=False)  # 일정 화면에서도 빠짐
+        row = self.label_row_hint(label)
+        self.assertIn("회차 0개", row)
+        self.assertIn("붙인 레슨권에 회차가 없어", row)
+
+    def test_counts_only_my_labels(self):
+        mine = Label.objects.create(teacher=self.a, name="내라벨", color="blue")
+        theirs = Label.objects.create(teacher=self.b, name="B라벨", color="blue")
+        make_session(make_enrollment(self.b, "B학생", theirs), timezone.localdate())
+        html = self.client.get(reverse("lessons:label_list")).content.decode()
+        self.assertNotIn("B라벨", html)
+        self.assertIn("레슨권 0개 · 회차 0개", self.label_row_hint(mine))
+        r = self.client.get(reverse("lessons:schedule"), {"label": theirs.pk})  # 남의 라벨 거르기는 무시
+        self.assertIsNone(r.context["label"])
+        self.assertFalse(r.context["label_without_sessions"])
