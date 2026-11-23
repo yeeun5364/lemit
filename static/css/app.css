@@ -656,6 +656,11 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .label-hint { margin: calc(-1 * var(--space-2)) 0 0; padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + 14px + var(--space-3)); color: var(--text-muted); overflow-wrap: anywhere; }  /* 라벨이 달력에 보이는지 (#77) */
 .label-hint.is-empty { color: var(--warning-text); }
 .sched-notice { margin-bottom: var(--space-4); }  /* 라벨로 걸렀는데 회차가 없을 때 (#77) */
+.my-calendar .card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); }  /* 수강생 내 수업 달력 (#92) */
+.my-calendar .sched-grid-wrap { margin-top: var(--space-3); }
+.my-day { margin-top: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.my-day-title { font-size: var(--fs-md); font-weight: 700; margin: 0; }
+.my-day-empty { margin: 0; }
 .color-field { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
 .color-field legend { padding: 0; }
 .title-choice { border: 0; padding: 0; margin: 0; min-inline-size: 0; }  /* 이전 레슨명 고르기 (#75) */

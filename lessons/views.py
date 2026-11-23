@@ -549,21 +549,7 @@ def schedule(request):
     if view == "month":
         weeks = sch.month_weeks(selected)
         days = sch.sessions_by_day(request.user, weeks[0][0], weeks[-1][-1], student and student.pk, label and label.pk)
-        grid = [
-            [
-                {
-                    "date": d,
-                    "in_month": d.month == selected.month,
-                    "is_today": d == today,
-                    "is_selected": d == selected,
-                    "count": len(days.get(d, [])),
-                    "dots": sch.day_dots(days.get(d, [])),
-                    "url": link(date=d.isoformat()),
-                }
-                for d in week
-            ]
-            for week in weeks
-        ]
+        grid = sch.month_grid(selected, today, days, lambda d: link(date=d.isoformat()))
         prev_date, next_date = sch.add_months(selected, -1), sch.add_months(selected, 1)
         context = {"grid": grid, "day_sessions": days.get(selected, [])}
     else:

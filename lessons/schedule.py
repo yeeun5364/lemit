@@ -68,23 +68,52 @@ def day_dots(sessions):
     return dots[:MAX_DOTS]
 
 
-def sessions_by_day(teacher, first_day, last_day, student_id=None, label_id=None):
-    """first_day~last_day(포함) 사이의 내 회차를 {날짜: [회차, ...]}로. 각 날 안은 시작 시각 순."""
+def _group_by_day(qs, first_day, last_day):
+    """회차 조회 결과를 first_day~last_day(포함) 안에서 {날짜: [회차, ...]}로. 각 날 안은 시작 시각 순."""
     qs = (
-        LessonSession.objects.filter(
-            enrollment__student__teacher=teacher,
-            enrollment__student__is_active=True,
+        qs.filter(
             start_at__gte=_local_midnight(first_day),
             start_at__lt=_local_midnight(last_day + datetime.timedelta(days=1)),
         )
         .select_related("enrollment__student", "enrollment__label", "makeup")
         .order_by("start_at", "id")
     )
-    if student_id:
-        qs = qs.filter(enrollment__student_id=student_id)
-    if label_id:
-        qs = qs.filter(enrollment__label_id=label_id)
     days = defaultdict(list)
     for s in qs:
         days[timezone.localtime(s.start_at).date()].append(s)
     return days
+
+
+def sessions_by_day(teacher, first_day, last_day, student_id=None, label_id=None):
+    """강사 일정: first_day~last_day(포함) 사이의 내 회차를 {날짜: [회차, ...]}로 (보관 수강생 제외)."""
+    qs = LessonSession.objects.filter(enrollment__student__teacher=teacher, enrollment__student__is_active=True)
+    if student_id:
+        qs = qs.filter(enrollment__student_id=student_id)
+    if label_id:
+        qs = qs.filter(enrollment__label_id=label_id)
+    return _group_by_day(qs, first_day, last_day)
+
+
+def student_sessions_by_day(student, first_day, last_day):
+    """수강생 화면(#92): 이 수강생 기록의 회차만.
+    수강생 기록은 서버가 로그인 계정에서 정하고 요청 값으로 바꿀 수 없다."""
+    return _group_by_day(LessonSession.objects.filter(enrollment__student=student), first_day, last_day)
+
+
+def month_grid(selected, today, days, url_for):
+    """월간 달력 칸 목록 (강사 S05·수강생 S16 공용). url_for(date) → 그 날짜를 고르는 주소."""
+    return [
+        [
+            {
+                "date": d,
+                "in_month": d.month == selected.month,
+                "is_today": d == today,
+                "is_selected": d == selected,
+                "count": len(days.get(d, [])),
+                "dots": day_dots(days.get(d, [])),
+                "url": url_for(d),
+            }
+            for d in week
+        ]
+        for week in month_weeks(selected)
+    ]
