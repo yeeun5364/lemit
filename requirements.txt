@@ -8,3 +8,5 @@ whitenoise==6.12.0
 scikit-learn==1.9.1
 joblib==1.6.0
 numpy==2.5.5
+# 수강생 초대 QR (#84): 순수 파이썬, 서버에서 SVG 생성 (토큰을 외부 서비스로 보내지 않음)
+segno==1.6.1

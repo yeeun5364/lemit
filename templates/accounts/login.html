@@ -11,6 +11,6 @@
     <button type="submit" class="btn btn-primary btn-block">로그인</button>
   </form>
   <p class="auth-links"><a href="{% url 'password_reset' %}">비밀번호를 잊으셨나요?</a></p>
-  <p class="auth-links">처음이신가요? <a href="{% url 'signup' %}">회원가입</a></p>
+  <p class="auth-links">처음이신가요? <a href="{% url 'signup' %}{% if request.GET.next %}?next={{ request.GET.next|urlencode }}{% endif %}">회원가입</a></p>
 </section>
 {% endblock %}

@@ -9,6 +9,7 @@ from django.contrib.auth.views import LoginView
 from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import FormView
 
 from accounts.forms import LemitPasswordResetForm, LoginForm, SignupForm
@@ -29,6 +30,20 @@ class SignupView(FormView):
     form_class = SignupForm
     template_name = "accounts/signup.html"
     success_url = reverse_lazy("home")
+
+    def _next(self):
+        """가입 뒤 돌아갈 주소(QR 연결 요청 등, #84). 이 사이트 안의 주소만 허용한다 (열린 리다이렉트 방지)."""
+        target = self.request.POST.get("next") or self.request.GET.get("next") or ""
+        ok = url_has_allowed_host_and_scheme(
+            target, allowed_hosts={self.request.get_host()}, require_https=self.request.is_secure()
+        )
+        return target if ok else ""
+
+    def get_success_url(self):
+        return self._next() or str(self.success_url)
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(next=self._next(), **kwargs)
 
     def dispatch(self, request, *args, **kwargs):
         if request.user.is_authenticated:

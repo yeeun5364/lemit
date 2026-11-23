@@ -53,6 +53,7 @@ class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
     def get_context_data(self, **kwargs):
         from lessons.models import Enrollment, LessonSession
         from lessons.services import makeup_needed_sessions, scheduled_sessions_of
+        from portal.teacher_views import invite_panel
 
         # 수강생은 이미 로그인한 강사 것으로 좁혀 찾았으므로 그 수강생의 레슨권·회차만 가져온다
         enrollments = list(Enrollment.objects.filter(student=self.object).select_related("label").with_usage())
@@ -68,6 +69,7 @@ class StudentDetailView(TeacherScopedQuerysetMixin, DetailView):
             sessions=sessions,
             scheduled_count=scheduled_sessions_of(self.object).count(),
             makeup_needed=list(makeup_needed_sessions(self.object)),  # UC-08 '보강 필요' 모아 보기
+            **invite_panel(self.request, self.object),  # 수강생 계정 연결·QR 초대 (#84)
             **kwargs,
         )
 
