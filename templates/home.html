@@ -64,7 +64,7 @@
           <a class="row" href="{% url 'inbox:detail' c.pk %}">
             <span class="avatar" aria-hidden="true">{{ c.student.name|slice:":1" }}</span>
             <span class="row-main">
-              <span class="row-title">{{ c.student.name }} · {{ c.subject }}</span>
+              <span class="row-title">{{ c.student.name }}{% if c.subject %} · {{ c.subject }}{% endif %}</span>
               {% if c.latest_body %}<span class="row-sub">{{ c.latest_body|truncatechars:60 }}</span>{% endif %}
             </span>
             <span class="row-side">

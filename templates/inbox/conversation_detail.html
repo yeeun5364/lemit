@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ conversation.subject }}{% endblock %}
+{% block title %}{% firstof conversation.subject conversation.student.name %}{% endblock %}
 {% block content_class %} content-wide{% endblock %}
 {% block back %}<a class="back-link" href="{% url 'inbox:list' %}{% if current_label %}?label={{ current_label }}{% endif %}">{% include "ui/icon.html" with name="chevron-left" size="sm" %}메시지함</a>{% endblock %}
 {% block page_title %}메시지함{% endblock %}
@@ -12,7 +12,7 @@
       <div class="detail-people">
         <span class="avatar avatar-mint" aria-hidden="true">{{ conversation.student.name|slice:":1" }}</span>
         <div>
-          <h2 id="conv-title" class="detail-title">{{ conversation.student.name }} · {{ conversation.subject }}</h2>
+          <h2 id="conv-title" class="detail-title">{{ conversation.student.name }}{% if conversation.subject %} · {{ conversation.subject }}{% endif %}</h2>
           <div class="detail-meta">
             <span>수강생</span>
             {% if conversation.student.is_minor %}<span class="badge badge-amber">미성년자</span>{% endif %}

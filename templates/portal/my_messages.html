@@ -1,37 +1,29 @@
 {% extends "base.html" %}
 {% block title %}메시지{% endblock %}
-{% block page_title %}메시지{% endblock %}
-{% block page_desc %}<p class="page-desc">담당 강사 {{ profile.teacher.name }}님과 주고받은 메시지예요.</p>{% endblock %}
+{% block page_title %}{{ profile.teacher.name }}{% endblock %}
+{% block page_desc %}<p class="page-desc">담당 강사</p>{% endblock %}
 {% block content %}
-<section class="card section" aria-labelledby="list-title">
-  <div class="card-head"><h2 id="list-title" class="card-title">대화</h2></div>
-  {% if conversations %}
-  <ul class="rows">
-    {% for c in conversations %}
-    {% with last=c.last_message %}
-    <li><a class="row" href="{% url 'portal:conversation' c.pk %}">
-      <span class="row-main"><span class="row-title">{{ c.subject }}</span><span class="row-sub">{% if last %}{% if last.is_from_student %}나: {% else %}{{ profile.teacher.name }}: {% endif %}{{ last.body|truncatechars:40 }}{% endif %}</span></span>
-      <span class="row-side"><span class="muted small">{{ c.last_message_at|date:"n/j H:i" }}</span>{% if last and not last.is_from_student %}<span class="badge badge-blue">새 답장</span>{% endif %}</span>
-    </a></li>
-    {% endwith %}
-    {% endfor %}
-  </ul>
+{% comment %} S17 대화방 (#95): 담당 강사와 한 대화방. 제목 없이 아래 입력창으로 보낸다.
+   data-poll-url: 화면을 보는 동안 새 메시지를 확인하는 주소(static/js/app.js, 10초 → 30초 → 60초, 10분 입력 없으면 멈춤). {% endcomment %}
+<section class="card chat" aria-label="{{ profile.teacher.name }} 강사와의 대화" data-chat data-poll-url="{% url 'portal:messages_poll' %}">
+  {% if thread %}
+  <ol class="chat-list" data-chat-list data-last-id="{{ last_id }}" aria-live="polite">{% include "portal/_chat_bubbles.html" %}</ol>
   {% else %}
-  <div class="empty-state"><span class="empty-icon is-neutral">{% include "ui/icon.html" with name="inbox" %}</span><p class="empty-title">아직 주고받은 메시지가 없어요</p></div>
+  <ol class="chat-list" data-chat-list data-last-id="0" aria-live="polite"></ol>
+  <p class="chat-empty muted small" data-chat-empty>아직 주고받은 메시지가 없어요. 수업 일정이나 궁금한 점을 보내 보세요.</p>
   {% endif %}
-</section>
-
-<section class="card form-card section" aria-labelledby="new-title">
-  <h2 id="new-title" class="card-title">새 메시지</h2>
+  <p class="chat-paused muted small" data-chat-paused hidden>한동안 입력이 없어 새 메시지 확인을 멈췄어요. <a href="{% url 'portal:messages' %}#chat-end">새로고침</a>하면 새 메시지를 볼 수 있어요.</p>
+  <span id="chat-end"></span>
   {% if profile.is_active %}
-  <form method="post" class="form" novalidate data-once>
+  <form method="post" class="chat-composer" novalidate data-once>
     {% csrf_token %}
-    {% include "ui/field.html" with field=form.subject %}
-    {% include "ui/field.html" with field=form.body %}
-    <div class="form-actions"><button type="submit" class="btn btn-primary">담당 강사에게 보내기</button></div>
+    <label class="sr-only" for="{{ form.body.id_for_label }}">메시지</label>
+    {{ form.body }}
+    <button type="submit" class="btn btn-primary">보내기</button>
+    {% if form.body.errors %}<div class="chat-error" role="alert">{{ form.body.errors|join:" " }}</div>{% endif %}
   </form>
   {% else %}
-  <p class="muted">수강이 종료된 상태라 메시지를 보낼 수 없어요.</p>
+  <p class="muted small">수강이 종료된 상태라 메시지를 보낼 수 없어요.</p>
   {% endif %}
 </section>
 {% endblock %}

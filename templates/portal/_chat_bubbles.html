@@ -1,0 +1,9 @@
+{% comment %} 대화방 말풍선 (#95). 첫 화면과 자동 갱신 응답이 같이 쓴다. m.day_break가 있으면 그 날짜 구분선을 먼저.
+   수강생 화면이라 '나'(수강생)는 오른쪽, 강사는 왼쪽. AI 분류는 보여 주지 않는다(강사 참고용, UC-17). {% endcomment %}
+{% for m in thread %}
+{% if m.day_break %}<li class="chat-day" role="separator"><span>{{ m.day_break|date:"Y년 n월 j일 l" }}</span></li>{% endif %}
+<li class="chat-msg {% if m.is_from_student %}is-mine{% else %}is-theirs{% endif %}" data-id="{{ m.pk }}">
+  <div class="chat-bubble"><span class="sr-only">{% if m.is_from_student %}나{% else %}{{ profile.teacher.name }}{% endif %}: </span><div class="pre">{{ m.body }}</div></div>
+  <time class="chat-time" datetime="{{ m.sent_at|date:'c' }}">{{ m.sent_at|time:"A g:i" }}</time>
+</li>
+{% endfor %}

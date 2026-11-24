@@ -22,7 +22,9 @@ class Conversation(models.Model):
     student = models.ForeignKey(
         "students.Student", verbose_name="수강생", on_delete=models.PROTECT, related_name="conversations"
     )
-    subject = models.CharField("제목", max_length=100)
+    # 비어 있으면 그 수강생과 강사의 '대화방'(#95). 수강생 화면은 제목 없이 이 대화 하나로 보낸다.
+    # 강사 × 수강생 × 제목 UNIQUE라 제목 없는 대화도 수강생마다 하나뿐이다. 예전 제목 대화는 그대로 둔다.
+    subject = models.CharField("제목", max_length=100, blank=True)
     last_message_at = models.DateTimeField("마지막 메시지", default=timezone.now)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -38,7 +40,7 @@ class Conversation(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.student} · {self.subject}"
+        return f"{self.student} · {self.subject}" if self.subject else str(self.student)
 
     def clean(self):
         # 저장 직전 재검증 (ERD 2-5): 대화의 수강생은 같은 강사의 수강생이어야 한다

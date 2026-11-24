@@ -5,11 +5,13 @@
 - 수강생에게는 AI 분류를 보여 주지 않는다. 분류는 강사가 메시지함에서 참고용으로 본다(UC-17).
 """
 
+import re
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_not_required
-from django.db.models import Prefetch
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 
@@ -18,7 +20,7 @@ from inbox.models import Conversation, Message
 from lessons import schedule as sch
 from lessons.models import Enrollment, LessonSession
 from portal import invites
-from portal.forms import FollowUpForm, NewMessageForm
+from portal.forms import ChatForm
 from portal.models import StudentInvite
 
 PAST_LIMIT = 10
@@ -80,44 +82,75 @@ def my_lessons(request):
     return render(request, "portal/my_lessons.html", context)
 
 
+def _my_thread(profile):
+    """이 수강생과 담당 강사 사이의 모든 메시지(예전 제목 대화 포함)를 시간순으로 (#95).
+    데이터는 대화별로 그대로 있다."""
+    return Message.objects.filter(conversation__student=profile, conversation__teacher=profile.teacher).order_by(
+        "sent_at", "id"
+    )
+
+
+def _with_day_breaks(thread, previous=None):
+    """말풍선 목록에 날짜 구분선 표시를 붙인다. previous: 이 목록 바로 앞 메시지(자동 갱신으로 이어 붙일 때)."""
+    last_day = timezone.localtime(previous.sent_at).date() if previous else None
+    for m in thread:
+        day = timezone.localtime(m.sent_at).date()
+        m.day_break = day if day != last_day else None
+        last_day = day
+    return thread
+
+
 def my_messages(request):
-    """S17 내 메시지: 담당 강사와의 대화 목록 + 새 메시지. 받는 강사는 연결된 수강생 기록의 강사로 고정."""
+    """S17 메시지 = 담당 강사와의 대화방 하나 (#95). 제목 없이 보내고, 예전 제목 대화도 한 대화방에 시간순으로 보인다.
+
+    새 메시지는 그 수강생의 '제목 없는 대화'(강사 × 수강생 × 제목 "" UNIQUE라 하나뿐)에 저장되고 기존 모델로 분류된다.
+    받는 강사는 연결된 수강생 기록의 강사로 고정. 수강생에게는 AI 분류를 보여 주지 않는다.
+    """
     profile = _profile(request)
-    form = NewMessageForm(request.POST or None)
+    form = ChatForm(request.POST or None)
     if request.method == "POST" and not _closed_notice(request, profile) and form.is_valid():
-        message = inbox_services.add_student_message(
-            teacher=profile.teacher,
-            student=profile,
-            subject=form.cleaned_data["subject"],
-            body=form.cleaned_data["body"],
+        inbox_services.add_student_message(
+            teacher=profile.teacher, student=profile, subject="", body=form.cleaned_data["body"]
         )
-        messages.success(request, f"담당 강사({profile.teacher.name})에게 메시지를 보냈습니다.")
-        return redirect("portal:conversation", pk=message.conversation_id)
-    conversations = list(
-        Conversation.objects.filter(student=profile, teacher=profile.teacher).prefetch_related(
-            Prefetch("messages", queryset=Message.objects.order_by("sent_at", "id"))
-        )
+        return redirect(reverse("portal:messages") + "#chat-end")
+    thread = _with_day_breaks(list(_my_thread(profile)))
+    # 자동 갱신 기준은 '본 메시지 중 가장 큰 번호'. 화면 순서(보낸 시각)의 마지막 칸 번호를 쓰면, 시각과 번호 순서가
+    # 다른 데이터(예전 제목 대화, 시각을 조정한 데모)에서 이미 보인 메시지가 다시 붙을 수 있다 (#96 검토)
+    last_id = max((m.pk for m in thread), default=0)
+    context = {"profile": profile, "form": form, "thread": thread, "last_id": last_id}
+    return render(request, "portal/my_messages.html", context)
+
+
+ASCII_CURSOR = re.compile(r"[0-9]{1,18}")  # 자동 갱신 커서: DB 정수 범위 안의 ASCII 숫자
+
+
+def my_messages_poll(request):
+    """대화방 자동 갱신 (#95): ?after=<마지막으로 본 메시지 id> 이후의 내 대화방 메시지만 말풍선 HTML로 돌려준다.
+
+    대화방을 열어 둔 화면에서만 부른다(간격·멈춤은 static/js/app.js). 새 메시지가 없으면 빈 응답이라 가볍다.
+    조회 범위는 로그인 계정에 연결된 수강생 기록의 대화뿐이라, after 값을 바꿔도 다른 수강생 메시지는 나오지 않는다.
+    """
+    profile = _profile(request)
+    after = request.GET.get("after", "")
+    # ASCII 숫자 1~18자리만 받는다. str.isdigit()은 '²' 같은 위 첨자도 참이라 int()에서 500이 났다 (#96 재검토)
+    after_id = int(after) if ASCII_CURSOR.fullmatch(after) else 0
+    mine = _my_thread(profile)
+    # 번호 순으로 받아야 50건씩 나눠 받아도 빠지거나 겹치지 않는다. 기준은 받은 것 중 가장 큰 번호
+    new = list(mine.filter(pk__gt=after_id).order_by("id")[:50])
+    if not new:
+        return JsonResponse({"count": 0, "last_id": after_id, "html": ""})
+    previous = mine.filter(pk=after_id).first()
+    html = render_to_string(
+        "portal/_chat_bubbles.html", {"thread": _with_day_breaks(new, previous), "profile": profile}, request=request
     )
-    for c in conversations:
-        thread = list(c.messages.all())
-        c.last_message = thread[-1] if thread else None
-    return render(
-        request, "portal/my_messages.html", {"profile": profile, "form": form, "conversations": conversations}
-    )
+    return JsonResponse({"count": len(new), "last_id": max(m.pk for m in new), "html": html})
 
 
 def my_conversation(request, pk):
-    """S18 대화: 강사 답장 확인, 같은 대화에 이어 보내기."""
+    """예전 S18 대화 주소 (#95): 내 대화면 대화방으로 이어 준다. 다른 수강생·다른 강사의 대화는 그대로 404."""
     profile = _profile(request)
-    conversation = get_object_or_404(Conversation, pk=pk, student=profile, teacher=profile.teacher)
-    form = FollowUpForm(request.POST or None)
-    if request.method == "POST" and not _closed_notice(request, profile) and form.is_valid():
-        inbox_services.add_student_followup(conversation=conversation, body=form.cleaned_data["body"])
-        messages.success(request, "메시지를 보냈습니다.")
-        return redirect("portal:conversation", pk=conversation.pk)
-    thread = conversation.messages.order_by("sent_at", "id")
-    context = {"profile": profile, "conversation": conversation, "thread": thread, "form": form}
-    return render(request, "portal/conversation.html", context)
+    get_object_or_404(Conversation, pk=pk, student=profile, teacher=profile.teacher)
+    return redirect(reverse("portal:messages") + "#chat-end")
 
 
 @login_not_required

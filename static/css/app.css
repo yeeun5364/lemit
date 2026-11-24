@@ -670,6 +670,22 @@ a.badge:hover { text-decoration: none; filter: brightness(0.97); }
 .qr-img svg { width: 200px; height: 200px; }
 .qr-text { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .qr-url, .mono-sm { font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.chat { display: flex; flex-direction: column; gap: var(--space-3); padding-bottom: 0; }  /* 수강생 대화방 (#95) */
+.chat-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.chat-day { align-self: center; margin: var(--space-3) 0 var(--space-1); }
+.chat-day span { font-size: var(--fs-xs); color: var(--text-muted); background: var(--neutral-soft); padding: 2px 10px; border-radius: 999px; }
+.chat-msg { display: flex; align-items: flex-end; gap: 6px; max-width: 100%; }
+.chat-msg.is-mine { flex-direction: row-reverse; align-self: flex-end; }
+.chat-msg.is-theirs { align-self: flex-start; }
+.chat-bubble { max-width: min(72vw, 520px); padding: 9px 13px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); overflow-wrap: anywhere; }
+.chat-msg.is-mine .chat-bubble { background: var(--primary-soft); border-color: transparent; border-bottom-right-radius: 4px; }
+.chat-msg.is-theirs .chat-bubble { border-bottom-left-radius: 4px; }
+.chat-time { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; }
+.chat-empty, .chat-paused { margin: 0; text-align: center; }
+.chat-composer { position: sticky; bottom: 0; display: flex; gap: var(--space-2); align-items: flex-end; flex-wrap: wrap; padding: var(--space-3) 0 calc(var(--space-3) + env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--border); margin: 0; }
+.chat-composer textarea { flex: 1 1 200px; min-width: 0; min-height: 44px; max-height: 160px; resize: vertical; }
+.chat-composer .btn { flex: 0 0 auto; min-height: 44px; }
+.chat-error { flex-basis: 100%; color: var(--danger-text); font-size: var(--fs-sm); }
 .color-field { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
 .color-field legend { padding: 0; }
 .title-choice { border: 0; padding: 0; margin: 0; min-inline-size: 0; }  /* 이전 레슨명 고르기 (#75) */

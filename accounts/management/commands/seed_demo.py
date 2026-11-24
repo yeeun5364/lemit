@@ -280,9 +280,11 @@ class Command(BaseCommand):
             makeup.full_clean()  # 보강 규칙(휴강·미차감 결석만, 같은 강사) 검증
             makeup.save()
 
-        for name, subject, body, hours_ago, read, reply in MESSAGES:
+        # 수강생 화면이 '제목 없는 대화방' 하나로 주고받으므로(#95) 데모 메시지도 수강생마다 대화방 하나에 넣는다.
+        # MESSAGES의 제목은 시나리오 설명용으로만 남겨 둔다.
+        for name, _subject, body, hours_ago, read, reply in MESSAGES:
             sent = now - datetime.timedelta(hours=hours_ago)
-            msg = services.add_student_message(teacher=teacher, student=students[name], subject=subject, body=body)
+            msg = services.add_student_message(teacher=teacher, student=students[name], subject="", body=body)
             Message.objects.filter(pk=msg.pk).update(sent_at=sent, read_at=sent if read else None)
             last = sent
             if reply:
@@ -290,6 +292,10 @@ class Command(BaseCommand):
                 last = sent + datetime.timedelta(minutes=30)
                 Message.objects.filter(pk=answer.pk).update(sent_at=last)
             Conversation.objects.filter(pk=msg.conversation_id).update(last_message_at=last)
+        # 한 대화방에 여러 메시지가 모이므로 마지막 시각은 실제 마지막 메시지로 다시 맞춘다
+        for conv in Conversation.objects.filter(teacher=teacher):
+            latest = conv.messages.order_by("-sent_at").values_list("sent_at", flat=True).first()
+            Conversation.objects.filter(pk=conv.pk).update(last_message_at=latest)
 
         return {
             "수강생": Student.objects.filter(teacher=teacher).count(),
