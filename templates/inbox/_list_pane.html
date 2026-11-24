@@ -18,7 +18,7 @@
         {% if c.unread %}<span class="unread-dot" aria-hidden="true"></span>{% else %}<span class="read-spacer" aria-hidden="true"></span>{% endif %}
         <span class="conv-body">
           <span class="conv-top">
-            <span class="conv-title">{{ c.student.name }} · {{ c.subject }}</span>
+            <span class="conv-title">{{ c.student.name }}{% if c.subject %} · {{ c.subject }}{% endif %}</span>
             <span class="conv-time"><time datetime="{{ c.last_message_at|date:'c' }}">{{ c.last_message_at|date:"n/j H:i" }}</time></span>
           </span>
           {% if c.latest_body %}<span class="conv-preview">{{ c.latest_body|truncatechars:60 }}</span>{% endif %}

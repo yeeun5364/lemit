@@ -7,6 +7,7 @@ app_name = "portal"
 urlpatterns = [
     path("", views.my_lessons, name="lessons"),
     path("messages/", views.my_messages, name="messages"),
+    path("messages/poll/", views.my_messages_poll, name="messages_poll"),  # 대화방 자동 갱신 (#95)
     path("messages/<int:pk>/", views.my_conversation, name="conversation"),
     path("join/<str:token>/", views.join, name="join"),  # QR 연결 요청 (#84), 로그인 전에도 열림
 ]

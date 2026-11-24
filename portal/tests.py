@@ -131,59 +131,122 @@ class MyLessonsTests(PortalTestCase):
 
 
 class MessageFlowTests(PortalTestCase):
+    """#95: 담당 강사와 제목 없는 대화방 하나. 예전 제목 대화도 한 대화방에 시간순, 자동 갱신은 내 메시지만."""
+
+    def send(self, body):
+        return self.client.post(reverse("portal:messages"), {"body": body}, follow=True)
+
     def test_full_flow_student_message_teacher_sees_ai_reply_student_sees_reply(self):
-        # 1) 수강생이 담당 강사에게 메시지 → 기존 모델로 분류
+        # 1) 수강생이 제목 없이 보냄 → 제목 없는 대화방 하나에 저장, 기존 모델로 분류
         self.login(self.me_account)
-        r = self.client.post(
-            reverse("portal:messages"),
-            {"subject": "다음 주 수업", "body": "다음 주 수요일 수업을 금요일로 옮길 수 있을까요?"},
-            follow=True,
-        )
+        r = self.send("다음 주 수요일 수업을 금요일로 옮길 수 있을까요?")
+        self.assertRedirects(r, reverse("portal:messages") + "#chat-end")
         conv = Conversation.objects.get(student=self.me)
-        self.assertEqual(conv.teacher, self.teacher)  # 받는 강사는 연결된 기록의 강사로 고정
-        self.assertRedirects(r, reverse("portal:conversation", args=[conv.pk]))
+        self.assertEqual((conv.teacher, conv.subject), (self.teacher, ""))  # 받는 강사는 연결된 기록의 강사
         msg = conv.messages.get()
         self.assertEqual(msg.sender, Message.Sender.STUDENT)
         self.assertTrue(msg.predicted_label)  # 실제 모델 분류
         self.assertIsNotNone(msg.confidence)
         self.assertNotContains(r, "AI 예측")  # 수강생에게는 분류를 보여 주지 않음
+        self.assertNotContains(r, 'name="subject"')  # 제목 입력 없음
 
-        # 2) 강사가 메시지함에서 분류 배지·확신도 확인 후 답장
+        # 2) 강사 메시지함: 제목 없는 대화는 이름만, 분류 배지·확신도, 답장
         self.login(self.teacher)
-        detail = self.client.get(reverse("inbox:detail", args=[conv.pk]))
-        self.assertContains(detail, msg.get_predicted_label_display())
-        self.assertContains(detail, "AI 예측·참고용")
+        inbox = self.client.get(reverse("inbox:list")).content.decode()
+        self.assertIn('<span class="conv-title">김하늘</span>', inbox)
+        detail = self.client.get(reverse("inbox:detail", args=[conv.pk])).content.decode()
+        self.assertIn('<h2 id="conv-title" class="detail-title">김하늘</h2>', detail)
+        self.assertIn(msg.get_predicted_label_display(), detail)
+        self.assertIn("AI 예측·참고용", detail)
         self.client.post(reverse("inbox:reply", args=[conv.pk]), {"body": "금요일 같은 시간 가능합니다."})
 
-        # 3) 수강생이 자기 대화에서 답장 확인, 이어 보내면 다시 분류
+        # 3) 수강생 대화방에서 답장 확인, 이어 보내면 같은 대화방에 저장되고 다시 분류
         self.login(self.me_account)
-        self.assertContains(self.client.get(reverse("portal:messages")), "새 답장")
-        thread = self.client.get(reverse("portal:conversation", args=[conv.pk]))
-        self.assertContains(thread, "금요일 같은 시간 가능합니다.")
-        self.assertContains(thread, "박강사 (담당 강사)")
-        self.client.post(reverse("portal:conversation", args=[conv.pk]), {"body": "감사합니다!"})
+        room = self.client.get(reverse("portal:messages"))
+        self.assertContains(room, "금요일 같은 시간 가능합니다.")
+        self.assertContains(room, "chat-msg is-theirs")
+        self.send("감사합니다!")
+        self.assertEqual(Conversation.objects.filter(student=self.me).count(), 1)
         follow = conv.messages.order_by("-id").first()
         self.assertEqual((follow.sender, follow.body), (Message.Sender.STUDENT, "감사합니다!"))
         self.assertTrue(follow.predicted_label)
 
-    def test_cannot_see_or_post_to_others_conversation(self):
-        peer_conv = Conversation.objects.create(teacher=self.teacher, student=self.peer, subject="이서준 질문")
-        Message.objects.create(conversation=peer_conv, sender=Message.Sender.STUDENT, body="비밀 내용")
-        other_student = Student.objects.create(teacher=self.other_teacher, name="김하늘")
-        other_conv = Conversation.objects.create(teacher=self.other_teacher, student=other_student, subject="다른 강사")
+    def test_old_subject_conversations_shown_in_one_room_in_time_order(self):
+        old = Conversation.objects.create(teacher=self.teacher, student=self.me, subject="수업 요일 변경")
+        t0 = timezone.now() - datetime.timedelta(days=2)
+        Message.objects.create(conversation=old, sender=Message.Sender.STUDENT, body="예전 질문", sent_at=t0)
+        Message.objects.create(
+            conversation=old, sender=Message.Sender.TEACHER, body="예전 답장", sent_at=t0 + datetime.timedelta(hours=1)
+        )
         self.login(self.me_account)
-        lst = self.client.get(reverse("portal:messages"))
-        self.assertNotContains(lst, "이서준 질문")
-        self.assertNotContains(lst, "다른 강사")
+        self.send("새 질문")
+        html = self.client.get(reverse("portal:messages")).content.decode()
+        self.assertLess(html.index("예전 질문"), html.index("예전 답장"))
+        self.assertLess(html.index("예전 답장"), html.index("새 질문"))
+        self.assertEqual(html.count('class="chat-day"'), 2)  # 날짜가 다른 두 묶음
+        self.assertNotIn("수업 요일 변경", html)  # 제목은 수강생 화면에 보이지 않음
+        self.assertEqual(Conversation.objects.filter(student=self.me).count(), 2)  # 데이터는 그대로
+
+    def test_old_conversation_url_redirects_to_room(self):
+        old = Conversation.objects.create(teacher=self.teacher, student=self.me, subject="예전")
+        self.login(self.me_account)
+        r = self.client.get(reverse("portal:conversation", args=[old.pk]))
+        self.assertRedirects(r, reverse("portal:messages") + "#chat-end")
+
+    def test_others_messages_never_appear(self):
+        peer_conv = Conversation.objects.create(teacher=self.teacher, student=self.peer, subject="")
+        Message.objects.create(conversation=peer_conv, sender=Message.Sender.STUDENT, body="이서준의 비밀 내용")
+        other_student = Student.objects.create(teacher=self.other_teacher, name="김하늘")
+        other_conv = Conversation.objects.create(teacher=self.other_teacher, student=other_student, subject="")
+        Message.objects.create(conversation=other_conv, sender=Message.Sender.STUDENT, body="다른 강사 대화")
+        self.login(self.me_account)
+        room = self.client.get(reverse("portal:messages"))
+        self.assertNotContains(room, "이서준의 비밀 내용")
+        self.assertNotContains(room, "다른 강사 대화")
+        poll = self.client.get(reverse("portal:messages_poll"), {"after": "0"}).json()
+        self.assertEqual(poll["count"], 0)
         for conv in (peer_conv, other_conv):
             url = reverse("portal:conversation", args=[conv.pk])
             self.assertEqual(self.client.get(url).status_code, 404)
             self.assertEqual(self.client.post(url, {"body": "끼어들기"}).status_code, 404)
         self.assertFalse(Message.objects.filter(body="끼어들기").exists())
 
+    def test_poll_returns_only_new_messages_after_id(self):
+        self.login(self.me_account)
+        self.send("첫 메시지")
+        first = Message.objects.get(body="첫 메시지")
+        empty = self.client.get(reverse("portal:messages_poll"), {"after": first.pk}).json()
+        self.assertEqual((empty["count"], empty["html"], empty["last_id"]), (0, "", first.pk))
+        reply = Message.objects.create(conversation=first.conversation, sender=Message.Sender.TEACHER, body="강사 답장")
+        d = self.client.get(reverse("portal:messages_poll"), {"after": first.pk}).json()
+        self.assertEqual((d["count"], d["last_id"]), (1, reply.pk))
+        self.assertIn("강사 답장", d["html"])
+        self.assertIn("is-theirs", d["html"])
+        self.assertNotIn("첫 메시지", d["html"])
+        self.assertNotIn("chat-day", d["html"])  # 같은 날이면 날짜 구분선 없음
+        bad = self.client.get(reverse("portal:messages_poll"), {"after": "abc"}).json()
+        self.assertEqual(bad["count"], 2)  # 잘못된 값은 처음부터
+
+    def test_poll_and_room_are_student_only(self):
+        self.login(self.teacher)
+        self.assertEqual(self.client.get(reverse("portal:messages_poll")).status_code, 404)
+        self.client.logout()
+        r = self.client.get(reverse("portal:messages_poll"))
+        self.assertEqual(r.status_code, 302)
+        self.assertIn(reverse("login"), r["Location"])
+
+    def test_room_page_has_composer_and_poll_hooks(self):
+        self.login(self.me_account)
+        html = self.client.get(reverse("portal:messages")).content.decode()
+        self.assertIn("data-chat", html)
+        self.assertIn(f'data-poll-url="{reverse("portal:messages_poll")}"', html)
+        self.assertIn("data-chat-input", html)
+        self.assertIn("아직 주고받은 메시지가 없어요", html)
+        self.assertIn('id="chat-end"', html)
+
     def test_empty_body_is_error(self):
         self.login(self.me_account)
-        r = self.client.post(reverse("portal:messages"), {"subject": "제목", "body": "   "})
+        r = self.client.post(reverse("portal:messages"), {"body": "   "})
         self.assertEqual(r.status_code, 200)
         self.assertIn("body", r.context["form"].errors)
         self.assertFalse(Message.objects.exists())
@@ -192,7 +255,7 @@ class MessageFlowTests(PortalTestCase):
         Student.objects.filter(pk=self.me.pk).update(is_active=False)
         self.login(self.me_account)
         self.assertEqual(self.client.get(reverse("portal:lessons")).status_code, 200)
-        r = self.client.post(reverse("portal:messages"), {"subject": "제목", "body": "내용"}, follow=True)
+        r = self.send("내용")
         self.assertContains(r, "수강이 종료된 상태라 메시지를 보낼 수 없습니다")
         self.assertFalse(Message.objects.exists())
 

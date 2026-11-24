@@ -103,6 +103,66 @@
     sync();
   });
 
+  /* 4-3. 수강생 대화방 (#95): 맨 아래로 이동, PC는 Enter 전송, 화면을 보는 동안 새 메시지 확인.
+     확인 간격은 10초 → (새 메시지가 없으면) 30초 → 60초, 새 메시지가 오면 다시 10초.
+     화면이 가려지면 멈췄다가 다시 보이면 바로 확인, 10분 동안 입력이 없으면 멈추고 새로고침 안내 */
+  var chat = document.querySelector("[data-chat]");
+  if (chat) {
+    var list = chat.querySelector("[data-chat-list]");
+    var input = chat.querySelector("[data-chat-input]");
+    var paused = chat.querySelector("[data-chat-paused]");
+    var empty = chat.querySelector("[data-chat-empty]");
+    var pollUrl = chat.getAttribute("data-poll-url");
+    var lastId = list.getAttribute("data-last-id") || "0";
+    var delays = [10000, 30000, 60000];
+    var step = 0, timer = null, stopped = false, lastActive = Date.now();
+    var IDLE_LIMIT = 10 * 60 * 1000;
+    var toEnd = function () { var end = document.getElementById("chat-end"); if (end) end.scrollIntoView({ block: "end" }); };
+    toEnd();
+    if (input) {
+      var coarse = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+      input.addEventListener("keydown", function (e) {
+        /* 한글 입력 중(조합 중)의 Enter는 글자 확정이라 보내지 않는다. 휴대폰은 Enter가 줄바꿈, 버튼으로 전송 */
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !coarse) {
+          e.preventDefault();
+          if (input.value.trim() && input.form) input.form.requestSubmit ? input.form.requestSubmit() : input.form.submit();
+        }
+      });
+    }
+    var schedule = function () {
+      clearTimeout(timer);
+      if (stopped || document.hidden) return;
+      timer = setTimeout(check, delays[Math.min(step, delays.length - 1)]);
+    };
+    var stop = function () { stopped = true; clearTimeout(timer); if (paused) paused.hidden = false; };
+    var check = function () {
+      if (Date.now() - lastActive > IDLE_LIMIT) { stop(); return; }
+      fetch(pollUrl + "?after=" + encodeURIComponent(lastId), { credentials: "same-origin", redirect: "manual", headers: { Accept: "application/json" } })
+        .then(function (r) { if (!r.ok) throw new Error("poll " + r.status); return r.json(); })
+        .then(function (d) {
+          if (d.count) {
+            list.insertAdjacentHTML("beforeend", d.html);
+            lastId = String(d.last_id);
+            step = 0;
+            if (empty) empty.hidden = true;
+            toEnd();
+          } else {
+            step += 1;
+          }
+          schedule();
+        })
+        .catch(function () { stop(); });  /* 로그아웃·오류면 조용히 멈추고 새로고침 안내 */
+    };
+    ["keydown", "pointerdown", "touchstart"].forEach(function (ev) {
+      document.addEventListener(ev, function () { lastActive = Date.now(); }, { passive: true });
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (stopped) return;
+      if (document.hidden) { clearTimeout(timer); } else { step = 0; check(); }
+    });
+    schedule();
+  }
+
   /* 4. 제출 전 확인 (보관 등) */
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (e) {
