@@ -259,6 +259,41 @@ class MessageFlowTests(PortalTestCase):
         self.assertContains(r, "수강이 종료된 상태라 메시지를 보낼 수 없습니다")
         self.assertFalse(Message.objects.exists())
 
+    def test_poll_cursor_uses_largest_id_so_nothing_repeats(self):
+        """#96 검토: 보낸 시각 순서와 번호 순서가 달라도 자동 갱신이 이미 보인 메시지를 다시 주지 않는다."""
+        self.login(self.me_account)
+        room_conv = Conversation.objects.create(teacher=self.teacher, student=self.me, subject="")
+        newer_time = Message.objects.create(conversation=room_conv, sender=Message.Sender.STUDENT, body="먼저 저장")
+        older_time = Message.objects.create(  # 번호는 더 크지만 보낸 시각은 과거 (데모·예전 데이터)
+            conversation=room_conv,
+            sender=Message.Sender.TEACHER,
+            body="나중 저장, 과거 시각",
+            sent_at=newer_time.sent_at - datetime.timedelta(days=1),
+        )
+        r = self.client.get(reverse("portal:messages"))
+        self.assertEqual(r.context["last_id"], older_time.pk)  # 화면 마지막 칸이 아니라 가장 큰 번호
+        d = self.client.get(reverse("portal:messages_poll"), {"after": r.context["last_id"]}).json()
+        self.assertEqual(d["count"], 0)
+
+    def test_poll_paginates_by_id_and_huge_after_is_safe(self):
+        self.login(self.me_account)
+        conv = Conversation.objects.create(teacher=self.teacher, student=self.me, subject="")
+        base = timezone.now()
+        for i in range(55):
+            Message.objects.create(
+                conversation=conv,
+                sender=Message.Sender.TEACHER,
+                body=f"메시지{i}",
+                sent_at=base - datetime.timedelta(minutes=i),  # 번호가 커질수록 시각은 과거
+            )
+        first = self.client.get(reverse("portal:messages_poll"), {"after": "0"}).json()
+        second = self.client.get(reverse("portal:messages_poll"), {"after": first["last_id"]}).json()
+        self.assertEqual((first["count"], second["count"]), (50, 5))
+        third = self.client.get(reverse("portal:messages_poll"), {"after": second["last_id"]}).json()
+        self.assertEqual(third["count"], 0)
+        huge = self.client.get(reverse("portal:messages_poll"), {"after": "9" * 40})
+        self.assertEqual(huge.status_code, 200)
+
 
 class AccountLinkTests(PortalTestCase):
     def test_teacher_or_admin_account_cannot_be_linked(self):

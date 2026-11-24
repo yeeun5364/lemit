@@ -112,7 +112,10 @@ def my_messages(request):
         )
         return redirect(reverse("portal:messages") + "#chat-end")
     thread = _with_day_breaks(list(_my_thread(profile)))
-    context = {"profile": profile, "form": form, "thread": thread, "last_id": thread[-1].pk if thread else 0}
+    # 자동 갱신 기준은 '본 메시지 중 가장 큰 번호'. 화면 순서(보낸 시각)의 마지막 칸 번호를 쓰면, 시각과 번호 순서가
+    # 다른 데이터(예전 제목 대화, 시각을 조정한 데모)에서 이미 보인 메시지가 다시 붙을 수 있다 (#96 검토)
+    last_id = max((m.pk for m in thread), default=0)
+    context = {"profile": profile, "form": form, "thread": thread, "last_id": last_id}
     return render(request, "portal/my_messages.html", context)
 
 
@@ -124,16 +127,17 @@ def my_messages_poll(request):
     """
     profile = _profile(request)
     after = request.GET.get("after", "")
-    after_id = int(after) if after.isdigit() else 0
+    after_id = int(after) if after.isdigit() and len(after) <= 18 else 0  # DB 정수 범위 밖이면 처음부터
     mine = _my_thread(profile)
-    new = list(mine.filter(pk__gt=after_id)[:50])
+    # 번호 순으로 받아야 50건씩 나눠 받아도 빠지거나 겹치지 않는다. 기준은 받은 것 중 가장 큰 번호
+    new = list(mine.filter(pk__gt=after_id).order_by("id")[:50])
     if not new:
         return JsonResponse({"count": 0, "last_id": after_id, "html": ""})
     previous = mine.filter(pk=after_id).first()
     html = render_to_string(
         "portal/_chat_bubbles.html", {"thread": _with_day_breaks(new, previous), "profile": profile}, request=request
     )
-    return JsonResponse({"count": len(new), "last_id": new[-1].pk, "html": html})
+    return JsonResponse({"count": len(new), "last_id": max(m.pk for m in new), "html": html})
 
 
 def my_conversation(request, pk):
