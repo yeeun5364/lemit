@@ -5,6 +5,8 @@
 - 수강생에게는 AI 분류를 보여 주지 않는다. 분류는 강사가 메시지함에서 참고용으로 본다(UC-17).
 """
 
+import re
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_not_required
 from django.http import Http404, JsonResponse
@@ -119,6 +121,9 @@ def my_messages(request):
     return render(request, "portal/my_messages.html", context)
 
 
+ASCII_CURSOR = re.compile(r"[0-9]{1,18}")  # 자동 갱신 커서: DB 정수 범위 안의 ASCII 숫자
+
+
 def my_messages_poll(request):
     """대화방 자동 갱신 (#95): ?after=<마지막으로 본 메시지 id> 이후의 내 대화방 메시지만 말풍선 HTML로 돌려준다.
 
@@ -127,7 +132,8 @@ def my_messages_poll(request):
     """
     profile = _profile(request)
     after = request.GET.get("after", "")
-    after_id = int(after) if after.isdigit() and len(after) <= 18 else 0  # DB 정수 범위 밖이면 처음부터
+    # ASCII 숫자 1~18자리만 받는다. str.isdigit()은 '²' 같은 위 첨자도 참이라 int()에서 500이 났다 (#96 재검토)
+    after_id = int(after) if ASCII_CURSOR.fullmatch(after) else 0
     mine = _my_thread(profile)
     # 번호 순으로 받아야 50건씩 나눠 받아도 빠지거나 겹치지 않는다. 기준은 받은 것 중 가장 큰 번호
     new = list(mine.filter(pk__gt=after_id).order_by("id")[:50])

@@ -294,6 +294,15 @@ class MessageFlowTests(PortalTestCase):
         huge = self.client.get(reverse("portal:messages_poll"), {"after": "9" * 40})
         self.assertEqual(huge.status_code, 200)
 
+    def test_bad_cursor_values_never_500(self):
+        """#96 재검토: str.isdigit()이 참인 위 첨자·다른 문자 숫자, 음수, 소수, 빈 값은 처음부터 조회(500 없음)."""
+        self.login(self.me_account)
+        self.send("하나")
+        for bad in ("²", "١٢", "１２", "-1", "1.5", "", " 3", "1e3"):
+            r = self.client.get(reverse("portal:messages_poll"), {"after": bad})
+            self.assertEqual(r.status_code, 200, repr(bad))
+            self.assertEqual(r.json()["count"], 1, repr(bad))
+
 
 class AccountLinkTests(PortalTestCase):
     def test_teacher_or_admin_account_cannot_be_linked(self):
