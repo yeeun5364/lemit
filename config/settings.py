@@ -194,13 +194,17 @@ LOGGING = {
     "formatters": {
         "plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
     },
+    "filters": {
+        # /api/ 요청의 처리되지 않은 예외(미들웨어 등 DRF 밖)는 예외 메시지 없이 종류·코드 위치만 (#102 리뷰 P2)
+        "api_redact": {"()": "api.safe_log.RedactApiExceptionFilter"},
+    },
     "handlers": {
         "stdout": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "plain"},
     },
     "root": {"handlers": ["stdout"], "level": "WARNING"},
     "loggers": {
         # 500 오류(traceback 포함)·404 등. propagate=False로 root와 중복 출력하지 않음
-        "django.request": {"handlers": ["stdout"], "level": "ERROR", "propagate": False},
+        "django.request": {"handlers": ["stdout"], "level": "ERROR", "propagate": False, "filters": ["api_redact"]},
         # 허용되지 않은 Host 등 보안 경고
         "django.security": {"handlers": ["stdout"], "level": "WARNING", "propagate": False},
         # 메시지 분류 모델 로드·불가·예측 오류 (모델 로드 성공도 INFO로 남겨 배포 후 확인)

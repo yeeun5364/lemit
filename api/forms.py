@@ -1,10 +1,14 @@
 """API 키 발급·연장 폼 (#102).
 
 발급·연장은 비밀번호를 다시 확인한다 (로그인된 PC를 잠깐 쓴 사람이 키를 만들어 가져가지 못하게).
+재확인 실패는 로그인 제한(accounts/throttle.py)과 같은 방식으로 세고, 발급·연장 두 화면이 횟수를 함께 쓴다
+(종류 api_key, 15분에 계정당 5번·IP당 20번, #102 리뷰 P1). 막힌 동안에는 맞는 비밀번호도 받지 않는다.
 """
 
 from django import forms
 
+from accounts import throttle
+from accounts.models import LoginAttempt
 from api import scopes
 from api.models import ApiKey
 
@@ -18,14 +22,30 @@ class PasswordConfirmForm(forms.Form):
         error_messages={"required": "현재 비밀번호를 입력하세요."},
     )
 
-    def __init__(self, *args, user, **kwargs):
+    BLOCKED_MESSAGE = "비밀번호 확인 시도가 너무 많습니다. 15분 뒤에 다시 시도하세요."
+    KIND = LoginAttempt.Kind.API_KEY
+
+    def __init__(self, *args, user, request, **kwargs):
         super().__init__(*args, **kwargs)
         self.user = user
+        self.request = request
 
     def clean_password(self):
         password = self.cleaned_data["password"]
-        if not self.user.check_password(password):
-            raise forms.ValidationError("비밀번호가 맞지 않습니다.")
+        # 확인 전에 한 칸을 예약해, 동시에 보낸 요청도 한도를 넘어 비밀번호 확인까지 가지 못하게 한다
+        attempt = throttle.reserve(self.KIND, self.request, self.user.email, pending=True)
+        if attempt is None:
+            raise forms.ValidationError(self.BLOCKED_MESSAGE, code="throttled")
+        try:
+            ok = self.user.check_password(password)
+        except Exception:
+            throttle.release(attempt)
+            raise
+        if not ok:
+            throttle.confirm(attempt)
+            raise forms.ValidationError("비밀번호가 맞지 않습니다.", code="wrong_password")
+        throttle.release(attempt)
+        throttle.clear_email(self.KIND, self.user.email)
         return password
 
 

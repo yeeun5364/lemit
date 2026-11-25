@@ -24,8 +24,20 @@ LIMIT_MESSAGE = (
 )
 
 
+UNUSABLE_MESSAGE = "만료되었거나 폐기된 키는 연장할 수 없어요. 새 키를 발급해 주세요."
+
+
 def _usable_count(user):
     return ApiKey.objects.filter(user=user).usable().count()
+
+
+def _lock_user(user):
+    """같은 강사의 키 발급·연장을 한 줄로 세운다 (트랜잭션 안에서만 호출).
+
+    발급은 개수 확인과 생성 사이에, 연장은 상태 확인과 저장 사이에 다른 요청이 끼어들면
+    유효 키 5개 제한이 깨질 수 있다 (예: 만료 직후 새 키 발급 + 만료된 키 연장, #102 리뷰 P1).
+    """
+    get_user_model().objects.select_for_update().get(pk=user.pk)
 
 
 def key_list(request):
@@ -41,11 +53,10 @@ def key_list(request):
 @require_http_methods(["GET", "POST"])
 def key_create(request):
     user = request.user
-    form = ApiKeyCreateForm(request.POST or None, user=user)
+    form = ApiKeyCreateForm(request.POST or None, user=user, request=request)
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
-            # 같은 강사의 동시 발급 요청이 개수 제한을 함께 넘지 않도록 강사 행을 잠근다
-            get_user_model().objects.select_for_update().get(pk=user.pk)
+            _lock_user(user)
             if _usable_count(user) >= ApiKey.MAX_USABLE_PER_USER:
                 form.add_error(None, LIMIT_MESSAGE)
             else:
@@ -77,12 +88,19 @@ def key_create(request):
 def key_extend(request, pk):
     api_key = get_owned_or_404(ApiKey, request.user, teacher_lookup="user", pk=pk)
     if not api_key.is_usable:
-        messages.error(request, "만료되었거나 폐기된 키는 연장할 수 없어요. 새 키를 발급해 주세요.")
+        messages.error(request, UNUSABLE_MESSAGE)
         return redirect("api_keys:list")
-    form = ApiKeyExtendForm(request.POST or None, user=request.user)
+    form = ApiKeyExtendForm(request.POST or None, user=request.user, request=request)
     if request.method == "POST" and form.is_valid():
-        api_key.expires_at = timezone.now() + datetime.timedelta(days=form.cleaned_data["expires_in"])
-        api_key.save(update_fields=["expires_at"])
+        with transaction.atomic():
+            _lock_user(request.user)
+            api_key = ApiKey.objects.select_for_update().get(pk=api_key.pk)
+            # 위의 확인 뒤 비밀번호를 확인하는 사이에 만료·폐기됐을 수 있으므로 저장 직전에 다시 본다
+            if not api_key.is_usable:
+                messages.error(request, UNUSABLE_MESSAGE)
+                return redirect("api_keys:list")
+            api_key.expires_at = timezone.now() + datetime.timedelta(days=form.cleaned_data["expires_in"])
+            api_key.save(update_fields=["expires_at"])
         expires_on = timezone.localtime(api_key.expires_at)
         messages.success(
             request, f"'{api_key.name}' 키를 {expires_on:%Y년 %m월 %d일}까지 연장했어요. 키 값은 그대로예요."

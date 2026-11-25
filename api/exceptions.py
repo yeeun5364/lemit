@@ -3,8 +3,8 @@
     {"error": {"code", "message", "hint", "fields", "retryable", "docs", "request_id"}}  (+ 429는 retry_after)
 
 - DRF 예외(입력 오류·인증·권한·요청 제한 등)와 Django의 Http404를 공통 형식으로 바꾼다.
-- 예상하지 못한 예외도 이 처리기에서 500 JSON으로 답한다. 원인(traceback)은 request_id와 함께 서버 로그에만 남기고,
-  응답에는 내부 정보를 넣지 않는다.
+- 예상하지 못한 예외도 이 처리기에서 500 JSON으로 답한다. 원인은 request_id와 함께 서버 로그에만 남기고,
+  응답에는 내부 정보를 넣지 않는다. 로그에도 예외 메시지는 빼고 예외 종류·코드 위치만 남긴다 (api.safe_log).
 - 뷰 밖(URL 없음·미들웨어 오류)의 /api/ 404·500은 config.views의 handler가 error_response()로 같은 형식을 만든다.
 """
 
@@ -18,6 +18,7 @@ from rest_framework import exceptions as drf
 from rest_framework.response import Response
 
 from api.errors import ERRORS
+from api.safe_log import describe_exception
 
 logger = logging.getLogger("api")
 
@@ -123,9 +124,21 @@ def exception_handler(exc, context):
     request = context["request"]
     error = _convert(exc)
     if error is None:
-        # 예상하지 못한 오류: 원인은 로그에만 (요청 본문·헤더는 남기지 않음)
-        logger.exception("API 처리 중 오류 request_id=%s path=%s", _request_id(request), request.path)
+        # 예상하지 못한 오류: 원인은 로그에만. 예외 메시지에는 수강생 이름·메시지 같은 값이 섞일 수 있으므로
+        # (예: DB 제약 위반 DETAIL) 예외 종류와 코드 위치만 남긴다 (api.safe_log, #102 리뷰 P2)
+        logger.error(
+            "API 처리 중 오류 request_id=%s path=%s\n%s",
+            _request_id(request),
+            request.path,
+            describe_exception(exc),
+        )
         error = ApiError("server_error")
+
+    # DRF 기본 처리기와 같이, ATOMIC_REQUESTS를 켰을 때 오류 응답의 변경을 되돌린다 (#102 리뷰 P1).
+    # 쓰기 API의 처리 함수는 ApiView가 트랜잭션으로 감싸므로 예외가 그 밖으로 나오면 이미 되돌아가 있다.
+    from rest_framework.views import set_rollback  # 모듈 수준 import는 순환 참조(views → 설정 → 인증 → 여기)
+
+    set_rollback()
 
     body = build_body(
         request,

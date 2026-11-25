@@ -3,6 +3,9 @@
 import datetime
 import json
 import logging
+import sys
+import time
+from unittest import mock
 
 from django.core.cache import caches
 from django.test import TestCase
@@ -158,6 +161,8 @@ class ScopeView(ApiView):
 
 
 class BrokenView(ApiView):
+    required_scope = scopes.READ
+
     def get(self, request):
         raise RuntimeError("내부 경로 /srv/secret 노출 금지")
 
@@ -281,3 +286,145 @@ class DocsTests(TestCase):
             self.assertContains(errors, 'id="insufficient_scope"')
         finally:
             logging.disable(logging.NOTSET)
+
+
+class NoScopeView(ApiView):
+    """required_scope를 적지 않은 뷰: 기본 거부여야 한다."""
+
+    def get(self, request):
+        return Response({"ok": True})
+
+
+class WriteThenFailView(ApiView):
+    required_scope = scopes.READ
+    failure = None
+
+    def post(self, request):
+        Student.objects.create(teacher=request.user, name="되돌려야 할 수강생")
+        raise self.failure
+
+
+class DefaultDenyTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.raw, _ = make_key(self.teacher, sorted(scopes.ALL))
+
+    def test_view_without_required_scope_is_denied(self):
+        with self.assertLogs("api", level="ERROR") as logs:
+            response = ScopeAndServerErrorTests.call(self, NoScopeView, self.raw)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(json.loads(response.content)["error"]["code"], "permission_denied")
+        self.assertIn("NoScopeView", "\n".join(logs.output))
+
+    def test_every_registered_api_view_declares_scope(self):
+        from django.urls import get_resolver
+
+        from api import urls
+
+        checked = 0
+        for pattern in urls.urlpatterns:
+            view_class = getattr(pattern.callback, "view_class", None) or getattr(pattern.callback, "cls", None)
+            if view_class and issubclass(view_class, ApiView):
+                checked += 1
+                with self.subTest(view=view_class.__name__):
+                    scope = getattr(view_class, "required_scope", None)
+                    self.assertTrue(scope == scopes.ANY_VALID_KEY or scope in scopes.ALL, scope)
+        self.assertGreater(checked, 0)
+        get_resolver()  # URL 설정이 불러와지는지
+
+
+class WriteRollbackTests(ApiTestCase):
+    """쓰기 API 처리 중 예외가 나면 변경이 남지 않는다 (#102 리뷰 P1)."""
+
+    def post(self, failure):
+        from rest_framework.test import APIRequestFactory
+
+        raw, _ = make_key(self.teacher)
+        view = type("V", (WriteThenFailView,), {"failure": failure})
+        request = APIRequestFactory().post("/api/v1/test/", {}, format="json", HTTP_AUTHORIZATION=f"Bearer {raw}")
+        request.request_id = "req_test"
+        response = view.as_view()(request)
+        response.render()
+        return response
+
+    def test_api_error_rolls_back(self):
+        from api.exceptions import ApiError
+
+        self.assertEqual(self.post(ApiError("conflict")).status_code, 409)
+        self.assertFalse(Student.objects.exists())
+
+    def test_unexpected_error_rolls_back(self):
+        with self.assertLogs("api", level="ERROR"):
+            self.assertEqual(self.post(RuntimeError("boom")).status_code, 500)
+        self.assertFalse(Student.objects.exists())
+
+    def test_drf_rollback_hook_is_kept(self):
+        with mock.patch("rest_framework.views.set_rollback") as hook:
+            self.get(ME)  # 401
+        hook.assert_called()
+
+    def test_auth_failure_count_survives_on_write_requests(self):
+        from api.authentication import AuthFailureLimiter
+
+        self.client.post(ME, {}, content_type="application/json", HTTP_AUTHORIZATION="Bearer lemit_" + "w" * 43)
+        limiter = AuthFailureLimiter(type("R", (), {"META": {"REMOTE_ADDR": "127.0.0.1"}})())
+        self.assertEqual(len(limiter._history(time.time())), 1)
+
+
+SECRET = "김하늘 010-1234-5678"
+
+
+class LeakyView(ApiView):
+    required_scope = scopes.READ
+
+    def get(self, request):
+        try:
+            raise ValueError(f"입력값 {SECRET}")
+        except ValueError as e:
+            raise RuntimeError(f"Failing row contains ({SECRET})") from e
+
+
+class SafeExceptionLogTests(ApiTestCase):
+    """예외 로그에 예외 메시지(요청 값이 섞일 수 있음)를 남기지 않는다 (#102 리뷰 P2)."""
+
+    def test_api_exception_log_has_type_and_location_only(self):
+        raw, _ = make_key(self.teacher)
+        with self.assertLogs("api", level="ERROR") as logs:
+            response = ScopeAndServerErrorTests.call(self, LeakyView, raw)
+        self.assertEqual(response.status_code, 500)
+        output = "\n".join(logs.output)
+        self.assertNotIn(SECRET, output)
+        self.assertIn("builtins.RuntimeError", output)
+        self.assertIn("builtins.ValueError", output)  # 원인 예외 종류도
+        self.assertIn("test_auth.py", output)  # 코드 위치
+        self.assertIn("req_test", output)
+
+    def test_django_request_log_is_redacted_for_api_paths_only(self):
+        from django.test import RequestFactory
+
+        from api.safe_log import RedactApiExceptionFilter
+
+        try:
+            raise RuntimeError(SECRET)
+        except RuntimeError:
+            exc_info = sys.exc_info()
+        formatter = logging.Formatter("%(message)s")
+        for path, redacted in [("/api/v1/me/", True), ("/students/", False)]:
+            with self.subTest(path=path):
+                record = logging.LogRecord(
+                    "django.request", logging.ERROR, __file__, 1, "Internal Server Error: %s", (path,), exc_info
+                )
+                record.request = RequestFactory().get(path)
+                self.assertTrue(RedactApiExceptionFilter().filter(record))
+                text = formatter.format(record)
+                self.assertIn(path, text)
+                self.assertEqual(SECRET not in text, redacted)
+                if redacted:
+                    self.assertIn("builtins.RuntimeError", text)
+
+    def test_filter_is_installed_on_django_request_logger(self):
+        from api.safe_log import RedactApiExceptionFilter
+
+        self.assertTrue(
+            any(isinstance(f, RedactApiExceptionFilter) for f in logging.getLogger("django.request").filters)
+        )

@@ -17,5 +17,10 @@ LABELS = dict(CHOICES)
 ALL = frozenset(LABELS)
 
 
+# 범위와 관계없이 유효한 키면 되는 뷰(연결 확인 등)가 명시적으로 적는 값. 키에 저장하는 범위가 아니다.
+# 뷰가 required_scope를 적지 않으면 거부한다 (기본 거부, #102 리뷰 P2).
+ANY_VALID_KEY = "*"
+
+
 def label(scope):
     return LABELS.get(scope, scope)
