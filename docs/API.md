@@ -8,8 +8,8 @@
 
 | 메서드·경로 | 기능 | 필요 범위 | 상태 | 이슈 |
 |---|---|---|---|---|
-| `GET /api/v1/me/` | 연결 확인 (키 주인·범위·만료일) | 없음 (유효한 키면 됨) | 🟡 main 병합(PR #113), 운영 확인 전 | #102 |
-| `POST /api/v1/messages/classify/` | 메시지 한 건 분류 | `read` | 🟡 로컬 테스트 통과, PR 리뷰 중 | #101 |
+| `GET /api/v1/me/` | 연결 확인 (키 주인·범위·만료일) | 없음 (유효한 키면 됨) | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #102 |
+| `POST /api/v1/messages/classify/` | 메시지 한 건 분류 | `read` | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #101 |
 | 수강생·일정·잔여 회차 조회 | | `read` | ⬜ | #103~#105 |
 | 일정 변경 | | `sessions:write` | ⬜ | #106 |
 | 메시지 발송 | | `messages:send` | ⬜ | #107 |
@@ -102,6 +102,25 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 - `text`는 JSON 문자열이어야 합니다. 숫자·배열·null은 거절합니다.
 - 길이는 **앞뒤 공백을 뺀 뒤** 1~1000자입니다(메시지 최대 길이와 같음). 보낸 문자열 자체의 길이가 아니므로, 앞뒤 공백 때문에 1000자를 넘어도 공백을 뺀 내용이 1000자 이하면 받습니다. 공백만 있으면 거절합니다.
 - 한 요청에 한 건만 분류합니다
+
+### Windows PowerShell
+
+PowerShell에서는 `curl`이 다른 명령일 수 있으므로 `Invoke-RestMethod`를 씁니다. 키는 그 창에서만 유효한 환경 변수로 두고, 대화·문서·저장소에 붙여 넣지 않습니다. 응답에는 키 앞 10자(`prefix`)만 나옵니다.
+
+```powershell
+$env:LEMIT_API_KEY = "lemit_..."                       # 키는 큰따옴표로 감싸기
+$h = @{ Authorization = "Bearer $env:LEMIT_API_KEY" }  # 그대로 실행 (Bearer는 바꾸지 않음)
+
+# 연결 확인
+Invoke-RestMethod https://lemit.eta.pyhub.kr/api/v1/me/ -Headers $h | ConvertTo-Json -Depth 5
+
+# 메시지 분류 (한글이 깨지지 않게 본문을 UTF-8 바이트로 보냄)
+$body = [Text.Encoding]::UTF8.GetBytes('{"text":"다음 주 화요일 수업 목요일로 옮길 수 있을까요?"}')
+Invoke-RestMethod -Method Post https://lemit.eta.pyhub.kr/api/v1/messages/classify/ -Headers $h `
+  -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 5
+```
+
+오류 응답은 PowerShell이 붉은 글씨로 보여 주며, 한글이 `\uC720…` 같은 유니코드 이스케이프로 표시될 수 있습니다(서버 응답은 UTF-8 한글 그대로). `code` 값으로 판단하면 됩니다.
 
 ## 4. 오류 응답
 
