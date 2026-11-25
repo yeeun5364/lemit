@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}API 키{% endblock %}
+{% block page_title %}API 키{% endblock %}
+{% block page_desc %}<p class="page-desc">AI 에이전트나 직접 만든 프로그램이 내 LEMIT 데이터를 쓸 수 있게 하는 열쇠예요. 키를 가진 사람은 고른 범위 안에서 내 계정처럼 요청할 수 있으니 다른 사람과 공유하지 마세요.</p>{% endblock %}
+{% block page_actions %}<a class="btn btn-primary" href="{% url 'api_keys:create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}API 키 발급</a>{% endblock %}
+{% block content %}
+<p class="muted small">사용 중인 키 {{ usable_count }}개 / 최대 {{ limit }}개 · <a href="{% url 'api:docs' %}">API 문서</a> · <a href="{% url 'api:error_docs' %}">오류 코드</a></p>
+<div class="card card-flush">
+  {% if api_keys %}
+  <ul class="rows api-key-rows">
+    {% for k in api_keys %}{% with status=k.status %}
+    <li class="row api-key-row{% if status != 'active' %} is-inactive{% endif %}">
+      <span class="row-main">
+        <span class="row-title">{{ k.name }}
+          {% if status == "active" %}{% if k.expires_soon %}<span class="badge badge-amber">곧 만료</span>{% else %}<span class="badge badge-mint">사용 중</span>{% endif %}
+          {% elif status == "expired" %}<span class="badge badge-neutral">만료</span>{% else %}<span class="badge badge-red">폐기</span>{% endif %}
+        </span>
+        <span class="row-sub"><span class="mono-sm">{{ k.prefix }}…</span> · {{ k.scope_labels|join:", " }}</span>
+        <span class="row-sub muted small">
+          만든 날 {{ k.created_at|date:"Y-m-d" }} ·
+          {% if status == "revoked" %}폐기 {{ k.revoked_at|date:"Y-m-d" }}{% else %}만료 {{ k.expires_at|date:"Y-m-d" }}{% endif %} ·
+          마지막 사용 {% if k.last_used_at %}{{ k.last_used_at|date:"Y-m-d H:i" }}{% else %}없음{% endif %}
+        </span>
+      </span>
+      {% if status == "active" %}
+      <span class="row-side link-actions">
+        <a class="btn btn-secondary btn-sm" href="{% url 'api_keys:extend' k.pk %}">연장</a>
+        <a class="btn btn-ghost btn-sm" href="{% url 'api_keys:revoke' k.pk %}">폐기</a>
+      </span>
+      {% endif %}
+    </li>
+    {% endwith %}{% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">
+    <span class="empty-icon is-neutral">{% include "ui/icon.html" with name="lock" %}</span>
+    <p class="empty-title">아직 API 키가 없어요</p>
+    <p class="muted small">API를 쓰지 않으면 키가 없어도 돼요. 웹 화면은 그대로 동작해요.</p>
+    <a class="btn btn-secondary btn-sm" href="{% url 'api_keys:create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}API 키 발급</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

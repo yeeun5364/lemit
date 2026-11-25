@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}API 키 연장{% endblock %}
+{% block page_title %}API 키 연장{% endblock %}
+{% block page_desc %}<p class="page-desc">'{{ api_key.name }}' ({{ api_key.prefix }}…) · 현재 만료 {{ api_key.expires_at|date:"Y년 n월 j일" }}. 키 값은 그대로라 에이전트 설정을 바꿀 필요가 없어요.</p>{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% include "ui/choice_field.html" with field=form.expires_in %}
+    {% include "ui/field.html" with field=form.password %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">연장</button>
+      <a class="btn btn-ghost" href="{% url 'api_keys:list' %}">취소</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

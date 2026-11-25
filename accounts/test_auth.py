@@ -19,6 +19,9 @@ PUBLIC_URL_NAMES = {
     "password_reset_complete",
 }
 
+# 외부 API(#102)는 로그인 화면으로 보내지 않고 키가 없으면 401로 답한다. 문서만 공개.
+API_PUBLIC_URL_NAMES = {"schema", "docs", "error_docs"}
+
 
 def make_teacher(email="teacher@example.com", name="김강사", **extra):
     return User.objects.create_user(email=email, password=PASSWORD, name=name, **extra)
@@ -163,7 +166,13 @@ class AccessPolicyTests(TestCase):
                 continue  # 관리자는 별도 정책, 경로 변수가 있는 화면은 각 앱 테스트에서 확인
             url = "/" + route
             res = self.client.get(url)
-            if name in PUBLIC_URL_NAMES:
+            if namespace == "api":
+                if name in API_PUBLIC_URL_NAMES:
+                    self.assertEqual(res.status_code, 200, f"{url} 공개 API 문서가 열리지 않음")
+                else:
+                    self.assertEqual(res.status_code, 401, f"{url} API 키 없이 열림")
+                    self.assertEqual(res.json()["error"]["code"], "not_authenticated")
+            elif name in PUBLIC_URL_NAMES:
                 self.assertNotEqual(res.status_code, 302, f"{url} 공개 화면인데 로그인으로 보냄")
             else:
                 self.assertEqual(res.status_code, 302, f"{url} 로그인 없이 열림")

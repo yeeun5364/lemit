@@ -41,10 +41,16 @@ INSTALLED_APPS = [
     "lessons",
     "inbox",
     "portal",
+    "rest_framework",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
+    "api",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # /api/ 요청에 request_id를 붙이고 접근 로그를 남긴다 (#102). 다른 미들웨어가 낸 오류 응답에도 붙도록 앞쪽에 둔다
+    "api.middleware.ApiRequestMiddleware",
     # 정적 파일을 web 컨테이너에서 바로 제공 (nginx 없이 시작, #5)
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -199,6 +205,9 @@ LOGGING = {
         "django.security": {"handlers": ["stdout"], "level": "WARNING", "propagate": False},
         # 메시지 분류 모델 로드·불가·예측 오류 (모델 로드 성공도 INFO로 남겨 배포 후 확인)
         "inbox": {"handlers": ["stdout"], "level": "INFO", "propagate": False},
+        # 외부 API 접근 로그(request_id·키 앞부분·강사 번호·경로·상태·처리 시간)와 API 오류 (#102).
+        # 요청 본문·키·헤더는 남기지 않음
+        "api": {"handlers": ["stdout"], "level": "INFO", "propagate": False},
     },
 }
 
@@ -209,3 +218,45 @@ LOGGING = {
 MESSAGE_CLASSIFIER_PATH = Path(
     env.str("MESSAGE_CLASSIFIER_PATH", default=str(BASE_DIR / "ml" / "artifacts" / "message_classifier.joblib"))
 )
+
+
+# 외부 API (#102). 공통 규칙은 이슈 #102, 선택 이유는 docs/PROJECT_PLAN.md §7.
+# - 인증은 강사별 API 키만 쓴다 (세션 인증 없음 → CSRF 해당 없음). CORS 헤더는 보내지 않는다.
+# - 응답은 JSON만 (DRF의 HTML 탐색 화면은 끈다). 모든 오류는 api.exceptions의 공통 형식으로 바꾼다.
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": ["api.authentication.ApiKeyAuthentication"],
+    "DEFAULT_PERMISSION_CLASSES": ["api.permissions.IsTeacherApiKey"],
+    "DEFAULT_THROTTLE_CLASSES": ["api.throttling.ApiKeyRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {"api_key": "60/min"},
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+    "EXCEPTION_HANDLER": "api.exceptions.exception_handler",
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "LEMIT API",
+    "DESCRIPTION": (
+        "레슨 강사용 일정·회차 관리 서비스 LEMIT의 외부 API입니다. "
+        "웹 화면 '설정 > API 키'에서 발급한 키를 `Authorization: Bearer <키>` 헤더로 보내세요. "
+        "오류 코드 설명은 /api/docs/errors/ 에 있습니다."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_AUTHENTICATION": [],  # 문서는 키 없이 볼 수 있다 (비밀값 없음)
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+}
+
+# 캐시: 기본 캐시는 그대로 두고, API 요청 제한 횟수만 DB 캐시에 둔다 (#102).
+# 프로세스별 메모리 캐시는 gunicorn worker마다 횟수를 따로 세기 때문이다. 화면 데이터는 캐시하지 않는다 (#51 결정 유지).
+# 테이블은 api 마이그레이션이 만든다 (배포는 migrate만 실행하므로).
+CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "api_throttle": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", "LOCATION": "api_throttle_cache"},
+}

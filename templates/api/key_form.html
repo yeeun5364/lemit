@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}API 키 발급{% endblock %}
+{% block page_title %}API 키 발급{% endblock %}
+{% block page_desc %}<p class="page-desc">키는 발급 직후 한 번만 보여 드려요. 잃어버리면 다시 볼 수 없으니 새로 발급해 주세요.</p>{% endblock %}
+{% block content %}
+<div class="card form-card">
+  {% if limit_reached %}
+  <p class="alert alert-warning" role="alert">{{ limit_message }}</p>
+  <div class="form-actions"><a class="btn btn-secondary" href="{% url 'api_keys:list' %}">API 키 목록</a></div>
+  {% else %}
+  <form method="post" class="form" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="errorlist nonfield" role="alert">{{ form.non_field_errors|join:" " }}</div>{% endif %}
+    {% include "ui/field.html" with field=form.name %}
+    {% include "ui/choice_field.html" with field=form.scopes %}
+    {% include "ui/choice_field.html" with field=form.expires_in %}
+    {% include "ui/field.html" with field=form.password %}
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">발급</button>
+      <a class="btn btn-ghost" href="{% url 'api_keys:list' %}">취소</a>
+    </div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

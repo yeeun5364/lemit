@@ -1,0 +1,45 @@
+{% load static %}<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API 오류 코드 · LEMIT</title>
+  <link rel="icon" href="{% static 'img/favicon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+</head>
+<body>
+<main id="main" class="content">
+  <div class="page-header"><div class="page-heading">
+    <h1 class="page-title">LEMIT API 오류 코드</h1>
+    <p class="page-desc">모든 오류는 같은 형식으로 응답합니다. 프로그램은 <span class="mono-sm">code</span>로 판단하고, 사람은 <span class="mono-sm">message</span>와 <span class="mono-sm">hint</span>를 읽으면 됩니다. <a href="{% url 'api:docs' %}">API 문서</a></p>
+  </div></div>
+  <div class="card">
+<pre class="mono-sm">{
+  "error": {
+    "code": "validation_error",
+    "message": "입력값 1개를 확인해 주세요.",
+    "hint": "fields에 항목별로 무엇을 고치면 되는지 적혀 있습니다.",
+    "fields": [{"field": "text", "code": "max_length", "message": "…"}],
+    "retryable": false,
+    "docs": "…/api/docs/errors/#validation_error",
+    "request_id": "req_8f3a2c1d9e0b"
+  }
+}</pre>
+    <ul class="muted small">
+      <li><span class="mono-sm">retryable</span>: 같은 요청을 나중에 다시 보내면 성공할 수 있는지. 429는 <span class="mono-sm">retry_after</span>(초)와 <span class="mono-sm">Retry-After</span> 헤더가 함께 옵니다.</li>
+      <li><span class="mono-sm">request_id</span>: 응답 헤더 <span class="mono-sm">X-Request-ID</span>와 같습니다. 문의할 때 알려 주세요.</li>
+      <li>내 데이터가 아니면 존재 여부를 알리지 않고 404로 응답합니다.</li>
+    </ul>
+  </div>
+  <div class="card card-flush section">
+    {% for code, spec in errors %}
+    <section class="error-doc" id="{{ code }}">
+      <h2><span class="mono-sm">{{ code }}</span> <span class="badge badge-neutral">HTTP {{ spec.status }}</span>{% if spec.retryable %} <span class="badge badge-blue">재시도 가능</span>{% endif %}</h2>
+      <p>{{ spec.message }}</p>
+      <p class="muted small">{{ spec.hint }}</p>
+    </section>
+    {% endfor %}
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{% comment %} 라디오·체크박스 여러 개를 묶는 입력 필드 (lessons/session_detail.html의 결석 차감 선택과 같은 모양).
+   사용: {% include "ui/choice_field.html" with field=form.scopes %} {% endcomment %}
+<fieldset class="field choice-field"{% if field.errors %} aria-invalid="true" aria-describedby="{{ field.auto_id }}_error"{% endif %}>
+  <legend class="field-label">{{ field.label }}{% if field.field.required %}<span class="req" aria-hidden="true">*</span><span class="sr-only">(필수)</span>{% endif %}</legend>
+  {% if field.help_text %}<div class="helptext">{{ field.help_text|safe }}</div>{% endif %}
+  {% for choice in field %}<div class="check-field"><label>{{ choice.tag }} {{ choice.choice_label }}</label></div>{% endfor %}
+  {% if field.errors %}<ul class="errorlist" id="{{ field.auto_id }}_error" role="alert">{% for e in field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+</fieldset>

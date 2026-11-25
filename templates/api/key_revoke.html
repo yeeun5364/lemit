@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}API 키 폐기{% endblock %}
+{% block page_title %}API 키 폐기{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <p>'<strong>{{ api_key.name }}</strong>' (<span class="mono-sm">{{ api_key.prefix }}…</span>) 키를 폐기할까요?</p>
+  <p class="muted small">폐기하면 이 키로 보내는 요청은 바로 거절되고, 되돌릴 수 없어요. 이 키를 쓰던 에이전트나 프로그램에는 새 키를 넣어야 해요.</p>
+  <form method="post" class="form-actions">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">폐기</button>
+    <a class="btn btn-ghost" href="{% url 'api_keys:list' %}">취소</a>
+  </form>
+</div>
+{% endblock %}
