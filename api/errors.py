@@ -77,6 +77,13 @@ ERRORS: dict[str, ErrorSpec] = {
         "retry_after 초가 지난 뒤 다시 시도해 주세요. 같은 요청을 짧은 간격으로 반복하지 않도록 해 주세요.",
         retryable=True,
     ),
+    "model_unavailable": ErrorSpec(
+        503,
+        "지금은 메시지 분류 모델을 사용할 수 없습니다.",
+        "잠시 후 다시 시도해 주세요. 계속되면 request_id를 LEMIT 운영자에게 알려 주세요. "
+        "분류 없이도 메시지 저장·일정 기능은 그대로 쓸 수 있습니다.",
+        retryable=True,
+    ),
     "server_error": ErrorSpec(
         500,
         "서버 오류가 발생했습니다.",

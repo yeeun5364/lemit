@@ -7,7 +7,7 @@
 
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.conf import settings
@@ -30,6 +30,8 @@ class MessagePrediction:
     label: str
     confidence: float
     model_version: str
+    scores: dict[str, float] = field(default_factory=dict)  # 분류별 확률 전체 (외부 API #101이 돌려줌)
+    truncated: bool = False  # MAX_LENGTH를 넘어 앞부분만 분류했는지
 
     @property
     def display(self) -> str:
@@ -81,6 +83,7 @@ def classify(text: str) -> MessagePrediction:
     text = (text or "").strip()
     if not text:
         raise ValueError("메시지가 비어 있습니다")
+    truncated = len(text) > MAX_LENGTH
     text = text[:MAX_LENGTH]
 
     model = get_model()
@@ -90,11 +93,14 @@ def classify(text: str) -> MessagePrediction:
         logger.exception("메시지 분류 중 오류")
         raise MessageClassifierUnavailable(f"예측 중 오류: {type(e).__name__}") from e
 
+    classes = [str(c) for c in model.pipeline.classes_]
     best = int(proba.argmax())
     return MessagePrediction(
-        label=str(model.pipeline.classes_[best]),
+        label=classes[best],
         confidence=round(float(proba[best]), 3),
         model_version=model.version,
+        scores={label: round(float(p), 3) for label, p in zip(classes, proba, strict=True)},
+        truncated=truncated,
     )
 
 

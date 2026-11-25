@@ -35,6 +35,8 @@
 | 별도 (외부 API) | `/api/v1/…` (#102) | 로그인 화면으로 보내지 않고 **401 JSON**(`not_authenticated`). 세션 로그인은 API 인증으로 쓰지 않음 | API 키(`Authorization: Bearer`)로만 인증. 수강생 계정의 키는 403 |
 | 공개 (외부 API 문서) | `/api/docs/`, `/api/schema/`, `/api/docs/errors/` (#102) | 접근 가능 | 접근 가능 |
 
+> API 엔드포인트 목록과 사용법은 [API.md](API.md)를 기준으로 합니다 (화면이 아니므로 이 문서에는 접근 정책만 둡니다).
+
 - **구현:** Django 5.1부터 제공하는 `LoginRequiredMiddleware`로 **모든 화면을 기본 로그인 필수**로 만들고, 공개 화면(S01~S03)에만 `@login_not_required`를 붙입니다. 새 화면을 만들 때 로그인 검사를 빠뜨려도 기본으로 막히는 방식(기본 거부)이라 실수에 강합니다. Django 기본 로그인·비밀번호 재설정 뷰는 이미 공개로 표시되어 있습니다.
 - 로그인 화면은 `redirect_authenticated_user=True`로 이미 로그인한 사용자를 홈으로 보냅니다. 회원가입 화면도 같은 처리를 합니다.
 - 배포 상태 확인용 `/healthz/`(#5, #32에서 구현)도 공개로 둡니다. DB·메시지 분류 모델 상태만 보여주고 개인 데이터는 없습니다.
