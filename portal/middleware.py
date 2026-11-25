@@ -40,7 +40,8 @@ class StudentPortalMiddleware:
         if request.student_profile is None:
             return None
         match = request.resolver_match
-        if match is not None and (match.namespace == "portal" or match.url_name in SHARED_URL_NAMES):
+        # 외부 API(/api/)는 세션이 아니라 API 키로 인증하고, 수강생 계정 거절도 API 권한에서 한다 (#102)
+        if match is not None and (match.namespace in ("portal", "api") or match.url_name in SHARED_URL_NAMES):
             return None
         if request.method in ("GET", "HEAD"):
             return redirect("portal:lessons")

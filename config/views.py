@@ -30,3 +30,27 @@ def healthz(request):
         "message_classifier": {k: v for k, v in clf.items() if k != "error"},  # 오류 상세는 로그에만
     }
     return JsonResponse(body, status=200 if db == "ok" else 503)
+
+
+# /api/ 아래는 HTML 오류 화면 대신 공통 오류 JSON으로 답한다 (#102). 그 밖의 주소는 Django 기본 화면.
+# Django는 DEBUG=False일 때만 이 handler를 쓴다 (테스트·운영).
+
+
+def page_not_found(request, exception):
+    from django.views.defaults import page_not_found as default_page_not_found
+
+    if request.path.startswith("/api/"):
+        from api.exceptions import error_response
+
+        return error_response(request, "not_found")
+    return default_page_not_found(request, exception)
+
+
+def server_error(request):
+    from django.views.defaults import server_error as default_server_error
+
+    if request.path.startswith("/api/"):
+        from api.exceptions import error_response
+
+        return error_response(request, "server_error")
+    return default_server_error(request)

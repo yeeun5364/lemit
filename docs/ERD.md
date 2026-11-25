@@ -20,6 +20,7 @@ erDiagram
     User ||--o{ Conversation : "메시지함"
     Student ||--o{ Conversation : "대화 상대"
     Conversation ||--|{ Message : "포함"
+    User ||--o{ ApiKey : "외부 API 키 (#102)"
 
     User {
         bigint id PK
@@ -126,6 +127,18 @@ erDiagram
         varchar model_version "선택"
         datetime classified_at "선택"
     }
+    ApiKey {
+        bigint id PK
+        bigint user_id FK
+        varchar name "최대 50자"
+        varchar prefix "목록 표시용 앞부분, 원문 아님"
+        varchar key_hash UK "SHA-256"
+        json scopes "read / sessions:write / messages:send"
+        datetime created_at
+        datetime expires_at "필수"
+        datetime last_used_at "1분에 한 번 갱신, 선택"
+        datetime revoked_at "null이면 폐기 안 됨"
+    }
 ```
 
 | 모델 | 뜻 | 단계 | 유스케이스 |
@@ -141,6 +154,7 @@ erDiagram
 | `Conversation` | 강사와 수강생 한 명의 대화 스레드 | MVP | UC-17 |
 | `Message` | 메시지 1건 + 수강생 메시지의 AI 분류 결과 | MVP | UC-17 |
 | `LoginAttempt` | 로그인 실패·비밀번호 재설정 요청 기록 (시도 횟수 제한용, 다른 모델과 연결 없음) | 운영 보안 | UC-01, UC-15 (#7) |
+| `ApiKey` | 강사별 외부 API 키 (원문 대신 해시, 범위·만료) | 외부 API | #102 |
 
 > 장소는 별도 모델 없이 회차의 메모 필드 `LessonSession.place`로 받습니다 (2-8). `Location` 모델은 프로젝트 기간 이후 지도 연동(UC-13) 때 추가합니다.
 
@@ -236,6 +250,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 ### 2-11. 로그인 시도 기록은 계정과 연결하지 않음 (2026-11-22, #7)
 
 - `LoginAttempt(kind, email, ip, created_at)`: 로그인 실패와 비밀번호 재설정 요청을 남겨 시도 횟수를 제한합니다 (`accounts/throttle.py`).
+- `kind`: `login`(로그인 실패), `reset`(비밀번호 재설정 요청), `api_key`(API 키 발급·연장의 비밀번호 재확인 실패, 2026-11-25 추가, 2-13). 종류마다 따로 셉니다.
 - `User`와 외래키로 잇지 않고 **입력한 이메일(소문자)** 을 그대로 둡니다. 없는 이메일도 같은 방식으로 세어야 가입 여부가 드러나지 않기 때문입니다.
 - 규칙: 최근 15분 동안 같은 이메일 실패 5번 또는 같은 IP 실패 20번이면 막습니다.
 - 로그인에 성공하면 그 이메일의 **확정된** 실패(`pending=False`)를 `email_cleared=True`로 표시해 **이메일 집계에서만** 뺍니다. 행은 남아 IP 집계에는 계속 들어갑니다(PR #70 리뷰).
@@ -252,11 +267,23 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - 연결은 강사가 수강생 상세에서 만든 **일회용 QR 초대**(`StudentInvite`, #84)로 한다: 발급(10분, `issued`) → 수강생 계정이 스캔·로그인 후 요청(`requested`) → 강사가 요청 계정을 확인하고 승인(`approved`, 이때 `Student.account` 저장) 또는 거절·취소(`cancelled`). 재발급하면 이전 대기 초대는 취소된다. 만료는 `issued`인데 `expires_at`이 지난 경우로 판단한다(값을 바꾸지 않음). 강사는 연결을 해제할 수 있다(`account=NULL`, 대기 초대 취소).
 - 발급·승인·해제는 수강생 행 잠금(`lock_student`) 뒤 초대 행도 잠그고 다시 확인한다. 승인은 요청 뒤에 보관된 기록을 거부하고, 같은 계정을 두 기록에 동시에 승인하는 경우를 막으려고 요청 계정(User) 행도 잠근 뒤 '이미 연결됨'을 다시 본다. 연결은 `Student.account`(UNIQUE)에만 저장하므로 중복 요청·승인에도 연결은 하나이고, 남은 UNIQUE 충돌도 500이 아니라 연결 오류로 바꾼다 (PR #94 리뷰).
 
+### 2-13. API 키는 해시만 저장하고 만료를 필수로 둠 (2026-11-25, #102)
+- `ApiKey`는 강사(`User`)마다 여러 개(유효한 키 5개까지)입니다. 원문(`lemit_` + 무작위 43자)은 발급 화면에서 한 번만 보여 주고, DB에는 **SHA-256 해시**(`key_hash`, UNIQUE)와 목록 표시용 앞부분(`prefix`)만 둡니다. 256비트 무작위 값이라 비밀번호와 달리 느린 해시가 필요 없고, 해시 값으로 바로 찾습니다.
+- 범위 `scopes`는 코드 목록(JSON)입니다: `read`(읽기), `sessions:write`(일정 변경), `messages:send`(메시지 발송). 발송은 되돌릴 수 없어 따로 둡니다.
+- 상태는 저장하지 않고 계산합니다: `revoked_at`이 있으면 폐기, `expires_at`이 지났으면 만료, 아니면 사용 중. 만료 전에는 `expires_at`만 늘려 **같은 키 값으로 연장**하고, 만료·폐기된 키는 되살리지 않습니다.
+- 개수 제한(유효 5개)은 발급할 때 강사 행을 잠근 뒤 셉니다(동시 발급 방지). 연장도 같은 강사 행을 잠그고, 저장 직전에 키를 다시 잠가 만료·폐기 여부를 확인합니다. 비밀번호를 확인하는 사이 만료된 키가 되살아나 새로 발급한 키와 합쳐 6개가 되는 일을 막기 위해서입니다 (PR #113 리뷰).
+- 발급·연장의 비밀번호 재확인 실패는 `LoginAttempt`(2-11)에 종류 `api_key`로 남겨 로그인과 같은 규칙(15분에 계정당 5번·IP당 20번)으로 막습니다. 발급·연장 두 화면이 횟수를 함께 씁니다 (PR #113 리뷰).
+- 수강생 계정(2-12)은 키 화면에 들어갈 수 없고, API 권한에서도 403으로 거절합니다.
+- API 요청 제한 횟수는 모델이 아니라 Django DB 캐시 테이블(`api_throttle_cache`, `api` 마이그레이션 0002가 생성)에 둡니다.
+
 ## 3. 제약 조건
 
 | 대상 | 규칙 | 구현 위치 |
 |---|---|---|
 | `User.email` | 대소문자를 무시하고 유일 (로그인도 대소문자 무시) | DB `UniqueConstraint(Lower(email))` + 회원가입 폼 검증 (UC-01, 2026-11-19) |
+| `ApiKey.key_hash` | 유일 (SHA-256 64자) | DB `unique=True` (#102) |
+| `ApiKey.expires_at` | 만든 시각보다 뒤 | DB `CheckConstraint` `api_key_expires_after_created` (#102) |
+| `ApiKey` 개수 | 강사당 유효한 키(폐기·만료 제외) 5개까지 | 발급·연장 뷰에서 강사 행 `select_for_update` 후 확인, 연장은 저장 직전 키 상태 재확인 (#102, PR #113 리뷰) |
 | `User.email` = `demo@example.com` | 시연용 데모 계정(`seed_demo`) 전용. 일반 회원가입 불가. `seed_demo`는 Django 그룹 `lemit-demo`가 있는 계정만 데모로 다루고, 표시 없는 같은 이메일 계정이 있으면 아무것도 바꾸지 않고 멈춤 | 회원가입 폼 검증 + 명령의 그룹 확인 (#24, PR #65 리뷰) |
 | `Student` | `is_minor`이면 `guardian_phone` 필수 | DB `CheckConstraint` + 폼 검증 |
 | `Student.account` | 한 계정은 수강생 기록 하나에만(1:1). 수강생을 가진 강사 계정·관리자·담당 강사 본인은 연결 불가 | DB `UNIQUE`(OneToOne) + 모델 `clean()` (#80) |
@@ -314,6 +341,7 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 | Student → StudentInvite | `CASCADE` | 초대는 연결 절차의 기록일 뿐이라 수강생과 함께 정리 (#84) |
 | User → StudentInvite.requested_by | `SET_NULL` | 요청 계정을 지워도 초대 기록은 남음 (#84) |
 | Conversation → Message | `CASCADE` | 대화와 메시지는 운명을 같이함 |
+| User → ApiKey | `CASCADE` | 키는 계정에 딸린 접근 수단이라 계정과 함께 정리. 비활성 계정의 키는 인증에서 거절 (#102) |
 
 **인덱스**
 - `LessonSession(enrollment_id, start_at)`: 레슨권별 회차 이력
@@ -349,3 +377,4 @@ Django는 **프로젝트 시작 때 커스텀 User 모델을 만들라고 권장
 - [x] 차감한 결석에는 보강 불가 (중복 차감 방지, #2, 2026-11-19)
 - [x] 메시지함: 대화 스레드 + 메시지, AI 분류는 수강생 메시지에만 저장, 일정 자동 변경 없음 (2-10, UC-17, 2026-11-19)
 - [x] 보강 없는 휴강 회차: "보강 필요" 배지로 표시, 별도 상태·필드 없이 `makeup` 역참조 유무로 판단 (#2, 2026-11-19)
+- [x] 외부 API 키: 원문 대신 SHA-256 해시, 범위 3종(JSON), 만료 필수·같은 값으로 연장, 강사당 유효 5개 (2-13, #102, 2026-11-25)

@@ -186,4 +186,23 @@
       if (!window.confirm(form.getAttribute("data-confirm"))) e.preventDefault();
     });
   });
+
+  /* 5. 복사 버튼 (API 키 발급 직후, #102). 클립보드를 못 쓰면 입력란을 선택해 직접 복사하게 한다 */
+  document.querySelectorAll("[data-copy-target]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var input = document.getElementById(btn.getAttribute("data-copy-target"));
+      if (!input) return;
+      input.focus();
+      input.select();
+      var done = function () { btn.textContent = btn.getAttribute("data-copied-text") || "복사했어요"; };
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(input.value).then(done, function () {});
+      } else if (document.execCommand && document.execCommand("copy")) {
+        done();
+      }
+    });
+  });
+  document.querySelectorAll("[data-select-on-focus]").forEach(function (input) {
+    input.addEventListener("focus", function () { input.select(); });
+  });
 })();

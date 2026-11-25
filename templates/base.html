@@ -37,6 +37,7 @@
         <p class="nav-heading">설정</p>
         <ul class="nav">
           {% if not portal_student %}<li><a href="{% url 'lessons:label_list' %}" class="nav-item{% if app_name == 'lessons' and 'label' in url_name %} is-active{% endif %}"{% if url_name == 'label_list' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="tag" %}라벨</a></li>{% endif %}
+          {% if not portal_student %}<li><a href="{% url 'api_keys:list' %}" class="nav-item{% if app_name == 'api_keys' %} is-active{% endif %}"{% if app_name == 'api_keys' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="lock" %}API 키</a></li>{% endif %}
           <li><a href="{% url 'password_change' %}" class="nav-item{% if url_name == 'password_change' %} is-active{% endif %}"{% if url_name == 'password_change' %} aria-current="page"{% endif %}>{% include "ui/icon.html" with name="lock" %}비밀번호 변경</a></li>
         </ul>
       </nav>

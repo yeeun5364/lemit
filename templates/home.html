@@ -7,6 +7,7 @@
 <a class="btn btn-primary" href="{% url 'students:create' %}">{% include "ui/icon.html" with name="plus" size="sm" %}수강생 추가</a>
 {% endblock %}
 {% block content %}
+{% if expiring_api_keys %}<p class="alert alert-warning" role="status">{% include "ui/icon.html" with name="info" size="sm" %}<span>14일 안에 만료되는 API 키가 {{ expiring_api_keys }}개 있어요. 계속 쓸 키라면 <a href="{% url 'api_keys:list' %}">API 키</a>에서 연장해 주세요.</span></p>{% endif %}
 <section aria-labelledby="summary-title">
   <h2 id="summary-title" class="sr-only">요약</h2>
   <div class="stats">

@@ -23,11 +23,16 @@ from config.views import healthz
 
 urlpatterns = [
     path("", home, name="home"),
+    path("accounts/api-keys/", include("api.web_urls")),  # 설정 > API 키 (#102)
     path("accounts/", include("accounts.urls")),
     path("students/", include("students.urls")),
     path("", include("lessons.urls")),
     path("inbox/", include("inbox.urls")),
     path("me/", include("portal.urls")),  # 수강생 화면 (#80)
     path("healthz/", healthz, name="healthz"),
+    path("api/", include("api.urls")),  # 외부 API (#102)
     path("admin/", admin.site.urls),
 ]
+
+handler404 = "config.views.page_not_found"
+handler500 = "config.views.server_error"

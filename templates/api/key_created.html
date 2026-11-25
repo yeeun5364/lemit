@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}API 키 발급 완료{% endblock %}
+{% block page_title %}API 키를 발급했어요{% endblock %}
+{% block content %}
+<div class="card form-card">
+  <p class="alert alert-warning" role="alert">이 화면을 벗어나면 키를 다시 볼 수 없어요. 지금 복사해서 안전한 곳(에이전트 설정, 비밀번호 관리자 등)에 넣어 두세요.</p>
+  <div class="field">
+    <label class="field-label" for="raw-key">{{ api_key.name }}</label>
+    <input id="raw-key" class="mono-sm" type="text" value="{{ raw_key }}" readonly autocomplete="off" spellcheck="false" data-select-on-focus>
+    <div class="helptext">범위: {{ api_key.scope_labels|join:", " }} · 만료: {{ api_key.expires_at|date:"Y년 n월 j일" }}</div>
+  </div>
+  <div class="form-actions">
+    <button type="button" class="btn btn-primary" data-copy-target="raw-key" data-copied-text="복사했어요">키 복사</button>
+    <a class="btn btn-secondary" href="{% url 'api_keys:list' %}">다 했어요</a>
+  </div>
+  <p class="muted small">요청할 때 헤더에 <span class="mono-sm">Authorization: Bearer &lt;키&gt;</span>를 넣으세요. 연결 확인: <span class="mono-sm">GET {{ request.scheme }}://{{ request.get_host }}{% url 'api:me' %}</span></p>
+</div>
+{% endblock %}
