@@ -402,7 +402,7 @@ class SafeExceptionLogTests(ApiTestCase):
     def test_django_request_log_is_redacted_for_api_paths_only(self):
         from django.test import RequestFactory
 
-        from api.safe_log import RedactApiExceptionFilter
+        from config.safe_log import RedactApiExceptionFilter
 
         try:
             raise RuntimeError(SECRET)
@@ -423,7 +423,7 @@ class SafeExceptionLogTests(ApiTestCase):
                     self.assertIn("builtins.RuntimeError", text)
 
     def test_filter_is_installed_on_django_request_logger(self):
-        from api.safe_log import RedactApiExceptionFilter
+        from config.safe_log import RedactApiExceptionFilter
 
         self.assertTrue(
             any(isinstance(f, RedactApiExceptionFilter) for f in logging.getLogger("django.request").filters)

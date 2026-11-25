@@ -12,14 +12,17 @@
 from django.contrib.auth.decorators import login_not_required
 from django.db import transaction
 from django.shortcuts import render
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from api import scopes
 from api.errors import ERRORS
-from api.serializers import MeSerializer
+from api.exceptions import ApiError
+from api.schema import error_responses
+from api.serializers import ClassifyRequestSerializer, ClassifyResponseSerializer, MeSerializer
+from inbox import classifier
 
 
 class ApiView(APIView):
@@ -43,7 +46,7 @@ class MeView(ApiView):
     @extend_schema(
         summary="연결 확인 (키 정보)",
         description="API 키가 올바르게 설정됐는지 확인할 때 씁니다. 키 주인 이름과 범위·만료일을 돌려줍니다.",
-        responses=MeSerializer,
+        responses={200: MeSerializer, **error_responses()},
         tags=["연결 확인"],
     )
     def get(self, request):
@@ -55,3 +58,65 @@ class MeView(ApiView):
 def error_docs(request):
     """오류 코드 설명 (공개). 오류 응답의 docs 링크가 이 화면의 #code로 연결된다."""
     return render(request, "api/error_docs.html", {"errors": sorted(ERRORS.items(), key=lambda kv: kv[1].status)})
+
+
+class ClassifyView(ApiView):
+    """메시지 분류 (#101). 웹 메시지함과 같은 모델·기준(inbox.classifier)을 쓰고, 아무것도 저장하지 않는다."""
+
+    required_scope = scopes.READ
+
+    @extend_schema(
+        summary="메시지 분류",
+        description=(
+            "수강생 메시지 한 건을 휴강 요청·보강 요청·일정 변경·일반 메시지 중 하나로 분류합니다. "
+            "결과는 참고용이며 메시지·회차·레슨권을 저장하거나 바꾸지 않습니다.\n\n"
+            "- 필요 범위: `read`\n"
+            "- 앞 500자만 분류합니다 (넘으면 `truncated: true`).\n"
+            "- `is_low_confidence`가 true이거나 `scores`의 1·2위가 비슷하면 강사에게 확인하세요.\n"
+            "- 모델을 쓸 수 없으면 `503 model_unavailable` (`retryable: true`)."
+        ),
+        request=ClassifyRequestSerializer,
+        responses={
+            200: ClassifyResponseSerializer,
+            **error_responses("validation_error", "model_unavailable", write=True),
+        },
+        examples=[
+            OpenApiExample(
+                "일정 변경 요청",
+                request_only=True,
+                value={"text": "다음 주 화요일 수업 목요일로 옮길 수 있을까요?"},
+            ),
+            OpenApiExample(
+                "분류 결과",
+                response_only=True,
+                value={
+                    "label": "RESCHEDULE",
+                    "label_display": "일정 변경",
+                    "confidence": 0.812,
+                    "is_low_confidence": False,
+                    "scores": {"RESCHEDULE": 0.812, "MAKEUP": 0.104, "CANCELLATION": 0.061, "GENERAL": 0.023},
+                    "truncated": False,
+                    "model_version": "v2",
+                },
+            ),
+        ],
+        tags=["메시지"],
+    )
+    def post(self, request):
+        serializer = ClassifyRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            prediction = classifier.classify(serializer.validated_data["text"])
+        except classifier.MessageClassifierUnavailable:
+            # 원인은 inbox.classifier가 로그에 남긴다. 응답에는 내부 경로·파일 이름을 넣지 않는다.
+            raise ApiError("model_unavailable") from None
+        data = {
+            "label": prediction.label,
+            "label_display": prediction.display,
+            "confidence": prediction.confidence,
+            "is_low_confidence": prediction.is_low_confidence,
+            "scores": dict(sorted(prediction.scores.items(), key=lambda kv: kv[1], reverse=True)),
+            "truncated": prediction.truncated,
+            "model_version": prediction.model_version,
+        }
+        return Response(ClassifyResponseSerializer(data).data)

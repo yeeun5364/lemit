@@ -1,9 +1,12 @@
 import json
+import logging
 import shutil
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+import numpy as np
 from django.conf import settings
 from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -174,3 +177,99 @@ class HealthzTests(BrokenArtifactMixin, TestCase):
 
     def test_post_not_allowed(self):
         self.assertEqual(self.client.post(reverse("healthz")).status_code, 405)
+
+
+SECRET = "김하늘 010-1234-5678"
+
+
+def fake_model(classes, proba):
+    return SimpleNamespace(
+        version="test",
+        pipeline=SimpleNamespace(classes_=np.array(classes), predict_proba=lambda texts: np.array([proba])),
+    )
+
+
+class SafePredictionLogTests(SimpleTestCase):
+    """추론 예외 로그에 입력 메시지·개인정보가 남지 않는다 (PR #114 리뷰 P1)."""
+
+    def setUp(self):
+        classifier.clear_cache()
+        self.addCleanup(classifier.clear_cache)
+
+    def capture(self):
+        records = []
+        handler = logging.Handler(level=logging.DEBUG)
+        handler.emit = records.append
+        logger = logging.getLogger("inbox")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        return records
+
+    def test_exception_message_with_message_text_is_not_logged(self):
+        records = self.capture()
+        model = classifier.get_model()
+
+        def leak(texts):
+            try:
+                raise ValueError(f"bad input: {texts[0]}")
+            except ValueError as e:
+                raise RuntimeError(f"예측 실패 ({SECRET})") from e
+
+        with mock.patch.object(model.pipeline, "predict_proba", side_effect=leak):
+            with self.assertRaises(classifier.MessageClassifierUnavailable) as ctx:
+                classifier.classify(f"{SECRET} 내일 수업 취소해 주세요")
+        # 운영 로그 형식(traceback 포함)으로 실제 출력될 문자열 전체를 본다
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        output = "\n".join(formatter.format(r) for r in records)
+        self.assertIn("builtins.RuntimeError", output)
+        self.assertIn("classifier.py", output)
+        self.assertNotIn(SECRET, output)
+        self.assertNotIn("내일 수업", output)
+        self.assertNotIn(SECRET, str(ctx.exception))
+        self.assertIsNone(ctx.exception.__cause__)  # 원래 예외(메시지 포함)를 잇지 않음
+
+    def test_web_message_still_saved_when_prediction_fails(self):
+        from inbox import services
+
+        model = classifier.get_model()
+        with (
+            mock.patch.object(model.pipeline, "predict_proba", side_effect=RuntimeError(SECRET)),
+            self.assertLogs("inbox", "WARNING") as logs,
+        ):
+            self.assertEqual(services._classify(f"{SECRET} 수업 취소"), {})  # 분류 불가로 저장
+        self.assertNotIn(SECRET, "\n".join(logs.output))
+
+
+class PredictionOutputValidationTests(SimpleTestCase):
+    """비정상 모델 출력은 분류 불가로 바꾼다 (PR #114 리뷰 P2)."""
+
+    CASES = {
+        "확률 개수 부족": (LABELS, [0.5, 0.3, 0.2]),
+        "확률 개수 초과": (LABELS, [0.2, 0.2, 0.2, 0.2, 0.2]),
+        "분류 3개": (LABELS[:3], [0.5, 0.3, 0.2]),
+        "모르는 분류": (("CANCELLATION", "MAKEUP", "RESCHEDULE", "OTHER"), [0.1, 0.2, 0.3, 0.4]),
+        "중복 분류": (("CANCELLATION", "MAKEUP", "MAKEUP", "GENERAL"), [0.1, 0.2, 0.3, 0.4]),
+        "NaN": (LABELS, [float("nan"), 0.2, 0.3, 0.5]),
+        "무한대": (LABELS, [float("inf"), 0.0, 0.0, 0.0]),
+        "음수": (LABELS, [-0.1, 0.4, 0.4, 0.3]),
+        "1 초과": (LABELS, [1.2, -0.1, -0.05, -0.05]),
+        "합이 1 아님": (LABELS, [0.5, 0.5, 0.5, 0.5]),
+    }
+
+    def test_invalid_outputs_are_unavailable(self):
+        for name, (classes, proba) in self.CASES.items():
+            with (
+                self.subTest(name),
+                mock.patch.object(classifier, "get_model", return_value=fake_model(classes, proba)),
+                self.assertRaises(classifier.MessageClassifierUnavailable),
+                self.assertLogs("inbox", "ERROR"),
+            ):
+                classifier.classify("내일 수업 취소해 주세요")
+
+    def test_valid_output_in_any_class_order(self):
+        order = ("GENERAL", "RESCHEDULE", "CANCELLATION", "MAKEUP")
+        with mock.patch.object(classifier, "get_model", return_value=fake_model(order, [0.1, 0.6, 0.2, 0.1])):
+            p = classifier.classify("수업 옮겨 주세요")
+        self.assertEqual(p.label, "RESCHEDULE")
+        self.assertEqual(p.confidence, 0.6)
+        self.assertEqual(set(p.scores), set(LABELS))
