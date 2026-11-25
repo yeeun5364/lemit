@@ -1,4 +1,6 @@
-"""API 오류 로그에서 민감한 값을 빼는 정책 (#102 리뷰 P2).
+"""오류 로그에서 민감한 값을 빼는 정책 (#102 리뷰 P2, PR #114 리뷰 P1).
+
+외부 API(api.exceptions)와 메시지 분류(inbox.classifier)가 함께 쓴다. 특정 앱에 두지 않고 config에 둔다.
 
 예외 메시지(str(exc))에는 요청에서 온 값이 그대로 섞일 수 있다.
 예: DB 제약 위반의 "Failing row contains (…, 김하늘, …)", 입력값을 담은 ValueError.

@@ -1,5 +1,7 @@
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from api.errors import ERRORS
 from inbox.classifier import LOW_CONFIDENCE
 from inbox.classifier import MAX_LENGTH as CLASSIFY_LENGTH
 from ml.labels import LABELS
@@ -26,15 +28,41 @@ class MeSerializer(serializers.Serializer):
     api_key = ApiKeyInfoSerializer()
 
 
+TEXT_MAX_LENGTH = 1000  # 메시지 본문 최대 길이(inbox.Message.body)와 같다
+
+
+@extend_schema_field(
+    {
+        "type": "string",
+        "minLength": 1,
+        "description": (
+            f"분류할 메시지. **앞뒤 공백을 뺀 길이**가 1~{TEXT_MAX_LENGTH}자여야 합니다 "
+            f"(공백만 있으면 거절, 보낸 문자열 자체의 길이가 아님). 앞 {CLASSIFY_LENGTH}자만 분류에 씁니다."
+        ),
+        "example": "다음 주 화요일 수업 목요일로 옮길 수 있을까요?",
+    }
+)
+class StrictTextField(serializers.Field):
+    """JSON 문자열만 받는 필드. CharField는 숫자 123을 "123"으로 바꿔 받아 버리므로 쓰지 않는다."""
+
+    def to_internal_value(self, data):
+        if not isinstance(data, str):
+            raise serializers.ValidationError("문자열로 보내 주세요.", code="invalid")
+        return data
+
+    def to_representation(self, value):
+        return value
+
+
 class ClassifyRequestSerializer(serializers.Serializer):
     """분류 요청 (#101). 길이 제한은 메시지 본문 최대 길이와 같다."""
 
-    MAX_LENGTH = 1000
+    MAX_LENGTH = TEXT_MAX_LENGTH
 
-    text = serializers.JSONField(help_text=f"분류할 메시지 (1~{MAX_LENGTH}자). 앞 {CLASSIFY_LENGTH}자만 분류에 씁니다.")
+    text = StrictTextField()
 
     def validate_text(self, value):
-        # JSONField로 받아 직접 검사한다: CharField는 숫자를 문자열로 바꿔 받아 버리고, 현재 글자 수를 알려 주지 못한다.
+        # 앞뒤 공백을 뺀 길이로 검사하고, 넘으면 현재 글자 수를 알려 준다
         if not isinstance(value, str):
             raise serializers.ValidationError("문자열로 보내 주세요.", code="invalid")
         text = value.strip()
@@ -59,3 +87,26 @@ class ClassifyResponseSerializer(serializers.Serializer):
     scores = serializers.DictField(child=serializers.FloatField(), help_text="4개 분류 각각의 확률 (높은 순)")
     truncated = serializers.BooleanField(help_text=f"{CLASSIFY_LENGTH}자를 넘어 앞부분만 분류했으면 true")
     model_version = serializers.CharField(help_text="분류에 쓴 모델 버전 (/healthz/의 버전과 같음)")
+
+
+class ErrorFieldSerializer(serializers.Serializer):
+    field = serializers.CharField(allow_null=True, help_text="문제가 있는 입력 항목. 본문 전체 문제면 null")
+    code = serializers.CharField(help_text="항목 오류 코드 (예: required, blank, max_length, invalid)")
+    message = serializers.CharField(help_text="고치는 방법 (한국어)")
+
+
+class ErrorBodySerializer(serializers.Serializer):
+    code = serializers.ChoiceField(choices=sorted(ERRORS), help_text="오류 코드. 분기는 이 값으로 하세요")
+    message = serializers.CharField(help_text="무엇이 잘못됐는지 (한국어)")
+    hint = serializers.CharField(help_text="어떻게 고치는지 (한국어)")
+    fields = ErrorFieldSerializer(many=True, help_text="입력 항목별 문제 (입력 오류가 아니면 빈 목록)")
+    retryable = serializers.BooleanField(help_text="같은 요청을 나중에 다시 보내면 성공할 수 있는지")
+    retry_after = serializers.IntegerField(required=False, help_text="429일 때만: 몇 초 뒤 다시 시도할지")
+    docs = serializers.URLField(help_text="오류 코드 설명 주소 (/api/docs/errors/#code)")
+    request_id = serializers.CharField(help_text="X-Request-ID 헤더와 같은 값. 문의할 때 알려 주세요")
+
+
+class ErrorResponseSerializer(serializers.Serializer):
+    """모든 API 오류 응답의 공통 형식 (#102)."""
+
+    error = ErrorBodySerializer()

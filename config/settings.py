@@ -196,7 +196,7 @@ LOGGING = {
     },
     "filters": {
         # /api/ 요청의 처리되지 않은 예외(미들웨어 등 DRF 밖)는 예외 메시지 없이 종류·코드 위치만 (#102 리뷰 P2)
-        "api_redact": {"()": "api.safe_log.RedactApiExceptionFilter"},
+        "api_redact": {"()": "config.safe_log.RedactApiExceptionFilter"},
     },
     "handlers": {
         "stdout": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "plain"},

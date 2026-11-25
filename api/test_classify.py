@@ -1,5 +1,6 @@
 """메시지 분류 API POST /api/v1/messages/classify/ (#101)."""
 
+import json
 import logging
 import tempfile
 from pathlib import Path
@@ -179,3 +180,63 @@ class ClassifyDocsTests(ClassifyTestCase):
         self.assertIn("/api/v1/messages/classify/", schema)
         self.assertIn("RESCHEDULE", schema)  # 예시
         self.assertContains(errors, 'id="model_unavailable"')
+
+
+class ClassifyAbnormalOutputTests(ClassifyTestCase):
+    def test_abnormal_model_output_is_503(self):
+        fake = SimpleNamespace(
+            version="x",
+            pipeline=SimpleNamespace(
+                classes_=np.array(LABELS), predict_proba=lambda t: np.array([[np.nan, 0.5, 0.5, 0.0]])
+            ),
+        )
+        with mock.patch.object(classifier, "get_model", return_value=fake), self.assertLogs("inbox", "ERROR"):
+            response = self.classify({"text": "내일 수업 취소해 주세요"})
+        error = self.assertError(response, 503, "model_unavailable")
+        self.assertTrue(error["retryable"])
+        self.assertNotIn("NaN", response.content.decode())
+
+
+class ClassifySchemaTests(ClassifyTestCase):
+    """OpenAPI 문서: 요청 타입과 오류 응답 (PR #114 리뷰 P2)."""
+
+    def schema(self):
+        logging.disable(logging.CRITICAL)
+        try:
+            response = self.client.get("/api/schema/", {"format": "json"})
+        finally:
+            logging.disable(logging.NOTSET)
+        self.assertEqual(response.status_code, 200)
+        return json.loads(response.content)
+
+    def resolve(self, schema, node):
+        while "$ref" in node:
+            node = schema["components"]["schemas"][node["$ref"].rsplit("/", 1)[-1]]
+        return node
+
+    def test_request_text_is_documented_as_string_after_trim(self):
+        schema = self.schema()
+        body = schema["paths"][URL]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        request = self.resolve(schema, body)
+        text = request["properties"]["text"]
+        self.assertEqual(text["type"], "string")
+        self.assertIn("앞뒤 공백을 뺀 길이", text["description"])
+        self.assertNotIn("maxLength", text)  # 보낸 문자열 길이가 아니라 공백 제거 후 길이로 검사하므로
+        self.assertIn("text", request["required"])
+
+    def test_error_responses_documented(self):
+        schema = self.schema()
+        responses = schema["paths"][URL]["post"]["responses"]
+        self.assertEqual(set(responses), {"200", "400", "401", "403", "415", "429", "500", "503"})
+        expected = {"code", "message", "hint", "fields", "retryable", "docs", "request_id"}
+        for status in ("400", "401", "403", "415", "429", "500", "503"):
+            with self.subTest(status=status):
+                error = self.resolve(schema, responses[status]["content"]["application/json"]["schema"])
+                body = self.resolve(schema, error["properties"]["error"])
+                self.assertTrue(expected <= set(body["properties"]))
+        self.assertIn("model_unavailable", responses["503"]["description"])
+        self.assertIn("validation_error", responses["400"]["description"])
+        self.assertIn("invalid_json", responses["400"]["description"])
+        self.assertIn("insufficient_scope", responses["403"]["description"])
+        me = schema["paths"]["/api/v1/me/"]["get"]["responses"]
+        self.assertTrue({"200", "401", "403", "429", "500"} <= set(me))

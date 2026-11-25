@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from api import scopes
 from api.errors import ERRORS
 from api.exceptions import ApiError
+from api.schema import error_responses
 from api.serializers import ClassifyRequestSerializer, ClassifyResponseSerializer, MeSerializer
 from inbox import classifier
 
@@ -45,7 +46,7 @@ class MeView(ApiView):
     @extend_schema(
         summary="연결 확인 (키 정보)",
         description="API 키가 올바르게 설정됐는지 확인할 때 씁니다. 키 주인 이름과 범위·만료일을 돌려줍니다.",
-        responses=MeSerializer,
+        responses={200: MeSerializer, **error_responses()},
         tags=["연결 확인"],
     )
     def get(self, request):
@@ -75,7 +76,10 @@ class ClassifyView(ApiView):
             "- 모델을 쓸 수 없으면 `503 model_unavailable` (`retryable: true`)."
         ),
         request=ClassifyRequestSerializer,
-        responses={200: ClassifyResponseSerializer},
+        responses={
+            200: ClassifyResponseSerializer,
+            **error_responses("validation_error", "model_unavailable", write=True),
+        },
         examples=[
             OpenApiExample(
                 "일정 변경 요청",

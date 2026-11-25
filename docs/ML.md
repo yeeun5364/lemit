@@ -136,6 +136,8 @@
 - **외부 API `POST /api/v1/messages/classify/`** (#101, 2026-11-25, 로컬 테스트 통과)
   - `classify()`를 그대로 호출해 웹과 같은 기준을 씁니다. 이를 위해 `MessagePrediction`에 `scores`(분류별 확률 전체)와 `truncated`(500자 초과 여부)를 추가했습니다. 기존 웹 동작은 바뀌지 않습니다.
   - 모델을 쓸 수 없으면 503 `model_unavailable`(`retryable: true`)로 답하고, 원인은 서버 로그에만 남깁니다.
+  - **예측 결과 검증 (PR #114 리뷰):** `classify()`는 예측 결과도 확인합니다. 분류 목록이 4개 분류와 같은지, 확률 개수가 분류 개수와 같은지, 모든 확률이 0~1의 유한한 값인지, 합이 1(±0.001)인지 봅니다. 하나라도 어긋나면 `MessageClassifierUnavailable`로 바꿉니다. 웹에서는 '분류 불가'로 저장되고, API는 503으로 답합니다. 예측부터 결과 정리까지 한 예외 처리 범위로 묶어, 배열 크기 불일치 같은 오류도 500이 되지 않습니다.
+  - **예측 오류 로그 (PR #114 리뷰):** 예외 메시지에 입력 메시지가 섞일 수 있어 `logger.exception` 대신 예외 종류와 코드 위치만 남깁니다(`config/safe_log.py`, 외부 API 오류 로그와 같은 정책). `MessageClassifierUnavailable`도 원래 예외를 잇지 않습니다(`from None`).
   - 사용법과 curl 예시는 [API.md](API.md)에 있습니다.
 
 ### 설계: 메시지함 (UC-17, A안)

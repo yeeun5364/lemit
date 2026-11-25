@@ -1,24 +1,27 @@
 """수강생 메시지 분류 서비스: 학습된 모델(ml/)로 메시지 유형을 예측한다.
 
 - 예측 결과는 참고용 표시에만 쓴다. 일정을 자동으로 바꾸지 않는다.
-- 모델을 쓸 수 없으면 MessageClassifierUnavailable을 낸다. 호출하는 화면은 이 예외를 잡아
+- 모델을 쓸 수 없거나 출력이 이상하면 MessageClassifierUnavailable을 낸다. 호출하는 화면은 이 예외를 잡아
   "분류 불가"만 표시하고, 메시지 저장과 일정 기능은 그대로 동작해야 한다.
 """
 
 import logging
+import math
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.conf import settings
 
+from config.safe_log import describe_exception
 from ml import artifact
-from ml.labels import LABEL_DISPLAY
+from ml.labels import LABEL_DISPLAY, LABELS
 
 logger = logging.getLogger(__name__)
 
 MAX_LENGTH = 500  # 이보다 긴 메시지는 앞부분만 분류에 사용
 LOW_CONFIDENCE = 0.5  # 가장 높은 확률이 이보다 낮으면 "확신 낮음"으로 표시
+SUM_TOLERANCE = 1e-3  # 확률 합이 1에서 이만큼 넘게 벗어나면 이상한 출력으로 본다
 
 
 class MessageClassifierUnavailable(Exception):
@@ -88,20 +91,47 @@ def classify(text: str) -> MessagePrediction:
 
     model = get_model()
     try:
+        # 예측부터 결과 정리까지 한 범위로 묶는다: 클래스·확률 개수가 어긋나도 500이 아니라 "분류 불가"가 되게
         proba = model.pipeline.predict_proba([text])[0]
+        classes = [str(c) for c in model.pipeline.classes_]
+        scores = _validated_scores(classes, proba)
+    except MessageClassifierUnavailable:
+        raise
     except Exception as e:  # 예측 중 오류도 서비스 전체 오류로 번지지 않게 한다
-        logger.exception("메시지 분류 중 오류")
-        raise MessageClassifierUnavailable(f"예측 중 오류: {type(e).__name__}") from e
+        # 예외 메시지에는 입력한 메시지가 섞일 수 있으므로 종류와 코드 위치만 남긴다 (PR #114 리뷰 P1)
+        logger.error("메시지 분류 중 오류\n%s", describe_exception(e))
+        raise MessageClassifierUnavailable(f"예측 중 오류: {type(e).__name__}") from None
 
-    classes = [str(c) for c in model.pipeline.classes_]
-    best = int(proba.argmax())
+    label = max(scores, key=scores.get)
     return MessagePrediction(
-        label=classes[best],
-        confidence=round(float(proba[best]), 3),
+        label=label,
+        confidence=round(scores[label], 3),
         model_version=model.version,
-        scores={label: round(float(p), 3) for label, p in zip(classes, proba, strict=True)},
+        scores={name: round(p, 3) for name, p in scores.items()},
         truncated=truncated,
     )
+
+
+def _validated_scores(classes, proba) -> dict[str, float]:
+    """모델 출력이 '4개 분류의 확률'인지 확인한다. 아니면 MessageClassifierUnavailable (PR #114 리뷰 P2).
+
+    모델 파일은 불러올 때 분류 목록을 확인하지만(ml/artifact), 예측 결과 자체도 한 번 더 본다.
+    NaN·무한대·범위 밖 값이 응답으로 나가거나 엉뚱한 분류를 고르지 않게 하기 위해서다.
+    """
+    values = [float(p) for p in proba]
+    problem = None
+    if sorted(classes) != sorted(LABELS) or len(set(classes)) != len(classes):
+        problem = "분류 목록이 다름"
+    elif len(values) != len(classes):
+        problem = f"확률 개수({len(values)})와 분류 개수({len(classes)})가 다름"
+    elif not all(math.isfinite(p) and 0.0 <= p <= 1.0 for p in values):
+        problem = "0~1 범위를 벗어나거나 숫자가 아닌 확률"
+    elif abs(sum(values) - 1.0) > SUM_TOLERANCE:
+        problem = "확률 합이 1이 아님"
+    if problem:
+        logger.error("메시지 분류 모델 출력 이상: %s", problem)  # 입력 메시지·확률 값은 남기지 않는다
+        raise MessageClassifierUnavailable(f"모델 출력 이상: {problem}")
+    return dict(zip(classes, values, strict=True))
 
 
 def status() -> dict:

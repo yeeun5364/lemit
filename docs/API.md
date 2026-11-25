@@ -99,10 +99,13 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 | `model_version` | 분류에 쓴 모델 버전. `/healthz/`의 `message_classifier.version`과 같습니다 |
 
 입력 규칙:
-- `text`는 문자열, 앞뒤 공백을 뺀 길이 1~1000자 (메시지 최대 길이와 같음)
+- `text`는 JSON 문자열이어야 합니다. 숫자·배열·null은 거절합니다.
+- 길이는 **앞뒤 공백을 뺀 뒤** 1~1000자입니다(메시지 최대 길이와 같음). 보낸 문자열 자체의 길이가 아니므로, 앞뒤 공백 때문에 1000자를 넘어도 공백을 뺀 내용이 1000자 이하면 받습니다. 공백만 있으면 거절합니다.
 - 한 요청에 한 건만 분류합니다
 
 ## 4. 오류 응답
+
+`/api/docs/`에는 엔드포인트마다 낼 수 있는 오류 상태(400·401·403·415·429·500·503 등)와 가능한 `code` 목록이 공통 오류 형식으로 적혀 있습니다.
 
 모든 오류는 같은 형식입니다. **분기는 `message` 문장이 아니라 `code`로 하세요.** `message`·`hint`는 사람이 읽는 한국어 문장이라 바뀔 수 있습니다.
 
@@ -132,7 +135,7 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 | 입력값 오류 | 400 `validation_error` | `fields`를 보고 고침 |
 | JSON 문법 오류 | 400 `invalid_json` | 따옴표·쉼표·괄호 확인 |
 | 요청이 너무 많음 | 429 `rate_limited` | `retry_after`초(또는 `Retry-After` 헤더) 뒤 재시도 |
-| 분류 모델 사용 불가 | 503 `model_unavailable` | 잠시 뒤 재시도 (`retryable: true`) |
+| 분류 모델 사용 불가·모델 출력 이상 | 503 `model_unavailable` | 잠시 뒤 재시도 (`retryable: true`) |
 | 서버 오류 | 500 `server_error` | `request_id`를 운영자에게 전달 |
 
 `retryable`이 `true`인 오류만 자동 재시도하세요. 나머지는 같은 요청을 반복해도 결과가 같습니다.
