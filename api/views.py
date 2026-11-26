@@ -177,6 +177,7 @@ class StudentListView(ApiView, generics.ListAPIView):
         if errors:
             raise ValidationError(errors)
         self.filters = query.validated_data
+        self.page_params = page.validated_data  # ApiPagination이 원본 쿼리 대신 이 값을 쓴다 (PR #116 리뷰 P2)
         return super().get(request, *args, **kwargs)
 
 

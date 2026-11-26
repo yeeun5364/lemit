@@ -144,6 +144,8 @@ curl -s "$LEMIT/api/v1/students/12/" -H "Authorization: Bearer $LEMIT_API_KEY"
 | `page` | 쪽 번호 (1부터). 마지막 쪽을 넘으면 `404 not_found`이고 메시지에 마지막 쪽 번호가 있습니다 |
 | `page_size` | 한 쪽에 담을 개수 (기본 20, 1~100) |
 
+`page`·`page_size`는 숫자만으로 된 정수(예: `2`)만 받습니다. `2.0`·`+2`·앞뒤 공백·`last`는 `400 validation_error`입니다.
+
 - **개인정보 최소 공개:** 연락처·보호자 이름·보호자 연락처·메모는 API로 주지 않습니다. API 결과는 MCP를 거쳐 외부 AI 에이전트에 전달될 수 있어서, 수강생을 알아보고 고르는 데 필요한 값만 둡니다 (2026-11-26 결정).
 - 틀린 조건(예: `status=deleted`, `page_size=500`)은 무시하지 않고 `400 validation_error`로 알려 줍니다. 여러 개가 틀리면 `fields`에 함께 나옵니다.
 - 다른 강사의 수강생 번호는 없는 번호와 똑같이 `404 not_found`입니다.

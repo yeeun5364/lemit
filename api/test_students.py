@@ -113,6 +113,49 @@ class StudentListTests(StudentApiTestCase):
         error = self.assertError(self.get(LIST + "?status=x&page_size=500", self.raw), 400, "validation_error")
         self.assertEqual({f["field"] for f in error["fields"]}, {"status", "page_size"})
 
+    def test_page_numbers_must_be_plain_digits(self):
+        # IntegerField는 "2.0"을 2로 받아 주지만, 실제 페이지 나눔과 해석이 갈리지 않게 숫자만 받는다 (PR #116 리뷰 P2)
+        for value in ("1.0", "2.0", "+2", "%202", "2%20", "-1", "1e1", "%EF%BC%92", "last", "0x2"):
+            for field in ("page", "page_size"):
+                with self.subTest(field=field, value=value):
+                    error = self.assertError(self.get(f"{LIST}?{field}={value}", self.raw), 400, "validation_error")
+                    self.assertEqual([f["field"] for f in error["fields"]], [field])
+
+    def test_non_digit_page_and_size_reported_together(self):
+        error = self.assertError(self.get(LIST + "?page=1.0&page_size=2.0&status=x", self.raw), 400, "validation_error")
+        self.assertEqual({f["field"] for f in error["fields"]}, {"page", "page_size", "status"})
+
+    def test_validated_page_values_are_what_pagination_uses(self):
+        for i in range(3):
+            Student.objects.create(teacher=self.teacher, name=f"하{i}")
+        body = self.get(LIST + "?page=2&page_size=2", self.raw).json()
+        self.assertEqual([s["name"] for s in body["results"]], ["하0", "하1"])  # 기본 20으로 돌아가지 않음
+        self.assertEqual(len(self.get(LIST + "?page_size=02", self.raw).json()["results"]), 2)  # 앞의 0은 숫자
+        self.assertEqual(len(self.get(LIST + "?page_size=100", self.raw).json()["results"]), 5)  # 최대값 그대로
+
+
+class PaginationFallbackTests(StudentApiTestCase):
+    """뷰가 page_params를 넣지 않아도 ApiPagination이 같은 규칙으로 검증한다 (#104·#105 재사용 대비)."""
+
+    def paginate(self, query):
+        from rest_framework.request import Request
+        from rest_framework.test import APIRequestFactory
+
+        from api.pagination import ApiPagination
+
+        request = Request(APIRequestFactory().get("/x/" + query))
+        return ApiPagination().paginate_queryset(Student.objects.order_by("name", "id"), request, view=object())
+
+    def test_valid(self):
+        self.assertEqual([s.name for s in self.paginate("?page=2&page_size=1")], ["김민지"])
+
+    def test_invalid_is_400(self):
+        from rest_framework.exceptions import ValidationError
+
+        for query in ("?page_size=2.0", "?page=1.0", "?page_size=500"):
+            with self.subTest(query=query), self.assertRaises(ValidationError):
+                self.paginate(query)
+
 
 class StudentDetailTests(StudentApiTestCase):
     def test_my_student(self):
