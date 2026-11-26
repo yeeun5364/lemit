@@ -10,7 +10,9 @@
 |---|---|---|---|---|
 | `GET /api/v1/me/` | 연결 확인 (키 주인·범위·만료일) | 없음 (유효한 키면 됨) | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #102 |
 | `POST /api/v1/messages/classify/` | 메시지 한 건 분류 | `read` | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #101 |
-| 수강생·일정·잔여 회차 조회 | | `read` | ⬜ | #103~#105 |
+| `GET /api/v1/students/` | 수강생 목록 (이름 검색·보관 여부·페이지) | `read` | 🟡 구현·로컬 확인 (2026-11-26), 운영 배포 전 | #103 |
+| `GET /api/v1/students/{id}/` | 수강생 한 명 | `read` | 🟡 구현·로컬 확인 (2026-11-26), 운영 배포 전 | #103 |
+| 일정·잔여 회차 조회 | | `read` | ⬜ | #104·#105 |
 | 일정 변경 | | `sessions:write` | ⬜ | #106 |
 | 메시지 발송 | | `messages:send` | ⬜ | #107 |
 
@@ -112,6 +114,42 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 - 길이는 **앞뒤 공백을 뺀 뒤** 1~1000자입니다(메시지 최대 길이와 같음). 보낸 문자열 자체의 길이가 아니므로, 앞뒤 공백 때문에 1000자를 넘어도 공백을 뺀 내용이 1000자 이하면 받습니다. 공백만 있으면 거절합니다.
 - 한 요청에 한 건만 분류합니다
 
+### 수강생 목록 `GET /api/v1/students/` · 상세 `GET /api/v1/students/{id}/` (#103)
+
+내 수강생만 이름순으로 돌려줍니다. 웹 '수강생' 목록과 같은 기준입니다.
+
+```bash
+curl -s "$LEMIT/api/v1/students/?status=all&page_size=50" -H "Authorization: Bearer $LEMIT_API_KEY"
+curl -s "$LEMIT/api/v1/students/12/" -H "Authorization: Bearer $LEMIT_API_KEY"
+```
+
+```json
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {"id": 12, "name": "김민지", "is_active": true, "is_minor": true, "created_at": "2026-09-01T10:00:00+09:00"},
+    {"id": 15, "name": "이다혜", "is_active": true, "is_minor": false, "created_at": "2026-09-03T18:20:00+09:00"}
+  ]
+}
+```
+
+상세는 `results` 안의 객체 하나와 같은 형태입니다.
+
+| 조건 (쿼리) | 뜻 |
+|---|---|
+| `status` | `active`(기본, 수강 중만) · `archived`(보관만) · `all`(전체) |
+| `q` | 이름 검색. 일부만 같아도 찾습니다 (앞뒤 공백 무시, 최대 50자) |
+| `page` | 쪽 번호 (1부터). 마지막 쪽을 넘으면 `404 not_found`이고 메시지에 마지막 쪽 번호가 있습니다 |
+| `page_size` | 한 쪽에 담을 개수 (기본 20, 1~100) |
+
+- **개인정보 최소 공개:** 연락처·보호자 이름·보호자 연락처·메모는 API로 주지 않습니다. API 결과는 MCP를 거쳐 외부 AI 에이전트에 전달될 수 있어서, 수강생을 알아보고 고르는 데 필요한 값만 둡니다 (2026-11-26 결정).
+- 틀린 조건(예: `status=deleted`, `page_size=500`)은 무시하지 않고 `400 validation_error`로 알려 줍니다. 여러 개가 틀리면 `fields`에 함께 나옵니다.
+- 다른 강사의 수강생 번호는 없는 번호와 똑같이 `404 not_found`입니다.
+- 보관한 수강생도 상세 조회는 됩니다(`is_active: false`).
+- 레슨권·잔여 회차는 잔여 회차 조회 API(#105)에서 다룹니다.
+
 > **Windows에서 한글을 보낼 때:** Windows용 `curl.exe`(Git Bash 포함)는 명령줄에 쓴 한글을 UTF-8이 아닌 CP949로 보낼 수 있습니다. 그러면 `400 invalid_json`이 나거나 값이 깨집니다. 한글 본문은 UTF-8로 저장한 파일로 보내거나(`--data-binary @body.json`), 아래 PowerShell 방법을 쓰세요.
 
 ### Windows PowerShell
@@ -172,7 +210,8 @@ Remove-Variable h
 | 만료된 키 | 401 `api_key_expired` | 메시지에 만료 날짜가 있음. 새로 발급 |
 | 범위 부족 | 403 `insufficient_scope` | 메시지에 필요한 범위와 키의 범위가 있음. 그 범위를 고른 키로 발급 |
 | 다른 강사의 데이터·없는 번호 | 404 `not_found` | 존재 여부를 드러내지 않으려고 403 대신 404로 답함 |
-| 입력값 오류 | 400 `validation_error` | `fields`를 보고 고침 |
+| 입력값·조회 조건 오류 | 400 `validation_error` | `fields`를 보고 고침 |
+| 목록의 마지막 쪽을 넘는 `page` | 404 `not_found` | 메시지의 마지막 쪽 번호 확인, `next` 링크를 따라감 |
 | JSON 문법 오류 | 400 `invalid_json` | 따옴표·쉼표·괄호 확인 |
 | 요청이 너무 많음 | 429 `rate_limited` | `retry_after`초(또는 `Retry-After` 헤더) 뒤 재시도 |
 | 분류 모델 사용 불가·모델 출력 이상 | 503 `model_unavailable` | 잠시 뒤 재시도 (`retryable: true`) |

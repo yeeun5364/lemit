@@ -110,3 +110,38 @@ class ErrorResponseSerializer(serializers.Serializer):
     """모든 API 오류 응답의 공통 형식 (#102)."""
 
     error = ErrorBodySerializer()
+
+
+class StudentSerializer(serializers.Serializer):
+    """수강생 (#103). 개인정보 최소 공개: 연락처·보호자 정보·메모는 넣지 않는다 (2026-11-26 결정).
+
+    API 결과는 MCP를 거쳐 외부 AI 에이전트에 전달될 수 있으므로, 수강생을 알아보고 고르는 데 필요한 값만 준다.
+    """
+
+    id = serializers.IntegerField(help_text="수강생 번호. 상세·레슨권·일정 조회에 씁니다")
+    name = serializers.CharField(help_text="이름")
+    is_active = serializers.BooleanField(help_text="수강 중이면 true, 보관(수강 종료)이면 false")
+    is_minor = serializers.BooleanField(help_text="미성년자 여부")
+    created_at = serializers.DateTimeField(help_text="등록 시각 (서울 시간)")
+
+
+class StudentListQuerySerializer(serializers.Serializer):
+    """수강생 목록 조회 조건 (#103). 페이지 조건(page·page_size)은 api.pagination.PageQuerySerializer."""
+
+    STATUS_CHOICES = [("active", "수강 중만"), ("archived", "보관만"), ("all", "전체")]
+    Q_MAX_LENGTH = 50
+
+    q = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=Q_MAX_LENGTH,
+        help_text=f"이름 검색 (일부만 같아도 찾음, 최대 {Q_MAX_LENGTH}자)",
+        error_messages={"max_length": f"검색어는 {Q_MAX_LENGTH}자 이하로 보내 주세요."},
+    )
+    status = serializers.ChoiceField(
+        choices=STATUS_CHOICES,
+        required=False,
+        default="active",
+        help_text="active(기본, 수강 중만) · archived(보관만) · all(전체)",
+        error_messages={"invalid_choice": "active, archived, all 중 하나로 보내 주세요."},
+    )

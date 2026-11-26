@@ -11,8 +11,10 @@
 
 from django.contrib.auth.decorators import login_not_required
 from django.db import transaction
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from drf_spectacular.utils import OpenApiExample, extend_schema
+from rest_framework import generics
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -20,9 +22,17 @@ from rest_framework.views import APIView
 from api import scopes
 from api.errors import ERRORS
 from api.exceptions import ApiError
+from api.pagination import ApiPagination, PageQuerySerializer
 from api.schema import error_responses
-from api.serializers import ClassifyRequestSerializer, ClassifyResponseSerializer, MeSerializer
+from api.serializers import (
+    ClassifyRequestSerializer,
+    ClassifyResponseSerializer,
+    MeSerializer,
+    StudentListQuerySerializer,
+    StudentSerializer,
+)
 from inbox import classifier
+from students.models import Student
 
 
 class ApiView(APIView):
@@ -120,3 +130,75 @@ class ClassifyView(ApiView):
             "model_version": prediction.model_version,
         }
         return Response(ClassifyResponseSerializer(data).data)
+
+
+STUDENT_PRIVACY_NOTE = "연락처·보호자 정보·메모는 개인정보 보호를 위해 API로 제공하지 않습니다."
+
+
+class StudentListView(ApiView, generics.ListAPIView):
+    """수강생 목록 (#103). 웹 수강생 목록(S08)과 같은 기준: 내 수강생만, 이름순, 보관은 기본으로 숨김."""
+
+    required_scope = scopes.READ
+    serializer_class = StudentSerializer
+    pagination_class = ApiPagination
+
+    def get_queryset(self):
+        params = self.filters
+        qs = Student.objects.for_teacher(self.request.user)
+        if params["status"] == "active":
+            qs = qs.filter(is_active=True)
+        elif params["status"] == "archived":
+            qs = qs.filter(is_active=False)
+        if params.get("q"):
+            qs = qs.filter(name__icontains=params["q"])
+        return qs.order_by("name", "id")
+
+    @extend_schema(
+        summary="수강생 목록",
+        description=(
+            "내 수강생을 이름순으로 돌려줍니다. 다른 강사의 수강생은 보이지 않습니다.\n\n"
+            "- 필요 범위: `read`\n"
+            "- 기본은 수강 중인 수강생만. 보관(수강 종료)한 수강생은 `status=archived` 또는 `status=all`\n"
+            f"- {STUDENT_PRIVACY_NOTE}\n"
+            "- 레슨권·잔여 회차는 잔여 회차 조회 API(#105)에서 다룹니다."
+        ),
+        parameters=[StudentListQuerySerializer, PageQuerySerializer],
+        responses={200: StudentSerializer(many=True), **error_responses("validation_error", "not_found")},
+        tags=["수강생"],
+    )
+    def get(self, request, *args, **kwargs):
+        # 형식이 틀린 조건은 조용히 무시하지 않고 400으로 알려 준다 (에이전트가 잘못 보낸 줄 알 수 있게)
+        query = StudentListQuerySerializer(data=request.query_params)
+        page = PageQuerySerializer(data=request.query_params)
+        errors = {}
+        for serializer in (query, page):
+            if not serializer.is_valid():
+                errors.update(serializer.errors)
+        if errors:
+            raise ValidationError(errors)
+        self.filters = query.validated_data
+        return super().get(request, *args, **kwargs)
+
+
+class StudentDetailView(ApiView, generics.RetrieveAPIView):
+    """수강생 상세 (#103). 내 수강생이 아니면(다른 강사·없는 번호) 똑같이 404."""
+
+    required_scope = scopes.READ
+    serializer_class = StudentSerializer
+
+    def get_object(self):
+        return get_object_or_404(Student.objects.for_teacher(self.request.user), pk=self.kwargs["pk"])
+
+    @extend_schema(
+        summary="수강생 상세",
+        description=(
+            "수강생 한 명의 정보를 돌려줍니다. 보관한 수강생도 조회할 수 있습니다(`is_active: false`).\n\n"
+            "- 필요 범위: `read`\n"
+            "- 내 수강생이 아니면 없는 번호와 똑같이 `404 not_found`\n"
+            f"- {STUDENT_PRIVACY_NOTE}"
+        ),
+        responses={200: StudentSerializer, **error_responses("not_found")},
+        tags=["수강생"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
