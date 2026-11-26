@@ -103,6 +103,8 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 - 길이는 **앞뒤 공백을 뺀 뒤** 1~1000자입니다(메시지 최대 길이와 같음). 보낸 문자열 자체의 길이가 아니므로, 앞뒤 공백 때문에 1000자를 넘어도 공백을 뺀 내용이 1000자 이하면 받습니다. 공백만 있으면 거절합니다.
 - 한 요청에 한 건만 분류합니다
 
+> **Windows에서 한글을 보낼 때:** Windows용 `curl.exe`(Git Bash 포함)는 명령줄에 쓴 한글을 UTF-8이 아닌 CP949로 보낼 수 있습니다. 그러면 `400 invalid_json`이 나거나 값이 깨집니다. 한글 본문은 UTF-8로 저장한 파일로 보내거나(`--data-binary @body.json`), 아래 PowerShell 방법을 쓰세요.
+
 ### Windows PowerShell
 
 PowerShell에서는 `curl`이 다른 명령일 수 있으므로 `Invoke-RestMethod`를 씁니다. 키는 그 창에서만 유효한 환경 변수로 두고, 대화·문서·저장소에 붙여 넣지 않습니다. 응답에는 키 앞 10자(`prefix`)만 나옵니다.
