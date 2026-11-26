@@ -8,8 +8,8 @@
 
 | 메서드·경로 | 기능 | 필요 범위 | 상태 | 이슈 |
 |---|---|---|---|---|
-| `GET /api/v1/me/` | 연결 확인 (키 주인·범위·만료일) | 없음 (유효한 키면 됨) | 🟡 main 병합(PR #113), 운영 확인 전 | #102 |
-| `POST /api/v1/messages/classify/` | 메시지 한 건 분류 | `read` | 🟡 로컬 테스트 통과, PR 리뷰 중 | #101 |
+| `GET /api/v1/me/` | 연결 확인 (키 주인·범위·만료일) | 없음 (유효한 키면 됨) | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #102 |
+| `POST /api/v1/messages/classify/` | 메시지 한 건 분류 | `read` | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #101 |
 | 수강생·일정·잔여 회차 조회 | | `read` | ⬜ | #103~#105 |
 | 일정 변경 | | `sessions:write` | ⬜ | #106 |
 | 메시지 발송 | | `messages:send` | ⬜ | #107 |
@@ -36,12 +36,21 @@
 - 시간: `+09:00`이 붙은 ISO 8601
 - 모든 응답에 `X-Request-ID` 헤더가 있습니다. 문의할 때 이 값을 알려 주세요.
 
-아래 예시는 키를 환경 변수에 두었다고 가정합니다.
+아래 예시는 키를 환경 변수에 두었다고 가정합니다. **키 원문을 명령줄에 직접 쓰지 마세요.** `export LEMIT_API_KEY="lemit_…"`처럼 입력하면 셸 명령 기록(`~/.bash_history` 등)에 원문이 남습니다. 화면에 보이지 않게 입력받아 넣습니다.
 
 ```bash
-export LEMIT_API_KEY="lemit_..."
+read -rs -p "LEMIT API Key: " LEMIT_API_KEY && echo   # 입력이 화면·명령 기록에 남지 않음
+export LEMIT_API_KEY
 export LEMIT="https://lemit.eta.pyhub.kr"
 ```
+
+다 쓴 뒤에는 지웁니다.
+
+```bash
+unset LEMIT_API_KEY
+```
+
+환경 변수는 암호화되지 않습니다. 같은 셸에서 실행하는 프로그램은 값을 읽을 수 있습니다. 명령 기록에 남지 않게 할 뿐이니, 쓰고 나면 지우고 필요 없어진 키는 웹에서 폐기하세요.
 
 ### 연결 확인 `GET /api/v1/me/`
 
@@ -102,6 +111,37 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 - `text`는 JSON 문자열이어야 합니다. 숫자·배열·null은 거절합니다.
 - 길이는 **앞뒤 공백을 뺀 뒤** 1~1000자입니다(메시지 최대 길이와 같음). 보낸 문자열 자체의 길이가 아니므로, 앞뒤 공백 때문에 1000자를 넘어도 공백을 뺀 내용이 1000자 이하면 받습니다. 공백만 있으면 거절합니다.
 - 한 요청에 한 건만 분류합니다
+
+> **Windows에서 한글을 보낼 때:** Windows용 `curl.exe`(Git Bash 포함)는 명령줄에 쓴 한글을 UTF-8이 아닌 CP949로 보낼 수 있습니다. 그러면 `400 invalid_json`이 나거나 값이 깨집니다. 한글 본문은 UTF-8로 저장한 파일로 보내거나(`--data-binary @body.json`), 아래 PowerShell 방법을 쓰세요.
+
+### Windows PowerShell
+
+PowerShell에서는 `curl`이 다른 명령일 수 있으므로 `Invoke-RestMethod`를 씁니다. 키는 그 창에서만 유효한 환경 변수로 두고, 대화·문서·저장소에 붙여 넣지 않습니다. 응답에는 키 앞 10자(`prefix`)만 나옵니다.
+
+**키 원문을 명령줄에 직접 쓰지 마세요.** `$env:LEMIT_API_KEY = "lemit_…"`처럼 입력하면 PowerShell 명령 기록(PSReadLine 기록 파일)에 원문이 남고, 창을 닫아도 지워지지 않습니다. 아래처럼 `*`로 가려지는 입력 창에 붙여 넣습니다.
+
+```powershell
+# 1) 키 입력: 프롬프트가 나오면 키를 붙여 넣고 Enter (화면엔 *로 표시, 명령 기록에 원문이 남지 않음)
+$env:LEMIT_API_KEY = [System.Net.NetworkCredential]::new("", (Read-Host "LEMIT API Key" -AsSecureString)).Password
+$h = @{ Authorization = "Bearer $env:LEMIT_API_KEY" }  # 그대로 실행 (Bearer는 바꾸지 않음)
+
+# 연결 확인
+Invoke-RestMethod https://lemit.eta.pyhub.kr/api/v1/me/ -Headers $h | ConvertTo-Json -Depth 5
+
+# 메시지 분류 (한글이 깨지지 않게 본문을 UTF-8 바이트로 보냄)
+$body = [Text.Encoding]::UTF8.GetBytes('{"text":"다음 주 화요일 수업 목요일로 옮길 수 있을까요?"}')
+Invoke-RestMethod -Method Post https://lemit.eta.pyhub.kr/api/v1/messages/classify/ -Headers $h `
+  -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 5
+
+# 2) 다 쓴 뒤 정리: 키가 든 환경 변수와 헤더 변수를 지움
+Remove-Item Env:LEMIT_API_KEY
+Remove-Variable h
+```
+
+- `-AsSecureString`은 입력을 가리고 명령 기록에 남지 않게 할 뿐입니다. 환경 변수와 `$h`에 들어간 값 자체는 암호화되지 않으므로, 쓰고 나면 위처럼 지우고 필요 없어진 키는 웹에서 폐기하세요.
+- 이미 키를 명령줄에 직접 입력했다면 PSReadLine 기록 파일(`(Get-PSReadLineOption).HistorySavePath`)에서 그 줄을 지우고, 그 키는 폐기한 뒤 새로 발급하는 것이 안전합니다.
+
+오류 응답은 PowerShell이 붉은 글씨로 보여 주며, 한글이 `\uC720…` 같은 유니코드 이스케이프로 표시될 수 있습니다(서버 응답은 UTF-8 한글 그대로). `code` 값으로 판단하면 됩니다.
 
 ## 4. 오류 응답
 
