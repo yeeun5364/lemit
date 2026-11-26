@@ -36,12 +36,21 @@
 - 시간: `+09:00`이 붙은 ISO 8601
 - 모든 응답에 `X-Request-ID` 헤더가 있습니다. 문의할 때 이 값을 알려 주세요.
 
-아래 예시는 키를 환경 변수에 두었다고 가정합니다.
+아래 예시는 키를 환경 변수에 두었다고 가정합니다. **키 원문을 명령줄에 직접 쓰지 마세요.** `export LEMIT_API_KEY="lemit_…"`처럼 입력하면 셸 명령 기록(`~/.bash_history` 등)에 원문이 남습니다. 화면에 보이지 않게 입력받아 넣습니다.
 
 ```bash
-export LEMIT_API_KEY="lemit_..."
+read -rs -p "LEMIT API Key: " LEMIT_API_KEY && echo   # 입력이 화면·명령 기록에 남지 않음
+export LEMIT_API_KEY
 export LEMIT="https://lemit.eta.pyhub.kr"
 ```
+
+다 쓴 뒤에는 지웁니다.
+
+```bash
+unset LEMIT_API_KEY
+```
+
+환경 변수는 암호화되지 않습니다. 같은 셸에서 실행하는 프로그램은 값을 읽을 수 있습니다. 명령 기록에 남지 않게 할 뿐이니, 쓰고 나면 지우고 필요 없어진 키는 웹에서 폐기하세요.
 
 ### 연결 확인 `GET /api/v1/me/`
 
@@ -109,8 +118,11 @@ curl -s -X POST "$LEMIT/api/v1/messages/classify/" \
 
 PowerShell에서는 `curl`이 다른 명령일 수 있으므로 `Invoke-RestMethod`를 씁니다. 키는 그 창에서만 유효한 환경 변수로 두고, 대화·문서·저장소에 붙여 넣지 않습니다. 응답에는 키 앞 10자(`prefix`)만 나옵니다.
 
+**키 원문을 명령줄에 직접 쓰지 마세요.** `$env:LEMIT_API_KEY = "lemit_…"`처럼 입력하면 PowerShell 명령 기록(PSReadLine 기록 파일)에 원문이 남고, 창을 닫아도 지워지지 않습니다. 아래처럼 `*`로 가려지는 입력 창에 붙여 넣습니다.
+
 ```powershell
-$env:LEMIT_API_KEY = "lemit_..."                       # 키는 큰따옴표로 감싸기
+# 1) 키 입력: 프롬프트가 나오면 키를 붙여 넣고 Enter (화면엔 *로 표시, 명령 기록에 원문이 남지 않음)
+$env:LEMIT_API_KEY = [System.Net.NetworkCredential]::new("", (Read-Host "LEMIT API Key" -AsSecureString)).Password
 $h = @{ Authorization = "Bearer $env:LEMIT_API_KEY" }  # 그대로 실행 (Bearer는 바꾸지 않음)
 
 # 연결 확인
@@ -120,7 +132,14 @@ Invoke-RestMethod https://lemit.eta.pyhub.kr/api/v1/me/ -Headers $h | ConvertTo-
 $body = [Text.Encoding]::UTF8.GetBytes('{"text":"다음 주 화요일 수업 목요일로 옮길 수 있을까요?"}')
 Invoke-RestMethod -Method Post https://lemit.eta.pyhub.kr/api/v1/messages/classify/ -Headers $h `
   -ContentType "application/json; charset=utf-8" -Body $body | ConvertTo-Json -Depth 5
+
+# 2) 다 쓴 뒤 정리: 키가 든 환경 변수와 헤더 변수를 지움
+Remove-Item Env:LEMIT_API_KEY
+Remove-Variable h
 ```
+
+- `-AsSecureString`은 입력을 가리고 명령 기록에 남지 않게 할 뿐입니다. 환경 변수와 `$h`에 들어간 값 자체는 암호화되지 않으므로, 쓰고 나면 위처럼 지우고 필요 없어진 키는 웹에서 폐기하세요.
+- 이미 키를 명령줄에 직접 입력했다면 PSReadLine 기록 파일(`(Get-PSReadLineOption).HistorySavePath`)에서 그 줄을 지우고, 그 키는 폐기한 뒤 새로 발급하는 것이 안전합니다.
 
 오류 응답은 PowerShell이 붉은 글씨로 보여 주며, 한글이 `\uC720…` 같은 유니코드 이스케이프로 표시될 수 있습니다(서버 응답은 UTF-8 한글 그대로). `code` 값으로 판단하면 됩니다.
 
