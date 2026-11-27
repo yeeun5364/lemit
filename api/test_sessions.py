@@ -125,10 +125,84 @@ class SessionListTests(SessionApiTestCase):
     def test_status_filter(self):
         self.assertEqual(self.ids(self.get(f"{LIST}?status=cancelled", self.raw)), [self.cancelled.pk])
 
-    def test_next_lesson_recipe(self):
-        body = self.get(f"{LIST}?student={self.minji.pk}&status=scheduled&page_size=1", self.raw).json()
-        self.assertEqual([s["id"] for s in body["results"]], [self.today.pk])
-        self.assertIsNotNone(body["next"])
+    def test_next_lesson_recipe_skips_todays_unprocessed_past_session(self):
+        # 문서의 '다음 수업 찾기' 절차 (PR #117 리뷰 P2): 지금이 오늘 12:00일 때,
+        # 오늘 9:00 예정 회차(아직 완료 처리 안 함)는 결과 맨 앞에 나오지만 건너뛰고,
+        # next를 따라가 start_at이 지금 이후인 첫 회차(오늘 15:00)를 찾는다
+        stale = self.session(self.piano, TODAY, 9)
+        now = at(TODAY, 12)
+        url, seen, found = f"{LIST}?student={self.minji.pk}&status=scheduled&page_size=1", [], None
+        while url and found is None:
+            body = self.get(url, self.raw).json()
+            for item in body["results"]:
+                seen.append(item["id"])
+                if datetime.datetime.fromisoformat(item["start_at"]) > now:
+                    found = item["id"]
+                    break
+            url = body["next"]
+        self.assertEqual(seen, [stale.pk, self.today.pk])  # 지난 예정 회차가 먼저, 그다음 미래 회차
+        self.assertEqual(found, self.today.pk)
+
+    def test_next_lesson_recipe_when_none_in_default_period(self):
+        # 기본 14일 안에 예정 회차가 없으면 빈 결과 → from을 to 다음 날로 옮겨 다시 조회
+        LessonSession.objects.filter(enrollment=self.violin).delete()
+        late = self.session(self.violin, TODAY + datetime.timedelta(days=30), 10)
+        body = self.get(f"{LIST}?student={self.dahye.pk}&status=scheduled", self.raw).json()
+        self.assertEqual((body["count"], body["next"]), (0, None))
+        later = TODAY + datetime.timedelta(days=14)
+        self.assertEqual(
+            self.ids(self.get(f"{LIST}?student={self.dahye.pk}&status=scheduled&from={later}", self.raw)), []
+        )
+        to = later + datetime.timedelta(days=91)
+        ids = self.ids(self.get(f"{LIST}?student={self.dahye.pk}&status=scheduled&from={later}&to={to}", self.raw))
+        self.assertEqual(ids, [late.pk])
+
+    def test_dates_must_be_zero_padded_iso(self):
+        # strptime은 2026-1-1을 받아 주지만 명세는 YYYY-MM-DD만 (PR #117 리뷰 P2)
+        bad = [
+            "2026-1-1",
+            "2026-12-1",
+            "2026-1-01",
+            "26-12-01",
+            "2026/12/01",
+            "2026-12-01 ",
+            "%202026-12-01",
+            "2026-02-30",
+            "２０２６-12-01",
+            "+2026-12-01",
+            "2026-W49-2",
+        ]
+        for field in ("from", "to"):
+            for value in bad:
+                with self.subTest(field=field, value=value):
+                    error = self.assertError(self.get(f"{LIST}?{field}={value}", self.raw), 400, "validation_error")
+                    self.assertEqual([f["field"] for f in error["fields"]], [field])
+                    self.assertIn("YYYY-MM-DD", error["fields"][0]["message"])
+
+    def test_extreme_dates_are_400_not_500(self):
+        # 9999-12-31에 하루·13일을 더하면 OverflowError → 받는 날짜를 2000-01-01~2100-12-31로 제한 (PR #117 리뷰 P2)
+        for query, field in {
+            "?from=9999-12-31": "from",
+            "?from=9999-12-31&to=9999-12-31": "from",
+            "?to=9999-12-31": "to",
+            "?from=0001-01-01": "from",
+            "?from=1999-12-31&to=2000-01-01": "from",
+            "?from=2100-12-31&to=2101-01-01": "to",
+        }.items():
+            with self.subTest(query=query):
+                error = self.assertError(self.get(LIST + query, self.raw), 400, "validation_error")
+                self.assertIn(field, [f["field"] for f in error["fields"]])
+                self.assertIn("2100-12-31", next(f["message"] for f in error["fields"] if f["field"] == field))
+
+    def test_date_range_edges_are_accepted(self):
+        for query in (
+            "?from=2000-01-01",
+            "?from=2000-01-01&to=2000-01-01",
+            "?from=2100-12-31",
+            "?to=2100-12-31&from=2100-10-01",
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(self.get(LIST + query, self.raw).status_code, 200)
 
     def test_other_teachers_or_missing_student_is_404(self):
         other = self.assertError(self.get(f"{LIST}?student={self.other_student.pk}", self.raw), 404, "not_found")

@@ -1,4 +1,5 @@
 import datetime
+import re
 
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
@@ -195,6 +196,45 @@ class SessionSerializer(serializers.Serializer):
 
 SESSION_DEFAULT_DAYS = 14  # 기간을 안 주면 오늘부터 14일 (오늘 포함)
 SESSION_MAX_DAYS = 92  # 한 번에 조회할 수 있는 최대 기간 (약 3개월)
+# 받을 수 있는 날짜 범위. 기본 기간(+13일)·조회 상한(+1일)·시간대 변환을 해도 넘치지 않게 좁혀 둔다
+# (9999-12-31에 하루를 더하면 OverflowError로 500이 나므로, PR #117 리뷰 P2)
+QUERY_DATE_MIN = datetime.date(2000, 1, 1)
+QUERY_DATE_MAX = datetime.date(2100, 12, 31)
+ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+@extend_schema_field(
+    {
+        "type": "string",
+        "format": "date",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": f"YYYY-MM-DD, {QUERY_DATE_MIN}~{QUERY_DATE_MAX}",
+    }
+)
+class StrictQueryDateField(serializers.Field):
+    """쿼리 문자열의 날짜. YYYY-MM-DD(숫자 자릿수 고정)만 받는다.
+
+    DateField(input_formats=["%Y-%m-%d"])는 strptime이라 2026-1-1도 받아 주므로 쓰지 않는다 (PR #117 리뷰 P2).
+    """
+
+    default_error_messages = {
+        "invalid": "날짜는 YYYY-MM-DD 형식으로 보내 주세요. 예: 2026-12-01",
+        "out_of_range": f"날짜는 {QUERY_DATE_MIN}부터 {QUERY_DATE_MAX}까지만 조회할 수 있습니다.",
+    }
+
+    def to_internal_value(self, data):
+        if not (isinstance(data, str) and ISO_DATE.fullmatch(data)):
+            self.fail("invalid")
+        try:
+            value = datetime.date.fromisoformat(data)
+        except ValueError:  # 2026-13-01, 2026-02-30 같은 없는 날짜
+            self.fail("invalid")
+        if not QUERY_DATE_MIN <= value <= QUERY_DATE_MAX:
+            self.fail("out_of_range")
+        return value
+
+    def to_representation(self, value):
+        return value.isoformat()
 
 
 class SessionListQuerySerializer(serializers.Serializer):
@@ -216,20 +256,15 @@ class SessionListQuerySerializer(serializers.Serializer):
     def get_fields(self):
         # from은 파이썬 예약어라 클래스 속성으로 쓸 수 없어서 여기서 넣는다
         fields = super().get_fields()
-        date_errors = {"invalid": "날짜는 YYYY-MM-DD 형식으로 보내 주세요. 예: 2026-12-01"}
-        fields["from"] = serializers.DateField(
+        fields["from"] = StrictQueryDateField(
             required=False,
-            input_formats=["%Y-%m-%d"],
-            help_text="시작 날짜 YYYY-MM-DD (서울 기준, 포함). 빼면 오늘",
-            error_messages=date_errors,
+            help_text=f"시작 날짜 YYYY-MM-DD (서울 기준, 포함, {QUERY_DATE_MIN}~{QUERY_DATE_MAX}). 빼면 오늘",
         )
-        fields["to"] = serializers.DateField(
+        fields["to"] = StrictQueryDateField(
             required=False,
-            input_formats=["%Y-%m-%d"],
             help_text=(
                 f"끝 날짜 YYYY-MM-DD (포함). 빼면 from부터 {SESSION_DEFAULT_DAYS}일. 기간은 최대 {SESSION_MAX_DAYS}일"
             ),
-            error_messages=date_errors,
         )
         return fields
 

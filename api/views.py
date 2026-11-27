@@ -256,8 +256,10 @@ class SessionListView(ApiView, generics.ListAPIView):
             f"- 기간: 서울 날짜 기준 `from`~`to`(둘 다 포함). 빼면 오늘부터 {SESSION_DEFAULT_DAYS}일, "
             f"최대 {SESSION_MAX_DAYS}일\n"
             "- `student`가 내 수강생이 아니면 `404 not_found` (보관한 수강생은 조회됨)\n"
-            "- 다음 수업: `student=<번호>&status=scheduled&page_size=1`. 오늘 이미 시작했지만 아직 완료 처리하지 않은 "
-            "회차도 예정이므로, `start_at`을 현재 시각과 비교하세요.\n"
+            "- 다음 수업 찾기: `student=<번호>&status=scheduled`로 조회해 `start_at`이 현재 시각 이후인 첫 회차를 "
+            "고릅니다. 오늘 이미 시작했지만 완료 처리하지 않은 회차도 '예정'으로 앞에 나오므로 건너뛰고, "
+            "이 쪽에 없으면 `next`를 따라가세요. `next`가 없는데도 못 찾으면 그 기간에는 다음 수업이 없으니 "
+            f"`from`을 지난 `to` 다음 날로 옮겨 다시 조회하세요 (한 번에 최대 {SESSION_MAX_DAYS}일).\n"
             f"- {SESSION_PRIVACY_NOTE}"
         ),
         parameters=[SessionListQuerySerializer, PageQuerySerializer],
