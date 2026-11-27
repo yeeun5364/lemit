@@ -11,6 +11,8 @@ urlpatterns = [
     path("v1/messages/classify/", views.ClassifyView.as_view(), name="classify"),
     path("v1/students/", views.StudentListView.as_view(), name="student_list"),
     path("v1/students/<int:pk>/", views.StudentDetailView.as_view(), name="student_detail"),
+    path("v1/sessions/", views.SessionListView.as_view(), name="session_list"),
+    path("v1/sessions/<int:pk>/", views.SessionDetailView.as_view(), name="session_detail"),
     # 문서 (공개, 키 불필요)
     path("schema/", login_not_required(SpectacularAPIView.as_view()), name="schema"),
     path("docs/", login_not_required(SpectacularSwaggerView.as_view(url_name="api:schema")), name="docs"),

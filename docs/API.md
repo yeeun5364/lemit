@@ -12,7 +12,9 @@
 | `POST /api/v1/messages/classify/` | 메시지 한 건 분류 | `read` | ✅ 운영 확인 (2026-11-25, `v0.1.7`) | #101 |
 | `GET /api/v1/students/` | 수강생 목록 (이름 검색·보관 여부·페이지) | `read` | 🟡 구현·로컬 확인 (2026-11-26), 운영 배포 전 | #103 |
 | `GET /api/v1/students/{id}/` | 수강생 한 명 | `read` | 🟡 구현·로컬 확인 (2026-11-26), 운영 배포 전 | #103 |
-| 일정·잔여 회차 조회 | | `read` | ⬜ | #104·#105 |
+| `GET /api/v1/sessions/` | 일정(회차) 목록 (수강생·기간·상태·페이지) | `read` | 🟡 구현·로컬 확인 (2026-11-26), 운영 배포 전 | #104 |
+| `GET /api/v1/sessions/{id}/` | 회차 한 건 | `read` | 🟡 구현·로컬 확인 (2026-11-26), 운영 배포 전 | #104 |
+| 잔여 회차 조회 | | `read` | ⬜ | #105 |
 | 일정 변경 | | `sessions:write` | ⬜ | #106 |
 | 메시지 발송 | | `messages:send` | ⬜ | #107 |
 
@@ -151,6 +153,55 @@ curl -s "$LEMIT/api/v1/students/12/" -H "Authorization: Bearer $LEMIT_API_KEY"
 - 다른 강사의 수강생 번호는 없는 번호와 똑같이 `404 not_found`입니다.
 - 보관한 수강생도 상세 조회는 됩니다(`is_active: false`).
 - 레슨권·잔여 회차는 잔여 회차 조회 API(#105)에서 다룹니다.
+
+### 일정 목록 `GET /api/v1/sessions/` · 회차 상세 `GET /api/v1/sessions/{id}/` (#104)
+
+내 수강생의 회차를 시작 시각 순으로 돌려줍니다.
+
+```bash
+curl -s "$LEMIT/api/v1/sessions/?from=2026-12-01&to=2026-12-07" -H "Authorization: Bearer $LEMIT_API_KEY"
+# 수강생 12의 예정 회차 (다음 수업 찾기는 아래 설명 참고)
+curl -s "$LEMIT/api/v1/sessions/?student=12&status=scheduled" -H "Authorization: Bearer $LEMIT_API_KEY"
+```
+
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 71,
+      "student": {"id": 12, "name": "김민지"},
+      "enrollment": {"id": 30, "title": "피아노 8회"},
+      "start_at": "2026-12-01T18:00:00+09:00",
+      "end_at": "2026-12-01T18:50:00+09:00",
+      "status": "scheduled",
+      "status_display": "예정",
+      "place": "연습실 A",
+      "is_makeup": true,
+      "makeup_for": 69,
+      "absence_deducted": false
+    }
+  ]
+}
+```
+
+| 조건 (쿼리) | 뜻 |
+|---|---|
+| `from` · `to` | 서울 기준 날짜 `YYYY-MM-DD`(월·일 두 자리, `2026-1-5`는 거절), **둘 다 포함**, 2000-01-01~2100-12-31. 빼면 오늘부터 14일(`to`만 빼면 `from`부터 14일). 기간은 최대 92일 |
+| `student` | 수강생 번호. 내 수강생이 아니면 `404 not_found`. 보관한 수강생도 조회됩니다 |
+| `status` | `scheduled`(예정) · `completed`(완료) · `cancelled`(휴강) · `absent`(결석) 중 하나. 빼면 전체 |
+| `page` · `page_size` | 수강생 목록과 같음 (기본 20, 1~100, 숫자만) |
+
+- `status`는 회차 상태 4개입니다. 보강은 상태가 아니라 `is_makeup`·`makeup_for`(보강 대상 회차 번호)로 표시합니다.
+- **다음 수업 찾기:** 별도 주소 없이 아래 순서로 찾습니다.
+  1. `student=<번호>&status=scheduled`로 조회합니다(기본 기간은 오늘부터 14일).
+  2. 결과는 시작 시각 순입니다. `start_at`이 **현재 시각 이후인 첫 회차**가 다음 수업입니다. 오늘 이미 시작했지만 아직 완료 처리하지 않은 회차도 '예정'으로 앞에 나오므로 건너뜁니다.
+  3. 이 쪽에 없으면 `next` 링크를 따라갑니다.
+  4. `next`가 없는데도 못 찾았으면 그 기간에는 다음 수업이 없습니다. `from`을 지난 `to`의 다음 날로 옮겨 다시 조회합니다(한 번에 최대 92일). 레슨권 회차를 다 썼으면 계속 비어 있을 수 있습니다.
+- **사유는 주지 않습니다:** 휴강·결석 사유는 건강·가정사 같은 개인정보가 들어갈 수 있는 자유 입력이라 API에서 뺐습니다 (2026-11-26 결정). 장소는 일정 확인에 필요해 넣었습니다.
+- 회차 상세는 기간 제한 없이 조회됩니다. 다른 강사의 회차는 없는 번호와 똑같이 `404 not_found`입니다.
 
 > **Windows에서 한글을 보낼 때:** Windows용 `curl.exe`(Git Bash 포함)는 명령줄에 쓴 한글을 UTF-8이 아닌 CP949로 보낼 수 있습니다. 그러면 `400 invalid_json`이 나거나 값이 깨집니다. 한글 본문은 UTF-8로 저장한 파일로 보내거나(`--data-binary @body.json`), 아래 PowerShell 방법을 쓰세요.
 

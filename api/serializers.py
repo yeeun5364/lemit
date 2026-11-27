@@ -1,7 +1,12 @@
+import datetime
+import re
+
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from api.errors import ERRORS
+from api.pagination import StrictQueryIntegerField
 from inbox.classifier import LOW_CONFIDENCE
 from inbox.classifier import MAX_LENGTH as CLASSIFY_LENGTH
 from ml.labels import LABELS
@@ -145,3 +150,133 @@ class StudentListQuerySerializer(serializers.Serializer):
         help_text="active(기본, 수강 중만) · archived(보관만) · all(전체)",
         error_messages={"invalid_choice": "active, archived, all 중 하나로 보내 주세요."},
     )
+
+
+class StudentRefSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+
+
+class EnrollmentRefSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    title = serializers.CharField(help_text="레슨명")
+
+
+SESSION_STATUS_CHOICES = [
+    ("scheduled", "예정"),
+    ("completed", "완료"),
+    ("cancelled", "휴강"),
+    ("absent", "결석"),
+]
+
+
+class SessionSerializer(serializers.Serializer):
+    """회차 (#104).
+
+    사유(reason)는 건강·가정사 같은 개인정보가 들어갈 수 있는 자유 입력이라 넣지 않는다 (2026-11-26 결정).
+    """
+
+    id = serializers.IntegerField(help_text="회차 번호")
+    student = StudentRefSerializer(source="enrollment.student", help_text="수강생")
+    enrollment = EnrollmentRefSerializer(help_text="레슨권")
+    start_at = serializers.DateTimeField(help_text="시작 (서울 시간)")
+    end_at = serializers.DateTimeField(help_text="종료 (서울 시간)")
+    status = serializers.ChoiceField(
+        choices=SESSION_STATUS_CHOICES, help_text="scheduled(예정)·completed(완료)·cancelled(휴강)·absent(결석)"
+    )
+    status_display = serializers.CharField(source="get_status_display", help_text="상태 이름 (한국어)")
+    place = serializers.CharField(help_text="장소 (없으면 빈 문자열)")
+    is_makeup = serializers.SerializerMethodField(help_text="다른 회차의 보강 회차면 true")
+    makeup_for = serializers.IntegerField(source="makeup_for_id", allow_null=True, help_text="보강 대상 회차 번호")
+    absence_deducted = serializers.BooleanField(help_text="결석이면서 회차를 차감했으면 true")
+
+    def get_is_makeup(self, obj) -> bool:
+        return obj.makeup_for_id is not None
+
+
+SESSION_DEFAULT_DAYS = 14  # 기간을 안 주면 오늘부터 14일 (오늘 포함)
+SESSION_MAX_DAYS = 92  # 한 번에 조회할 수 있는 최대 기간 (약 3개월)
+# 받을 수 있는 날짜 범위. 기본 기간(+13일)·조회 상한(+1일)·시간대 변환을 해도 넘치지 않게 좁혀 둔다
+# (9999-12-31에 하루를 더하면 OverflowError로 500이 나므로, PR #117 리뷰 P2)
+QUERY_DATE_MIN = datetime.date(2000, 1, 1)
+QUERY_DATE_MAX = datetime.date(2100, 12, 31)
+ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+@extend_schema_field(
+    {
+        "type": "string",
+        "format": "date",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": f"YYYY-MM-DD, {QUERY_DATE_MIN}~{QUERY_DATE_MAX}",
+    }
+)
+class StrictQueryDateField(serializers.Field):
+    """쿼리 문자열의 날짜. YYYY-MM-DD(숫자 자릿수 고정)만 받는다.
+
+    DateField(input_formats=["%Y-%m-%d"])는 strptime이라 2026-1-1도 받아 주므로 쓰지 않는다 (PR #117 리뷰 P2).
+    """
+
+    default_error_messages = {
+        "invalid": "날짜는 YYYY-MM-DD 형식으로 보내 주세요. 예: 2026-12-01",
+        "out_of_range": f"날짜는 {QUERY_DATE_MIN}부터 {QUERY_DATE_MAX}까지만 조회할 수 있습니다.",
+    }
+
+    def to_internal_value(self, data):
+        if not (isinstance(data, str) and ISO_DATE.fullmatch(data)):
+            self.fail("invalid")
+        try:
+            value = datetime.date.fromisoformat(data)
+        except ValueError:  # 2026-13-01, 2026-02-30 같은 없는 날짜
+            self.fail("invalid")
+        if not QUERY_DATE_MIN <= value <= QUERY_DATE_MAX:
+            self.fail("out_of_range")
+        return value
+
+    def to_representation(self, value):
+        return value.isoformat()
+
+
+class SessionListQuerySerializer(serializers.Serializer):
+    """일정 목록 조회 조건 (#104). 날짜는 서울 기준, from·to 둘 다 포함."""
+
+    student = StrictQueryIntegerField(
+        required=False,
+        min_value=1,
+        help_text="수강생 번호. 빼면 내 수강생 전체",
+        error_messages=dict.fromkeys(("invalid", "min_value"), "student는 수강생 번호(숫자만)로 보내 주세요."),
+    )
+    status = serializers.ChoiceField(
+        choices=SESSION_STATUS_CHOICES,
+        required=False,
+        help_text="scheduled·completed·cancelled·absent 중 하나. 빼면 전체",
+        error_messages={"invalid_choice": "scheduled, completed, cancelled, absent 중 하나로 보내 주세요."},
+    )
+
+    def get_fields(self):
+        # from은 파이썬 예약어라 클래스 속성으로 쓸 수 없어서 여기서 넣는다
+        fields = super().get_fields()
+        fields["from"] = StrictQueryDateField(
+            required=False,
+            help_text=f"시작 날짜 YYYY-MM-DD (서울 기준, 포함, {QUERY_DATE_MIN}~{QUERY_DATE_MAX}). 빼면 오늘",
+        )
+        fields["to"] = StrictQueryDateField(
+            required=False,
+            help_text=(
+                f"끝 날짜 YYYY-MM-DD (포함). 빼면 from부터 {SESSION_DEFAULT_DAYS}일. 기간은 최대 {SESSION_MAX_DAYS}일"
+            ),
+        )
+        return fields
+
+    def validate(self, attrs):
+        start = attrs.get("from") or timezone.localdate()
+        end = attrs.get("to") or start + datetime.timedelta(days=SESSION_DEFAULT_DAYS - 1)
+        if end < start:
+            raise serializers.ValidationError({"to": f"to({end})는 from({start})과 같거나 뒤여야 합니다."})
+        days = (end - start).days + 1
+        if days > SESSION_MAX_DAYS:
+            raise serializers.ValidationError(
+                {"to": f"기간이 {days}일입니다. 한 번에 {SESSION_MAX_DAYS}일까지 조회할 수 있으니 나눠서 조회하세요."}
+            )
+        attrs["from"], attrs["to"] = start, end
+        return attrs

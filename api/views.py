@@ -9,9 +9,12 @@
   인증·권한·요청 제한(initial)은 이 트랜잭션 밖이라, 인증 실패·요청 횟수 기록은 오류 응답이어도 남는다.
 """
 
+import datetime
+
 from django.contrib.auth.decorators import login_not_required
 from django.db import transaction
 from django.shortcuts import get_object_or_404, render
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework import generics
 from rest_framework.exceptions import ValidationError
@@ -25,13 +28,18 @@ from api.exceptions import ApiError
 from api.pagination import ApiPagination, PageQuerySerializer
 from api.schema import error_responses
 from api.serializers import (
+    SESSION_DEFAULT_DAYS,
+    SESSION_MAX_DAYS,
     ClassifyRequestSerializer,
     ClassifyResponseSerializer,
     MeSerializer,
+    SessionListQuerySerializer,
+    SessionSerializer,
     StudentListQuerySerializer,
     StudentSerializer,
 )
 from inbox import classifier
+from lessons.models import LessonSession
 from students.models import Student
 
 
@@ -200,6 +208,100 @@ class StudentDetailView(ApiView, generics.RetrieveAPIView):
         ),
         responses={200: StudentSerializer, **error_responses("not_found")},
         tags=["수강생"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+SESSION_PRIVACY_NOTE = "휴강·결석 사유는 개인정보가 들어갈 수 있어 API로 제공하지 않습니다."
+
+
+def _session_queryset(teacher):
+    return (
+        LessonSession.objects.filter(enrollment__student__teacher=teacher)
+        .select_related("enrollment__student")
+        .order_by("start_at", "id")
+    )
+
+
+def _day_start(day):
+    """서울 기준 그 날짜 0시 (시간대 포함)."""
+    return timezone.make_aware(datetime.datetime.combine(day, datetime.time.min), timezone.get_current_timezone())
+
+
+class SessionListView(ApiView, generics.ListAPIView):
+    """일정(회차) 목록 (#104). 내 수강생의 회차만, 시작 시각 순. 기간은 서울 날짜 기준 from~to(둘 다 포함)."""
+
+    required_scope = scopes.READ
+    serializer_class = SessionSerializer
+    pagination_class = ApiPagination
+
+    def get_queryset(self):
+        params = self.filters
+        qs = _session_queryset(self.request.user).filter(
+            start_at__gte=_day_start(params["from"]),
+            start_at__lt=_day_start(params["to"] + datetime.timedelta(days=1)),
+        )
+        if "student" in params:
+            qs = qs.filter(enrollment__student_id=params["student"])
+        if "status" in params:
+            qs = qs.filter(status=params["status"])
+        return qs
+
+    @extend_schema(
+        summary="일정(회차) 목록",
+        description=(
+            "내 수강생의 회차를 시작 시각 순으로 돌려줍니다. 다른 강사의 회차는 보이지 않습니다.\n\n"
+            "- 필요 범위: `read`\n"
+            f"- 기간: 서울 날짜 기준 `from`~`to`(둘 다 포함). 빼면 오늘부터 {SESSION_DEFAULT_DAYS}일, "
+            f"최대 {SESSION_MAX_DAYS}일\n"
+            "- `student`가 내 수강생이 아니면 `404 not_found` (보관한 수강생은 조회됨)\n"
+            "- 다음 수업 찾기: `student=<번호>&status=scheduled`로 조회해 `start_at`이 현재 시각 이후인 첫 회차를 "
+            "고릅니다. 오늘 이미 시작했지만 완료 처리하지 않은 회차도 '예정'으로 앞에 나오므로 건너뛰고, "
+            "이 쪽에 없으면 `next`를 따라가세요. `next`가 없는데도 못 찾으면 그 기간에는 다음 수업이 없으니 "
+            f"`from`을 지난 `to` 다음 날로 옮겨 다시 조회하세요 (한 번에 최대 {SESSION_MAX_DAYS}일).\n"
+            f"- {SESSION_PRIVACY_NOTE}"
+        ),
+        parameters=[SessionListQuerySerializer, PageQuerySerializer],
+        responses={200: SessionSerializer(many=True), **error_responses("validation_error", "not_found")},
+        tags=["일정"],
+    )
+    def get(self, request, *args, **kwargs):
+        query = SessionListQuerySerializer(data=request.query_params)
+        page = PageQuerySerializer(data=request.query_params)
+        errors = {}
+        for serializer in (query, page):
+            if not serializer.is_valid():
+                errors.update(serializer.errors)
+        if errors:
+            raise ValidationError(errors)
+        self.filters = query.validated_data
+        self.page_params = page.validated_data
+        if "student" in self.filters:
+            # 다른 강사·없는 수강생 번호는 빈 목록이 아니라 404 (상세 조회와 같은 기준, 존재 여부를 드러내지 않음)
+            get_object_or_404(Student.objects.for_teacher(request.user), pk=self.filters["student"])
+        return super().get(request, *args, **kwargs)
+
+
+class SessionDetailView(ApiView, generics.RetrieveAPIView):
+    """회차 상세 (#104). 내 수강생의 회차가 아니면 없는 번호와 똑같이 404."""
+
+    required_scope = scopes.READ
+    serializer_class = SessionSerializer
+
+    def get_object(self):
+        return get_object_or_404(_session_queryset(self.request.user), pk=self.kwargs["pk"])
+
+    @extend_schema(
+        summary="회차 상세",
+        description=(
+            "회차 한 건을 돌려줍니다.\n\n"
+            "- 필요 범위: `read`\n"
+            "- 내 수강생의 회차가 아니면 없는 번호와 똑같이 `404 not_found`\n"
+            f"- {SESSION_PRIVACY_NOTE}"
+        ),
+        responses={200: SessionSerializer, **error_responses("not_found")},
+        tags=["일정"],
     )
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
